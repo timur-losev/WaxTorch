@@ -71,21 +71,40 @@ public struct FastRAGContextBuilder: Sendable {
             var remainingTokens = clamped.maxContextTokens - usedTokens
             var surrogateCount = 0
 
+            // Batch process surrogate candidates for better tokenization performance
+            var surrogateCandidates: [(result: SearchResponse.Result, surrogateFrameId: UInt64, text: String)] = []
+
             for result in response.results {
                 if let expandedFrameId, result.frameId == expandedFrameId { continue }
                 guard surrogateCount < clamped.maxSurrogates else { break }
                 guard remainingTokens > 0 else { break }
 
                 guard let surrogateFrameId = await wax.surrogateFrameId(sourceFrameId: result.frameId) else { continue }
-                let data = try await wax.frameContent(frameId: surrogateFrameId)
+                let data: Data
+                do {
+                    data = try await wax.frameContent(frameId: surrogateFrameId)
+                } catch {
+                    continue
+                }
                 guard let text = String(data: data, encoding: .utf8),
                       !text.isEmpty else { continue }
 
-                let capped = await counter.truncate(text, maxTokens: min(clamped.surrogateMaxTokens, remainingTokens))
-                guard !capped.isEmpty else { continue }
+                surrogateCandidates.append((result, surrogateFrameId, text))
+                surrogateCount += 1
+                if surrogateCandidates.count >= 8 { break } // Process in batches
+            }
 
-                let tokens = await counter.count(capped)
-                guard tokens <= remainingTokens else { continue }
+            // Batch truncate and count tokens
+            let texts = surrogateCandidates.map { $0.text }
+            let maxTokensPerText = min(clamped.surrogateMaxTokens, remainingTokens)
+            let cappedTexts = await counter.truncateBatch(texts, maxTokens: maxTokensPerText)
+            let tokenCounts = await counter.countBatch(cappedTexts)
+
+            for (index, (result, surrogateFrameId, _)) in surrogateCandidates.enumerated() {
+                let capped = cappedTexts[index]
+                let tokens = tokenCounts[index]
+
+                guard !capped.isEmpty && tokens <= remainingTokens else { continue }
 
                 items.append(
                     .init(
@@ -97,7 +116,6 @@ public struct FastRAGContextBuilder: Sendable {
                     )
                 )
                 surrogateSourceFrameIds.insert(result.frameId)
-                surrogateCount += 1
                 remainingTokens -= tokens
                 if remainingTokens == 0 { break }
             }
@@ -110,30 +128,64 @@ public struct FastRAGContextBuilder: Sendable {
             var remainingTokens = clamped.maxContextTokens - usedTokens
             var snippetCount = 0
 
+            // Collect all snippet candidates
+            var snippetCandidates: [(result: SearchResponse.Result, preview: String)] = []
             for result in response.results {
                 if let expandedFrameId, result.frameId == expandedFrameId { continue }
                 if surrogateSourceFrameIds.contains(result.frameId) { continue }
                 guard snippetCount < clamped.maxSnippets else { break }
                 guard let preview = result.previewText, !preview.isEmpty else { continue }
 
-                let capped = await counter.truncate(preview, maxTokens: min(clamped.snippetMaxTokens, remainingTokens))
-                guard !capped.isEmpty else { continue }
-
-                let tokens = await counter.count(capped)
-                guard tokens <= remainingTokens else { continue }
-
-                items.append(
-                    .init(
-                        kind: .snippet,
-                        frameId: result.frameId,
-                        score: result.score,
-                        sources: result.sources,
-                        text: capped
-                    )
-                )
+                snippetCandidates.append((result, preview))
                 snippetCount += 1
-                remainingTokens -= tokens
-                if remainingTokens == 0 { break }
+            }
+
+            // Batch process snippets if we have multiple
+            if snippetCandidates.count > 1 {
+                let previews = snippetCandidates.map { $0.preview }
+                let maxTokensPerSnippet = min(clamped.snippetMaxTokens, remainingTokens)
+                let cappedPreviews = await counter.truncateBatch(previews, maxTokens: maxTokensPerSnippet)
+                let tokenCounts = await counter.countBatch(cappedPreviews)
+
+                for (index, (result, _)) in snippetCandidates.enumerated() {
+                    let capped = cappedPreviews[index]
+                    let tokens = tokenCounts[index]
+
+                    guard !capped.isEmpty && tokens <= remainingTokens else { continue }
+
+                    items.append(
+                        .init(
+                            kind: .snippet,
+                            frameId: result.frameId,
+                            score: result.score,
+                            sources: result.sources,
+                            text: capped
+                        )
+                    )
+                    remainingTokens -= tokens
+                    if remainingTokens == 0 { break }
+                }
+            } else {
+                // Fallback to individual processing for single snippet
+                for (result, preview) in snippetCandidates {
+                    let capped = await counter.truncate(preview, maxTokens: min(clamped.snippetMaxTokens, remainingTokens))
+                    guard !capped.isEmpty else { continue }
+
+                    let tokens = await counter.count(capped)
+                    guard tokens <= remainingTokens else { continue }
+
+                    items.append(
+                        .init(
+                            kind: .snippet,
+                            frameId: result.frameId,
+                            score: result.score,
+                            sources: result.sources,
+                            text: capped
+                    )
+                    )
+                    remainingTokens -= tokens
+                    if remainingTokens == 0 { break }
+                }
             }
             usedTokens = clamped.maxContextTokens - remainingTokens
         }

@@ -6,16 +6,18 @@ public actor WaxVectorSearchSession {
     public let wax: Wax
     public let engine: USearchVectorEngine
     public let dimensions: Int
+    private var lastPendingEmbeddingSequence: UInt64?
 
     public init(wax: Wax, metric: VectorMetric = .cosine, dimensions: Int) async throws {
         self.wax = wax
         self.dimensions = dimensions
         self.engine = try await USearchVectorEngine.load(from: wax, metric: metric, dimensions: dimensions)
 
-        let pending = await wax.pendingEmbeddingMutations()
-        for embedding in pending {
+        let snapshot = await wax.pendingEmbeddingMutations(since: nil)
+        for embedding in snapshot.embeddings {
             try await engine.add(frameId: embedding.frameId, vector: embedding.vector)
         }
+        self.lastPendingEmbeddingSequence = snapshot.latestSequence
     }
 
     public func add(frameId: UInt64, vector: [Float]) async throws {
@@ -61,16 +63,75 @@ public actor WaxVectorSearchSession {
         return frameId
     }
 
+    /// Batch put multiple frames with embeddings in a single operation.
+    /// This amortizes actor and I/O overhead across all frames.
+    /// Returns frame IDs in the same order as the input contents.
+    public func putWithEmbeddingBatch(
+        contents: [Data],
+        embeddings: [[Float]],
+        options: [FrameMetaSubset],
+        compression: CanonicalEncoding = .plain,
+        identity: EmbeddingIdentity? = nil
+    ) async throws -> [UInt64] {
+        guard !contents.isEmpty else { return [] }
+        guard contents.count == embeddings.count else {
+            throw WaxError.encodingError(reason: "putWithEmbeddingBatch: contents.count != embeddings.count")
+        }
+        guard contents.count == options.count else {
+            throw WaxError.encodingError(reason: "putWithEmbeddingBatch: contents.count != options.count")
+        }
+
+        // Validate all embeddings
+        for embedding in embeddings {
+            guard embedding.count == dimensions else {
+                throw WaxError.encodingError(reason: "vector dimension mismatch: expected \(dimensions), got \(embedding.count)")
+            }
+        }
+
+        // Merge identity metadata into options
+        var mergedOptions = options
+        if let identity {
+            for (index, _) in options.enumerated() {
+                if let expectedDims = identity.dimensions, expectedDims != embeddings[index].count {
+                    throw WaxError.io("embedding identity dimension mismatch: expected \(expectedDims), got \(embeddings[index].count)")
+                }
+                var metadata = mergedOptions[index].metadata ?? Metadata()
+                if let provider = identity.provider { metadata.entries["memvid.embedding.provider"] = provider }
+                if let model = identity.model { metadata.entries["memvid.embedding.model"] = model }
+                if let dims = identity.dimensions { metadata.entries["memvid.embedding.dimension"] = String(dims) }
+                if let normalized = identity.normalized { metadata.entries["memvid.embedding.normalized"] = String(normalized) }
+                mergedOptions[index].metadata = metadata
+            }
+        }
+
+        // Batch put frames
+        let frameIds = try await wax.putBatch(contents, options: mergedOptions, compression: compression)
+
+        // Batch add to vector engine
+        try await engine.addBatch(frameIds: frameIds, vectors: embeddings)
+
+        // Batch put embeddings to WAL
+        try await wax.putEmbeddingBatch(frameIds: frameIds, vectors: embeddings)
+
+        return frameIds
+    }
+
     public func commit() async throws {
         try await stageForCommit()
         try await wax.commit()
     }
 
     public func stageForCommit() async throws {
-        let pending = await wax.pendingEmbeddingMutations()
-        for embedding in pending {
+        let snapshot = await wax.pendingEmbeddingMutations(since: lastPendingEmbeddingSequence)
+        if let latest = snapshot.latestSequence,
+           let last = lastPendingEmbeddingSequence,
+           latest < last {
+            lastPendingEmbeddingSequence = nil
+        }
+        for embedding in snapshot.embeddings {
             try await engine.add(frameId: embedding.frameId, vector: embedding.vector)
         }
+        lastPendingEmbeddingSequence = snapshot.latestSequence
         try await engine.stageForCommit(into: wax)
     }
 }

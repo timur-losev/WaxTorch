@@ -15,6 +15,11 @@ public actor WaxTextSearchSession {
         try await engine.index(frameId: frameId, text: text)
     }
 
+    /// Batch index multiple frames in a single operation.
+    public func indexBatch(frameIds: [UInt64], texts: [String]) async throws {
+        try await engine.indexBatch(frameIds: frameIds, texts: texts)
+    }
+
     public func remove(frameId: UInt64) async throws {
         try await engine.remove(frameId: frameId)
     }

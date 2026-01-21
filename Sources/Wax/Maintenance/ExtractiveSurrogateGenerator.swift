@@ -159,4 +159,3 @@ public struct ExtractiveSurrogateGenerator: SurrogateGenerator, Sendable, Equata
         return await counter.truncate(text, maxTokens: maxTokens)
     }
 }
-

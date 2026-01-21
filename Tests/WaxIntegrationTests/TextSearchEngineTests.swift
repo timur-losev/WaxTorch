@@ -106,6 +106,18 @@ private enum SQLiteBlobInspector {
     #expect(results[0].score != results[1].score)
 }
 
+@Test func searchTieBreaksOnFrameIdForDeterminism() async throws {
+    let engine = try FTS5SearchEngine.inMemory()
+
+    // Insert in reverse frameId order to detect nondeterministic or insertion-ordered ties.
+    try await engine.index(frameId: 2, text: "Swift concurrency uses actors and tasks.")
+    try await engine.index(frameId: 1, text: "Swift concurrency uses actors and tasks.")
+
+    let results = try await engine.search(query: "Swift", topK: 10)
+    #expect(results.count == 2)
+    #expect(results.map(\.frameId) == [1, 2])
+}
+
 @Test func serializeDeserializeRoundtripPreservesSearch() async throws {
     let engine = try FTS5SearchEngine.inMemory()
     try await engine.index(frameId: 0, text: "Hello, World!")

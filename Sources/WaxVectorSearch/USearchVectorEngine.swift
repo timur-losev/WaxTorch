@@ -15,6 +15,7 @@ public actor USearchVectorEngine {
     private let index: USearchIndex
     private let io: BlockingIOExecutor
     private let opLock = AsyncMutex()
+    private var dirty: Bool
 
     private func withOpLock<T>(_ body: () async throws -> T) async rethrows -> T {
         await opLock.lock()
@@ -43,6 +44,7 @@ public actor USearchVectorEngine {
         self.dimensions = dimensions
         self.vectorCount = 0
         self.reservedCapacity = Self.initialReserve
+        self.dirty = false
         self.index = try USearchIndex.make(
             metric: metric.toUSearchMetric(),
             dimensions: UInt32(dimensions),
@@ -81,6 +83,48 @@ public actor USearchVectorEngine {
             try await io.run {
                 try index.add(key: frameId, vector: vector)
             }
+            dirty = true
+        }
+    }
+
+    /// Batch add multiple vectors in a single operation.
+    /// This amortizes lock acquisition and I/O overhead across all vectors.
+    public func addBatch(frameIds: [UInt64], vectors: [[Float]]) async throws {
+        guard !frameIds.isEmpty else { return }
+        guard frameIds.count == vectors.count else {
+            throw WaxError.encodingError(reason: "addBatch: frameIds.count != vectors.count")
+        }
+
+        try await withOpLock {
+            // Validate all vectors first
+            for vector in vectors {
+                try validate(vector)
+            }
+
+            let index = self.index
+            let isEmpty = vectorCount == 0
+            let frameIdArray = frameIds
+
+            // Reserve capacity for all new vectors
+            let maxNewCount = vectorCount &+ UInt64(frameIds.count)
+            try await reserveIfNeeded(for: maxNewCount)
+
+            // Single I/O block for all operations
+            let addedCount = try await io.run { () throws -> Int in
+                var added = 0
+                for (frameId, vector) in zip(frameIdArray, vectors) {
+                    // Try to remove existing (if not empty)
+                    let removed: UInt32 = if isEmpty { 0 } else { try index.remove(key: frameId) }
+                    if removed == 0 {
+                        added += 1
+                    }
+                    try index.add(key: frameId, vector: vector)
+                }
+                return added
+            }
+
+            vectorCount &+= UInt64(addedCount)
+            dirty = true
         }
     }
 
@@ -91,6 +135,7 @@ public actor USearchVectorEngine {
             let removed = try await io.run { try index.remove(key: frameId) }
             if removed > 0 {
                 vectorCount = vectorCount == 0 ? 0 : (vectorCount &- 1)
+                dirty = true
             }
         }
     }
@@ -146,10 +191,12 @@ public actor USearchVectorEngine {
             reservedCapacity = max(reservedCapacity, UInt32(min(vectorCount, UInt64(UInt32.max))))
             let reserve = reservedCapacity
             try await io.run { try index.reserve(reserve) }
+            dirty = false
         }
     }
 
     public func stageForCommit(into wax: Wax) async throws {
+        if !dirty { return }
         let blob = try await serialize()
         try await wax.stageVecIndexForNextCommit(
             bytes: blob,
@@ -157,6 +204,7 @@ public actor USearchVectorEngine {
             dimension: UInt32(dimensions),
             similarity: metric.toVecSimilarity()
         )
+        dirty = false
     }
 
     private func validate(_ vector: [Float]) throws {

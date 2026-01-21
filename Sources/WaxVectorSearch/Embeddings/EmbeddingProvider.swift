@@ -7,6 +7,10 @@ public protocol EmbeddingProvider: Sendable {
     func embed(_ text: String) async throws -> [Float]
 }
 
+public protocol BatchEmbeddingProvider: EmbeddingProvider {
+    func embed(batch texts: [String]) async throws -> [[Float]]
+}
+
 public struct EmbeddingIdentity: Sendable, Equatable {
     public var provider: String?
     public var model: String?
@@ -25,4 +29,3 @@ public struct EmbeddingIdentity: Sendable, Equatable {
         self.normalized = normalized
     }
 }
-

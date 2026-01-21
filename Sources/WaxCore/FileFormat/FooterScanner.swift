@@ -98,6 +98,38 @@ public enum FooterScanner {
         )
     }
 
+    public static func findFooter(at footerOffset: UInt64, in fileURL: URL, limits: Limits = .init()) throws -> FooterSlice? {
+        let file = try FDFile.openReadOnly(at: fileURL)
+        defer { try? file.close() }
+
+        let fileSize = try file.size()
+        let footerSize = UInt64(MV2SFooter.size)
+        guard footerOffset + footerSize <= fileSize else { return nil }
+
+        let footerBytes = try file.readExactly(length: Int(footerSize), at: footerOffset)
+        guard let footer = try? MV2SFooter.decode(from: footerBytes) else { return nil }
+        guard footer.tocLen >= 32 else { return nil }
+        guard footer.tocLen <= limits.maxTocBytes else { return nil }
+        guard footerOffset >= footer.tocLen else { return nil }
+        guard footer.tocLen <= UInt64(Int.max) else { return nil }
+
+        let tocOffset = footerOffset - footer.tocLen
+        guard try tocHashMatches(
+            file: file,
+            tocOffset: tocOffset,
+            tocLen: footer.tocLen,
+            expectedHash: footer.tocHash
+        ) else { return nil }
+
+        let tocBytes = try file.readExactly(length: Int(footer.tocLen), at: tocOffset)
+        return FooterSlice(
+            footerOffset: footerOffset,
+            tocOffset: tocOffset,
+            footer: footer,
+            tocBytes: tocBytes
+        )
+    }
+
     private static func findBestFooter(
         in file: FDFile,
         fileSize: UInt64,

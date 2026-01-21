@@ -37,44 +37,20 @@ public extension Wax {
         }
 
         let candidateLimit = Self.candidateLimit(for: requestedTopK)
-        var textEngine: FTS5SearchEngine?
-        if includeText, let bytes = await readStagedLexIndexBytes() {
-            textEngine = try FTS5SearchEngine.deserialize(from: bytes)
-        } else if includeText, let bytes = try await readCommittedLexIndexBytes() {
-            textEngine = try FTS5SearchEngine.deserialize(from: bytes)
-        } else if includeText {
-            textEngine = try FTS5SearchEngine.inMemory()
+        let cache = UnifiedSearchEngineCache.shared
+        let textEngine: FTS5SearchEngine? = if includeText {
+            try await cache.textEngine(for: self)
+        } else {
+            nil
         }
 
-        let pendingEmbeddings = await pendingEmbeddingMutations()
-        var vectorEngine: USearchVectorEngine?
-        if includeVector, let embedding = request.embedding, !embedding.isEmpty {
-            if let manifest = await committedVecIndexManifest(),
-               let metric = VectorMetric(vecSimilarity: manifest.similarity) {
-                let engine = try USearchVectorEngine(metric: metric, dimensions: Int(manifest.dimension))
-                if let bytes = try await readCommittedVecIndexBytes() {
-                    try await engine.deserialize(bytes)
-                }
-                for mutation in pendingEmbeddings {
-                    try await engine.add(frameId: mutation.frameId, vector: mutation.vector)
-                }
-                vectorEngine = engine
-            } else if let staged = await readStagedVecIndexBytes(),
-                      let metric = VectorMetric(vecSimilarity: staged.similarity) {
-                let engine = try USearchVectorEngine(metric: metric, dimensions: Int(staged.dimension))
-                try await engine.deserialize(staged.bytes)
-                for mutation in pendingEmbeddings {
-                    try await engine.add(frameId: mutation.frameId, vector: mutation.vector)
-                }
-                vectorEngine = engine
-            } else if let first = pendingEmbeddings.first,
-                      first.dimension == UInt32(embedding.count) {
-                let engine = try USearchVectorEngine(metric: .cosine, dimensions: Int(first.dimension))
-                for mutation in pendingEmbeddings {
-                    try await engine.add(frameId: mutation.frameId, vector: mutation.vector)
-                }
-                vectorEngine = engine
-            }
+        let vectorEngine: USearchVectorEngine? = if includeVector, let embedding = request.embedding, !embedding.isEmpty {
+            try await cache.vectorEngine(
+                for: self,
+                queryEmbeddingDimensions: embedding.count
+            )
+        } else {
+            nil
         }
 
         async let textResultsAsync: [TextSearchResult] = {
@@ -151,47 +127,66 @@ public extension Wax {
             }
         }
 
-        var filtered: [SearchResponse.Result] = []
-        filtered.reserveCapacity(min(requestedTopK, baseResults.count))
+        struct PendingResult {
+            let frameId: UInt64
+            let score: Float
+            let sources: [SearchResponse.Source]
+            let snippet: String?
+        }
 
-        for item in baseResults {
-            if let minScore = request.minScore, item.score < minScore { continue }
+        var pendingResults: [PendingResult] = []
+        pendingResults.reserveCapacity(min(requestedTopK, baseResults.count))
 
-            let meta: FrameMeta
-            if let committed = try? await frameMeta(frameId: item.frameId) {
-                meta = committed
-            } else if let pending = await pendingFrameMeta(frameId: item.frameId) {
-                meta = pending
-            } else {
-                continue
+        if !baseResults.isEmpty {
+            let metaById = await frameMetasIncludingPending(frameIds: baseResults.map(\.frameId))
+
+            for item in baseResults {
+                if let minScore = request.minScore, item.score < minScore { continue }
+                guard let meta = metaById[item.frameId] else { continue }
+
+                if let timeRange = request.timeRange, !timeRange.contains(meta.timestamp) { continue }
+                if let allowlist = filter.frameIds, !allowlist.contains(item.frameId) { continue }
+                if !filter.includeDeleted, meta.status == .deleted { continue }
+                if !filter.includeSuperseded, meta.supersededBy != nil { continue }
+                if !filter.includeSurrogates, meta.kind == "surrogate" { continue }
+
+                pendingResults.append(
+                    PendingResult(
+                        frameId: item.frameId,
+                        score: item.score,
+                        sources: item.sources,
+                        snippet: snippetByFrameId[item.frameId]
+                    )
+                )
+
+                if pendingResults.count >= requestedTopK {
+                    break
+                }
             }
+        }
 
-            if let timeRange = request.timeRange, !timeRange.contains(meta.timestamp) { continue }
-            if let allowlist = filter.frameIds, !allowlist.contains(item.frameId) { continue }
-            if !filter.includeDeleted, meta.status == .deleted { continue }
-            if !filter.includeSuperseded, meta.supersededBy != nil { continue }
-            if !filter.includeSurrogates, meta.kind == "surrogate" { continue }
+        let previewIds = pendingResults
+            .filter { $0.snippet == nil }
+            .map(\.frameId)
+        let previewById = try await framePreviews(
+            frameIds: previewIds,
+            maxBytes: request.previewMaxBytes
+        )
 
+        var filtered: [SearchResponse.Result] = pendingResults.map { item in
             let previewText: String?
-            if let snippet = snippetByFrameId[item.frameId] {
+            if let snippet = item.snippet {
                 previewText = snippet
             } else {
-                let bytes = try? await framePreview(frameId: item.frameId, maxBytes: request.previewMaxBytes)
-                previewText = bytes.flatMap { String(data: $0, encoding: .utf8) }
+                previewText = previewById[item.frameId]
+                    .flatMap { String(data: $0, encoding: .utf8) }
             }
-
-            filtered.append(
-                SearchResponse.Result(
-                    frameId: item.frameId,
-                    score: item.score,
-                    previewText: previewText,
-                    sources: item.sources
-                )
+            return SearchResponse.Result(
+                frameId: item.frameId,
+                score: item.score,
+                previewText: previewText,
+                sources: item.sources
             )
-
-            if filtered.count >= requestedTopK {
-                break
-            }
         }
 
         if filtered.isEmpty, request.allowTimelineFallback {
@@ -216,6 +211,11 @@ public extension Wax {
         results.reserveCapacity(max(0, request.timelineFallbackLimit))
 
         let frames = await timeline(query)
+        let previewById = (try? await framePreviews(
+            frameIds: frames.map(\.id),
+            maxBytes: request.previewMaxBytes
+        )) ?? [:]
+
         for (rank, meta) in frames.enumerated() {
             let frameId = meta.id
 
@@ -225,8 +225,8 @@ public extension Wax {
             if !filter.includeSurrogates, meta.kind == "surrogate" { continue }
 
             let score = 1 / Float(max(0, request.rrfK) + rank + 1)
-            let bytes = try? await framePreview(frameId: frameId, maxBytes: request.previewMaxBytes)
-            let previewText = bytes.flatMap { String(data: $0, encoding: .utf8) }
+            let previewText = previewById[frameId]
+                .flatMap { String(data: $0, encoding: .utf8) }
 
             results.append(
                 SearchResponse.Result(

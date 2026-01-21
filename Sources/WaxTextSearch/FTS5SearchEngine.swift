@@ -6,10 +6,14 @@ public actor FTS5SearchEngine {
     private static let maxResults = 10_000
     private let dbQueue: DatabaseQueue
     private let io: BlockingIOExecutor
+    private var docCount: UInt64
+    private var dirty: Bool
 
-    private init(dbQueue: DatabaseQueue, io: BlockingIOExecutor) {
+    private init(dbQueue: DatabaseQueue, io: BlockingIOExecutor, docCount: UInt64, dirty: Bool) {
         self.dbQueue = dbQueue
         self.io = io
+        self.docCount = docCount
+        self.dirty = dirty
     }
 
     public static func inMemory() throws -> FTS5SearchEngine {
@@ -19,7 +23,7 @@ public actor FTS5SearchEngine {
         try queue.write { db in
             try FTS5Schema.create(in: db)
         }
-        return FTS5SearchEngine(dbQueue: queue, io: io)
+        return FTS5SearchEngine(dbQueue: queue, io: io, docCount: 0, dirty: false)
     }
 
     public static func deserialize(from data: Data) throws -> FTS5SearchEngine {
@@ -32,7 +36,11 @@ public actor FTS5SearchEngine {
             try applyPragmas(db)
             try FTS5Schema.validateOrUpgrade(in: db)
         }
-        return FTS5SearchEngine(dbQueue: queue, io: io)
+        let count = try queue.read { db in
+            try Int64.fetchOne(db, sql: "SELECT COUNT(*) FROM frame_mapping") ?? 0
+        }
+        let docCount = UInt64(max(0, count))
+        return FTS5SearchEngine(dbQueue: queue, io: io, docCount: docCount, dirty: false)
     }
 
     public static func load(from wax: Wax) async throws -> FTS5SearchEngine {
@@ -43,12 +51,7 @@ public actor FTS5SearchEngine {
     }
 
     public func count() async throws -> Int {
-        let dbQueue = self.dbQueue
-        return try await io.run {
-            try dbQueue.read { db in
-                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM frame_mapping") ?? 0
-            }
-        }
+        Int(docCount)
     }
 
     public func index(frameId: UInt64, text: String) async throws {
@@ -59,13 +62,15 @@ public actor FTS5SearchEngine {
         }
         let frameIdValue = try Self.toInt64(frameId)
         let dbQueue = self.dbQueue
-        try await io.run {
+        let existed = try await io.run { () throws -> Bool in
+            var existed = false
             try dbQueue.write { db in
                 if let rowid: Int64 = try Int64.fetchOne(
                     db,
                     sql: "SELECT rowid_ref FROM frame_mapping WHERE frame_id = ?",
                     arguments: [frameIdValue]
                 ) {
+                    existed = true
                     try db.execute(sql: "DELETE FROM frames_fts WHERE rowid = ?", arguments: [rowid])
                     try db.execute(sql: "DELETE FROM frame_mapping WHERE frame_id = ?", arguments: [frameIdValue])
                 }
@@ -76,23 +81,91 @@ public actor FTS5SearchEngine {
                     arguments: [frameIdValue, rowid]
                 )
             }
+            return existed
         }
+        if !existed { docCount &+= 1 }
+        dirty = true
+    }
+
+    /// Batch index multiple frames in a single database transaction.
+    /// This amortizes transaction overhead and actor hops across all documents.
+    public func indexBatch(frameIds: [UInt64], texts: [String]) async throws {
+        guard !frameIds.isEmpty else { return }
+        guard frameIds.count == texts.count else {
+            throw WaxError.encodingError(reason: "indexBatch: frameIds.count != texts.count")
+        }
+
+        // Pre-process texts and convert frame IDs outside the I/O block
+        var validEntries: [(frameIdValue: Int64, text: String)] = []
+        validEntries.reserveCapacity(frameIds.count)
+
+        for (frameId, text) in zip(frameIds, texts) {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let frameIdValue = try Self.toInt64(frameId)
+            validEntries.append((frameIdValue, trimmed))
+        }
+
+        guard !validEntries.isEmpty else { return }
+
+        // Capture for Sendable closure
+        let dbQueue = self.dbQueue
+        let entriesArray = validEntries  // Copy to let binding
+
+        let newDocs = try await io.run { () throws -> Int in
+            var addedCount = 0
+            try dbQueue.write { db in
+                for (frameIdValue, text) in entriesArray {
+                    // Check if already exists
+                    if let rowid: Int64 = try Int64.fetchOne(
+                        db,
+                        sql: "SELECT rowid_ref FROM frame_mapping WHERE frame_id = ?",
+                        arguments: [frameIdValue]
+                    ) {
+                        // Update existing
+                        try db.execute(sql: "DELETE FROM frames_fts WHERE rowid = ?", arguments: [rowid])
+                        try db.execute(sql: "DELETE FROM frame_mapping WHERE frame_id = ?", arguments: [frameIdValue])
+                    } else {
+                        addedCount += 1
+                    }
+
+                    // Insert new
+                    try db.execute(sql: "INSERT INTO frames_fts(content) VALUES (?)", arguments: [text])
+                    let rowid = db.lastInsertedRowID
+                    try db.execute(
+                        sql: "INSERT INTO frame_mapping(frame_id, rowid_ref) VALUES (?, ?)",
+                        arguments: [frameIdValue, rowid]
+                    )
+                }
+            }
+            return addedCount
+        }
+
+        docCount &+= UInt64(newDocs)
+        dirty = true
     }
 
     public func remove(frameId: UInt64) async throws {
         let frameIdValue = try Self.toInt64(frameId)
         let dbQueue = self.dbQueue
-        try await io.run {
+        let removed = try await io.run { () throws -> Bool in
+            var removed = false
             try dbQueue.write { db in
                 if let rowid: Int64 = try Int64.fetchOne(
                     db,
                     sql: "SELECT rowid_ref FROM frame_mapping WHERE frame_id = ?",
                     arguments: [frameIdValue]
                 ) {
+                    removed = true
                     try db.execute(sql: "DELETE FROM frames_fts WHERE rowid = ?", arguments: [rowid])
                     try db.execute(sql: "DELETE FROM frame_mapping WHERE frame_id = ?", arguments: [frameIdValue])
                 }
             }
+            return removed
+        }
+        if removed {
+            docCount = docCount == 0 ? 0 : (docCount &- 1)
+            dirty = true
         }
     }
 
@@ -110,7 +183,7 @@ public actor FTS5SearchEngine {
                     FROM frames_fts
                     JOIN frame_mapping m ON m.rowid_ref = frames_fts.rowid
                     WHERE frames_fts MATCH ?
-                    ORDER BY rank ASC
+                    ORDER BY rank ASC, m.frame_id ASC
                     LIMIT ?
                     """
                 let rows = try Row.fetchAll(db, sql: sql, arguments: [trimmed, limit])
@@ -142,12 +215,10 @@ public actor FTS5SearchEngine {
     }
 
     public func stageForCommit(into wax: Wax, compact: Bool = false) async throws {
+        if !dirty, !compact { return }
         let blob = try await serialize(compact: compact)
-        let count = try await count()
-        guard count >= 0 else {
-            throw WaxError.io("fts doc_count invalid: \(count)")
-        }
-        try await wax.stageLexIndexForNextCommit(bytes: blob, docCount: UInt64(count))
+        try await wax.stageLexIndexForNextCommit(bytes: blob, docCount: docCount)
+        dirty = false
     }
 
     private static func makeConfiguration() -> Configuration {

@@ -1,0 +1,157 @@
+import Accelerate
+import Foundation
+
+/// High-performance vector math operations using Accelerate framework.
+/// All operations are optimized for SIMD execution on Apple Silicon and Intel.
+public enum VectorMath {
+    
+    // MARK: - L2 Normalization
+    
+    /// Normalizes a vector to unit length (L2 norm = 1) using Accelerate.
+    /// Returns the original vector if it's empty or has zero magnitude.
+    ///
+    /// Performance: ~10-100x faster than naive loop for typical embedding dimensions (128-1536).
+    @inlinable
+    public static func normalizeL2(_ vector: [Float]) -> [Float] {
+        guard !vector.isEmpty else { return vector }
+        
+        // Compute sum of squares using vDSP
+        var sumOfSquares: Float = 0
+        vDSP_svesq(vector, 1, &sumOfSquares, vDSP_Length(vector.count))
+        
+        // Compute magnitude
+        let magnitude = sqrt(sumOfSquares)
+        guard magnitude > 0 else { return vector }
+        
+        // Divide by magnitude (multiply by inverse)
+        let inverseMagnitude = 1.0 / magnitude
+        var result = [Float](repeating: 0, count: vector.count)
+        var scalar = inverseMagnitude
+        vDSP_vsmul(vector, 1, &scalar, &result, 1, vDSP_Length(vector.count))
+        
+        return result
+    }
+    
+    /// Normalizes a vector in-place to unit length (L2 norm = 1) using Accelerate.
+    /// More efficient when you don't need to preserve the original vector.
+    @inlinable
+    public static func normalizeL2InPlace(_ vector: inout [Float]) {
+        guard !vector.isEmpty else { return }
+        
+        // Compute sum of squares
+        var sumOfSquares: Float = 0
+        vDSP_svesq(vector, 1, &sumOfSquares, vDSP_Length(vector.count))
+        
+        let magnitude = sqrt(sumOfSquares)
+        guard magnitude > 0 else { return }
+        
+        // Scale in-place
+        var scalar = 1.0 / magnitude
+        vDSP_vsmul(vector, 1, &scalar, &vector, 1, vDSP_Length(vector.count))
+    }
+    
+    // MARK: - Dot Product
+    
+    /// Computes the dot product of two vectors using Accelerate.
+    @inlinable
+    public static func dotProduct(_ a: [Float], _ b: [Float]) -> Float {
+        precondition(a.count == b.count, "Vector dimensions must match")
+        guard !a.isEmpty else { return 0 }
+        
+        var result: Float = 0
+        vDSP_dotpr(a, 1, b, 1, &result, vDSP_Length(a.count))
+        return result
+    }
+    
+    // MARK: - Cosine Similarity
+    
+    /// Computes cosine similarity between two vectors.
+    /// Assumes vectors are already normalized for best performance.
+    /// For non-normalized vectors, use `cosineSimilarityNormalized`.
+    @inlinable
+    public static func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
+        dotProduct(a, b)
+    }
+    
+    /// Computes cosine similarity, normalizing vectors first if needed.
+    @inlinable
+    public static func cosineSimilarityNormalized(_ a: [Float], _ b: [Float]) -> Float {
+        let normA = normalizeL2(a)
+        let normB = normalizeL2(b)
+        return dotProduct(normA, normB)
+    }
+    
+    // MARK: - Euclidean Distance
+    
+    /// Computes squared Euclidean distance between two vectors.
+    /// Use this when you only need to compare distances (avoids sqrt).
+    @inlinable
+    public static func squaredEuclideanDistance(_ a: [Float], _ b: [Float]) -> Float {
+        precondition(a.count == b.count, "Vector dimensions must match")
+        guard !a.isEmpty else { return 0 }
+        
+        // Compute difference
+        var diff = [Float](repeating: 0, count: a.count)
+        vDSP_vsub(b, 1, a, 1, &diff, 1, vDSP_Length(a.count))
+        
+        // Sum of squares of differences
+        var result: Float = 0
+        vDSP_svesq(diff, 1, &result, vDSP_Length(diff.count))
+        return result
+    }
+    
+    /// Computes Euclidean distance between two vectors.
+    @inlinable
+    public static func euclideanDistance(_ a: [Float], _ b: [Float]) -> Float {
+        sqrt(squaredEuclideanDistance(a, b))
+    }
+    
+    // MARK: - Magnitude
+    
+    /// Computes the L2 magnitude (length) of a vector.
+    @inlinable
+    public static func magnitude(_ vector: [Float]) -> Float {
+        guard !vector.isEmpty else { return 0 }
+        
+        var sumOfSquares: Float = 0
+        vDSP_svesq(vector, 1, &sumOfSquares, vDSP_Length(vector.count))
+        return sqrt(sumOfSquares)
+    }
+    
+    // MARK: - Vector Addition/Subtraction
+    
+    /// Adds two vectors element-wise.
+    @inlinable
+    public static func add(_ a: [Float], _ b: [Float]) -> [Float] {
+        precondition(a.count == b.count, "Vector dimensions must match")
+        guard !a.isEmpty else { return [] }
+        
+        var result = [Float](repeating: 0, count: a.count)
+        vDSP_vadd(a, 1, b, 1, &result, 1, vDSP_Length(a.count))
+        return result
+    }
+    
+    /// Subtracts vector b from vector a element-wise.
+    @inlinable
+    public static func subtract(_ a: [Float], _ b: [Float]) -> [Float] {
+        precondition(a.count == b.count, "Vector dimensions must match")
+        guard !a.isEmpty else { return [] }
+        
+        var result = [Float](repeating: 0, count: a.count)
+        vDSP_vsub(b, 1, a, 1, &result, 1, vDSP_Length(a.count))
+        return result
+    }
+    
+    // MARK: - Scalar Operations
+    
+    /// Multiplies a vector by a scalar.
+    @inlinable
+    public static func scale(_ vector: [Float], by scalar: Float) -> [Float] {
+        guard !vector.isEmpty else { return vector }
+        
+        var result = [Float](repeating: 0, count: vector.count)
+        var s = scalar
+        vDSP_vsmul(vector, 1, &s, &result, 1, vDSP_Length(vector.count))
+        return result
+    }
+}

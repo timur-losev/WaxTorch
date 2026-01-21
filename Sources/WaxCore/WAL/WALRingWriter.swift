@@ -130,6 +130,40 @@ public final class WALRingWriter {
         return sequence
     }
 
+    public func canAppend(payloadSize: Int) -> Bool {
+        guard payloadSize > 0 else { return false }
+        guard walSize > 0 else { return false }
+        guard payloadSize <= Int(UInt32.max) else { return false }
+
+        let headerSize = UInt64(WALRecord.headerSize)
+        let entrySize = headerSize + UInt64(payloadSize)
+        if entrySize > walSize { return false }
+
+        var extraPadding: UInt64 = 0
+        var probeWritePos = writePos
+        var remaining = walSize - probeWritePos
+
+        if remaining < headerSize {
+            extraPadding += remaining
+            probeWritePos = 0
+            remaining = walSize
+        }
+
+        if remaining < entrySize {
+            extraPadding += remaining
+            probeWritePos = 0
+            remaining = walSize
+        }
+
+        let predictedWritePos = probeWritePos + entrySize
+        if walSize - predictedWritePos < headerSize {
+            extraPadding += walSize - predictedWritePos
+        }
+
+        let totalNeeded = entrySize + extraPadding
+        return pendingBytes + totalNeeded <= walSize
+    }
+
     public func recordCheckpoint() {
         checkpointPos = writePos
         pendingBytes = 0

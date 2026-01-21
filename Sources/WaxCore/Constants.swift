@@ -40,8 +40,8 @@ public enum Constants {
     /// WAL starts immediately after the header region.
     public static let walOffset: UInt64 = headerRegionSize
 
-    /// Default WAL size used by tests/examples (4 MiB).
-    public static let defaultWalSize: UInt64 = 4 * 1024 * 1024
+    /// Default WAL size used by tests/examples (256 MiB).
+    public static let defaultWalSize: UInt64 = 256 * 1024 * 1024
 
     // MARK: - Decoder Limits (recommended defaults)
 

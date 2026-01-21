@@ -17,6 +17,7 @@ private enum SurrogateMetadataKeys {
     static let algorithm = "surrogate_algo"
     static let version = "surrogate_version"
     static let sourceContentHash = "source_content_hash"
+    static let maxTokens = "surrogate_max_tokens"
 }
 
 private enum SurrogateDefaults {
@@ -39,10 +40,25 @@ public extension MemoryOrchestrator {
     ) async throws -> MaintenanceReport {
         let start = ContinuousClock.now
 
+        // Ensure newly ingested, unflushed frames are visible to maintenance scans.
+        // Avoid staging/committing when there are no pending puts to prevent unnecessary index rewrites.
+        let pendingFrames = (await wax.stats()).pendingFrames
+        if pendingFrames > 0 {
+            if let text {
+                try await text.stageForCommit()
+            }
+            if let vec {
+                let pendingEmbeddings = await wax.pendingEmbeddingMutations()
+                if !pendingEmbeddings.isEmpty {
+                    try await vec.stageForCommit()
+                }
+            }
+            try await wax.commit()
+        }
+
         let clampedMaxFrames: Int? = options.maxFrames.map { max(0, $0) }
-        let deadline: ContinuousClock.Instant? = options.maxWallTimeMs.flatMap { ms in
-            guard ms > 0 else { return nil }
-            return start.advanced(by: .milliseconds(ms))
+        let deadline: ContinuousClock.Instant? = options.maxWallTimeMs.map { ms in
+            start.advanced(by: .milliseconds(max(0, ms)))
         }
 
         let surrogateMaxTokens = max(0, options.surrogateMaxTokens)
@@ -72,14 +88,15 @@ public extension MemoryOrchestrator {
 
             report.eligibleFrames += 1
 
-            let sourceHash = frame.checksum.hexString
+            let sourceHash = SHA256Checksum.digest(Data(sourceText.utf8)).hexString
             let existingId = await wax.surrogateFrameId(sourceFrameId: frame.id)
             let isUpToDate: Bool = if let existingId {
                 (try? await isUpToDateSurrogate(
                     surrogateFrameId: existingId,
                     sourceFrame: frame,
                     sourceHash: sourceHash,
-                    algorithmID: generator.algorithmID
+                    algorithmID: generator.algorithmID,
+                    surrogateMaxTokens: surrogateMaxTokens
                 )) ?? false
             } else {
                 false
@@ -99,6 +116,7 @@ public extension MemoryOrchestrator {
             meta.entries[SurrogateMetadataKeys.algorithm] = generator.algorithmID
             meta.entries[SurrogateMetadataKeys.version] = String(SurrogateDefaults.version)
             meta.entries[SurrogateMetadataKeys.sourceContentHash] = sourceHash
+            meta.entries[SurrogateMetadataKeys.maxTokens] = String(surrogateMaxTokens)
 
             var subset = FrameMetaSubset()
             subset.kind = SurrogateDefaults.kind
@@ -152,7 +170,8 @@ public extension MemoryOrchestrator {
         surrogateFrameId: UInt64,
         sourceFrame: FrameMeta,
         sourceHash: String,
-        algorithmID: String
+        algorithmID: String,
+        surrogateMaxTokens: Int
     ) async throws -> Bool {
         let surrogate = try await wax.frameMeta(frameId: surrogateFrameId)
         guard surrogate.kind == SurrogateDefaults.kind else { return false }
@@ -163,6 +182,7 @@ public extension MemoryOrchestrator {
         guard entries[SurrogateMetadataKeys.algorithm] == algorithmID else { return false }
         guard entries[SurrogateMetadataKeys.version] == String(SurrogateDefaults.version) else { return false }
         guard entries[SurrogateMetadataKeys.sourceContentHash] == sourceHash else { return false }
+        guard entries[SurrogateMetadataKeys.maxTokens] == String(surrogateMaxTokens) else { return false }
         return true
     }
 
