@@ -2,9 +2,20 @@ import Foundation
 
 /// Deterministic binary encoder using little-endian byte order.
 public struct BinaryEncoder {
-    public private(set) var data = Data()
+    public struct Limits: Sendable {
+        public var maxStringBytes: Int = Constants.maxStringBytes
+        public var maxBlobBytes: Int = Constants.maxBlobBytes
+        public var maxArrayCount: Int = Constants.maxArrayCount
 
-    public init() {}
+        public init() {}
+    }
+
+    public private(set) var data = Data()
+    private let limits: Limits
+
+    public init(limits: Limits = .init()) {
+        self.limits = limits
+    }
 
     // MARK: - Primitives
 
@@ -82,6 +93,9 @@ public struct BinaryEncoder {
     // MARK: - Variable bytes (UInt32 length)
 
     public mutating func encodeBytes(_ value: Data) throws {
+        guard value.count <= limits.maxBlobBytes else {
+            throw WaxError.encodingError(reason: "byte length \(value.count) exceeds limit \(limits.maxBlobBytes)")
+        }
         guard value.count <= Int(UInt32.max) else {
             throw WaxError.encodingError(reason: "byte array too large (\(value.count))")
         }
@@ -93,6 +107,9 @@ public struct BinaryEncoder {
 
     public mutating func encode(_ value: String) throws {
         let utf8 = Data(value.utf8)
+        guard utf8.count <= limits.maxStringBytes else {
+            throw WaxError.encodingError(reason: "string byte length \(utf8.count) exceeds limit \(limits.maxStringBytes)")
+        }
         try encodeBytes(utf8)
     }
 
@@ -108,6 +125,9 @@ public struct BinaryEncoder {
     // MARK: - Arrays (UInt32 count)
 
     public mutating func encode<T>(_ values: [T], encoder: (inout BinaryEncoder, T) throws -> Void) throws {
+        guard values.count <= limits.maxArrayCount else {
+            throw WaxError.encodingError(reason: "array count \(values.count) exceeds limit \(limits.maxArrayCount)")
+        }
         guard values.count <= Int(UInt32.max) else {
             throw WaxError.encodingError(reason: "array too large (\(values.count))")
         }
@@ -118,6 +138,9 @@ public struct BinaryEncoder {
     }
 
     public mutating func encode(_ values: [UInt8]) throws {
+        guard values.count <= limits.maxArrayCount else {
+            throw WaxError.encodingError(reason: "array count \(values.count) exceeds limit \(limits.maxArrayCount)")
+        }
         guard values.count <= Int(UInt32.max) else {
             throw WaxError.encodingError(reason: "array too large (\(values.count))")
         }
@@ -126,6 +149,9 @@ public struct BinaryEncoder {
     }
 
     public mutating func encode(_ values: [UInt16]) throws {
+        guard values.count <= limits.maxArrayCount else {
+            throw WaxError.encodingError(reason: "array count \(values.count) exceeds limit \(limits.maxArrayCount)")
+        }
         guard values.count <= Int(UInt32.max) else {
             throw WaxError.encodingError(reason: "array too large (\(values.count))")
         }
@@ -134,6 +160,9 @@ public struct BinaryEncoder {
     }
 
     public mutating func encode(_ values: [UInt32]) throws {
+        guard values.count <= limits.maxArrayCount else {
+            throw WaxError.encodingError(reason: "array count \(values.count) exceeds limit \(limits.maxArrayCount)")
+        }
         guard values.count <= Int(UInt32.max) else {
             throw WaxError.encodingError(reason: "array too large (\(values.count))")
         }
@@ -142,6 +171,9 @@ public struct BinaryEncoder {
     }
 
     public mutating func encode(_ values: [UInt64]) throws {
+        guard values.count <= limits.maxArrayCount else {
+            throw WaxError.encodingError(reason: "array count \(values.count) exceeds limit \(limits.maxArrayCount)")
+        }
         guard values.count <= Int(UInt32.max) else {
             throw WaxError.encodingError(reason: "array too large (\(values.count))")
         }
@@ -150,6 +182,9 @@ public struct BinaryEncoder {
     }
 
     public mutating func encode(_ values: [Int64]) throws {
+        guard values.count <= limits.maxArrayCount else {
+            throw WaxError.encodingError(reason: "array count \(values.count) exceeds limit \(limits.maxArrayCount)")
+        }
         guard values.count <= Int(UInt32.max) else {
             throw WaxError.encodingError(reason: "array too large (\(values.count))")
         }

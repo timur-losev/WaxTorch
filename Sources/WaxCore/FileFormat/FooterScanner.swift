@@ -70,38 +70,91 @@ public enum FooterScanner {
 
     /// Bounded scan over a file. Only the final `limits.maxFooterScanBytes` are searched.
     public static func findLastValidFooter(in fileURL: URL, limits: Limits = .init()) throws -> FooterSlice? {
-        let handle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? handle.close() }
+        let file = try FDFile.openReadOnly(at: fileURL)
+        defer { try? file.close() }
 
-        let fileSize = try handle.seekToEnd()
+        let fileSize = try file.size()
+        guard fileSize >= UInt64(MV2SFooter.size) else { return nil }
+
         let scanStart = fileSize > limits.maxFooterScanBytes ? (fileSize - limits.maxFooterScanBytes) : 0
-        let scanLength = Int(fileSize - scanStart)
-
-        try handle.seek(toOffset: scanStart)
-        guard let window = try handle.read(upToCount: scanLength) else {
+        guard let best = try findBestFooter(
+            in: file,
+            fileSize: fileSize,
+            scanStart: scanStart,
+            limits: limits
+        ) else {
             return nil
         }
 
-        return try scanWindow(
-            window: window,
-            windowBaseOffset: scanStart,
-            fileSize: fileSize,
-            handle: handle,
-            limits: limits
+        guard best.footer.tocLen <= UInt64(Int.max) else {
+            throw WaxError.invalidToc(reason: "toc_len too large for memory: \(best.footer.tocLen)")
+        }
+        let tocBytes = try file.readExactly(length: Int(best.footer.tocLen), at: best.tocOffset)
+        return FooterSlice(
+            footerOffset: best.footerOffset,
+            tocOffset: best.tocOffset,
+            footer: best.footer,
+            tocBytes: tocBytes
         )
     }
 
-    private static func scanWindow(
+    private static func findBestFooter(
+        in file: FDFile,
+        fileSize: UInt64,
+        scanStart: UInt64,
+        limits: Limits
+    ) throws -> (footerOffset: UInt64, tocOffset: UInt64, footer: MV2SFooter)? {
+        let footerSize = UInt64(MV2SFooter.size)
+        let overlap = UInt64(MV2SFooter.size - 1)
+        let chunkSize: UInt64 = 1 * 1024 * 1024
+
+        var end = fileSize
+        var best: (footerOffset: UInt64, tocOffset: UInt64, footer: MV2SFooter)?
+
+        while end > scanStart, end >= footerSize {
+            let start = max(scanStart, end > chunkSize ? (end - chunkSize) : 0)
+            guard end > start else { break }
+            guard end - start <= UInt64(Int.max) else {
+                throw WaxError.io("scan chunk too large: \(end - start) bytes")
+            }
+
+            let window = try file.readExactly(length: Int(end - start), at: start)
+            if let candidate = try scanChunkForBestFooter(
+                window: window,
+                windowBaseOffset: start,
+                file: file,
+                fileSize: fileSize,
+                limits: limits
+            ) {
+                if let current = best {
+                    if candidate.footer.generation > current.footer.generation {
+                        best = candidate
+                    } else if candidate.footer.generation == current.footer.generation && candidate.footerOffset > current.footerOffset {
+                        best = candidate
+                    }
+                } else {
+                    best = candidate
+                }
+            }
+
+            if start == scanStart { break }
+            end = start + overlap
+        }
+
+        return best
+    }
+
+    private static func scanChunkForBestFooter(
         window: Data,
         windowBaseOffset: UInt64,
+        file: FDFile,
         fileSize: UInt64,
-        handle: FileHandle,
         limits: Limits
-    ) throws -> FooterSlice? {
+    ) throws -> (footerOffset: UInt64, tocOffset: UInt64, footer: MV2SFooter)? {
         let footerSize = MV2SFooter.size
         guard window.count >= footerSize else { return nil }
 
-        var best: FooterSlice?
+        var best: (footerOffset: UInt64, tocOffset: UInt64, footer: MV2SFooter)?
 
         for localPos in stride(from: window.count - footerSize, through: 0, by: -1) {
             guard window[localPos] == Constants.footerMagic[0] else { continue }
@@ -120,27 +173,18 @@ public enum FooterScanner {
             guard footer.tocLen <= limits.maxTocBytes else { continue }
 
             let footerOffset = windowBaseOffset + UInt64(localPos)
+            guard footerOffset + UInt64(footerSize) <= fileSize else { continue }
             guard footerOffset >= footer.tocLen else { continue }
             let tocOffset = footerOffset - footer.tocLen
-            guard tocOffset + footer.tocLen == footerOffset else { continue }
-            guard footerOffset <= fileSize else { continue }
 
-            guard footer.tocLen <= UInt64(Int.max) else { continue }
-            let tocLenInt = Int(footer.tocLen)
-
-            try handle.seek(toOffset: tocOffset)
-            guard let tocBytes = try handle.read(upToCount: tocLenInt), tocBytes.count == tocLenInt else {
-                continue
-            }
-            guard footer.hashMatches(tocBytes: tocBytes) else { continue }
-
-            let candidate = FooterSlice(
-                footerOffset: footerOffset,
+            guard try tocHashMatches(
+                file: file,
                 tocOffset: tocOffset,
-                footer: footer,
-                tocBytes: tocBytes
-            )
+                tocLen: footer.tocLen,
+                expectedHash: footer.tocHash
+            ) else { continue }
 
+            let candidate = (footerOffset: footerOffset, tocOffset: tocOffset, footer: footer)
             if let current = best {
                 if footer.generation > current.footer.generation {
                     best = candidate
@@ -154,5 +198,38 @@ public enum FooterScanner {
 
         return best
     }
-}
 
+    private static func tocHashMatches(
+        file: FDFile,
+        tocOffset: UInt64,
+        tocLen: UInt64,
+        expectedHash: Data
+    ) throws -> Bool {
+        guard expectedHash.count == 32 else { return false }
+        guard tocLen >= 32 else { return false }
+        guard tocLen <= UInt64(Int.max) else { return false }
+
+        let storedChecksumOffset = tocOffset + tocLen - 32
+        let storedChecksum = try file.readExactly(length: 32, at: storedChecksumOffset)
+
+        var hasher = SHA256Checksum()
+        let bodyLen = tocLen - 32
+        let chunkSize: UInt64 = 1024 * 1024
+
+        var cursor: UInt64 = 0
+        while cursor < bodyLen {
+            let remaining = bodyLen - cursor
+            let thisChunkLen = Int(min(chunkSize, remaining))
+            let bytes = try file.readExactly(length: thisChunkLen, at: tocOffset + cursor)
+            bytes.withUnsafeBytes { raw in
+                hasher.update(raw)
+            }
+            cursor += UInt64(thisChunkLen)
+        }
+
+        hasher.update(Data(repeating: 0, count: 32))
+        let computed = hasher.finalize()
+
+        return computed == storedChecksum && computed == expectedHash
+    }
+}

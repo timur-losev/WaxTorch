@@ -32,6 +32,9 @@ public enum Constants {
     /// Footer size: 64 bytes (v1 footer includes `wal_committed_seq`)
     public static let footerSize: UInt64 = 64
 
+    /// WAL record header size: 48 bytes (fixed for MV2S v1).
+    public static let walRecordHeaderSize: UInt64 = 48
+
     // MARK: - File Layout (v1 defaults)
 
     /// WAL starts immediately after the header region.
@@ -45,6 +48,7 @@ public enum Constants {
     public static let maxStringBytes: Int = 16 * 1024 * 1024
     public static let maxBlobBytes: Int = 256 * 1024 * 1024
     public static let maxArrayCount: Int = 10_000_000
+    public static let maxEmbeddingDimensions: Int = 1_000_000
 
     public static let maxTocBytes: UInt64 = 64 * 1024 * 1024
     public static let maxFooterScanBytes: UInt64 = 32 * 1024 * 1024

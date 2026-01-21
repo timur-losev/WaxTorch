@@ -66,6 +66,9 @@ public struct MV2SHeaderPage: Equatable, Sendable {
         guard tocChecksum.count == 32 else {
             throw WaxError.invalidHeader(reason: "toc_checksum must be 32 bytes (got \(tocChecksum.count))")
         }
+        guard walSize >= Constants.walRecordHeaderSize else {
+            throw WaxError.invalidHeader(reason: "wal_size must be >= \(Constants.walRecordHeaderSize)")
+        }
 
         var page = Data(repeating: 0, count: Self.size)
         page.replaceSubrange(0..<Self.magic.count, with: Self.magic)
@@ -168,8 +171,8 @@ public struct MV2SHeaderPage: Equatable, Sendable {
         guard walOffset >= Constants.headerRegionSize else {
             throw WaxError.invalidHeader(reason: "wal_offset must be >= \(Constants.headerRegionSize)")
         }
-        guard walSize > 0 else {
-            throw WaxError.invalidHeader(reason: "wal_size must be > 0")
+        guard walSize >= Constants.walRecordHeaderSize else {
+            throw WaxError.invalidHeader(reason: "wal_size must be >= \(Constants.walRecordHeaderSize)")
         }
         guard walWritePos <= walSize else {
             throw WaxError.invalidHeader(reason: "wal_write_pos must be <= wal_size")

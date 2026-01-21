@@ -2,7 +2,7 @@ import Testing
 @testable import WaxCore
 
 @Test func packageBuilds() async throws {
-    let _ = Wax()
+    let _ = Wax.self
 }
 
 @Test func errorTypesExist() {

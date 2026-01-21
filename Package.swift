@@ -71,6 +71,7 @@ let package = Package(
                 "WaxCore",
                 "WaxTextSearch",
                 "WaxVectorSearch",
+                .product(name: "TiktokenSwift", package: "TiktokenSwift"),
                 .target(
                     name: "WaxVectorSearchMiniLM",
                     condition: .when(traits: ["MiniLMEmbeddings"])
