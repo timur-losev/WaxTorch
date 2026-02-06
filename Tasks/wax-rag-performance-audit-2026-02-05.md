@@ -586,6 +586,19 @@ Implementation debt (fix in-place):
 
 Ordered execution (do not reorder):
 
+Execution gates (must pass before advancing):
+- Gate A (before lanes 2-5): zero signal-11 failures in:
+  - `testUnifiedSearchHybridPerformance`
+  - `testUnifiedSearchHybridPerformanceWithMetrics`
+  - `testFastRAGBuildPerformanceDenseCached`
+  - `testColdOpenHybridSearchPerformance`
+  - `testUnifiedSearchHybridPerformance10KDocs`
+  - `testMiniLMOpenAndFirstRecallOnExistingStoreSamples`
+- Gate B (before lanes 2-5): `testMiniLMRecallPerformance` passes with no normalization error.
+- Gate C (before lane 4): lane 2 and lane 3 checkpoint benchmarks pass and show non-regression vs prior lane.
+- Gate D (before lane 5): lane 4 checkpoint benchmarks pass and include vector-engine correctness parity checks.
+- Parallelization rule after Gate A/B: lanes 2 and 3 may run in parallel if they do not edit the same files; lane 4 starts only after both finish; lane 5 starts only after lane 4.
+
 1. Stability lane (P0)
 - Fix normalization failure and signal-11 repro harness.
 - Target files:
@@ -679,4 +692,3 @@ To reach extreme performance, optimize all of:
 - Tokenizer cold-start path (vocab load/cache) and batch buffer policies.
 - MiniLM batching pipeline effectiveness.
 - Benchmark suite breadth for concurrency/memory/power/tail latency.
-
