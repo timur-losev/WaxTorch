@@ -35,7 +35,7 @@ jobs:
         run: python3 cpp/scripts/verify_submodules.py
 
       - name: Configure
-        run: cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DWAXCPP_REQUIRE_PARITY_FIXTURES=ON
+        run: cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DWAXCPP_REQUIRE_PARITY_FIXTURES=ON -DWAXCPP_REQUIRE_SWIFT_FIXTURES=ON
 
       - name: Build
         run: cmake --build cpp/build --config Release --parallel
