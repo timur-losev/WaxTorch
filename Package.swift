@@ -134,6 +134,14 @@ let package = Package(
             swiftSettings: [.enableExperimentalFeature("StrictConcurrency")]
         ),
         .executableTarget(
+            name: "WaxParityFixtureGenerator",
+            dependencies: [
+                "WaxCore",
+            ],
+            path: "Sources/WaxParityFixtureGenerator",
+            swiftSettings: [.enableExperimentalFeature("StrictConcurrency")]
+        ),
+        .executableTarget(
             name: "WaxRepo",
             dependencies: [
                 "Wax",

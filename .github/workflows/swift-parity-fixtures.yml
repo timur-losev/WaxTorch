@@ -1,0 +1,33 @@
+name: Swift Parity Fixtures
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_name:
+        description: "Artifact name to upload"
+        required: false
+        default: "swift-parity-fixtures"
+
+jobs:
+  generate-swift-fixtures:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Generate Swift parity fixtures
+        run: swift run WaxParityFixtureGenerator --output fixtures/parity/swift
+
+      - name: List generated files
+        run: ls -la fixtures/parity/swift
+
+      - name: Upload fixtures artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: fixtures/parity/swift
+          if-no-files-found: error

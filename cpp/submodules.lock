@@ -1,0 +1,37 @@
+version: 1
+policy:
+  manager: git-submodule-only
+  allow_fetchcontent: false
+  allow_package_managers: false
+  require_dependency_pr: true
+
+submodules:
+  - name: usearch
+    path: cpp/third_party/usearch
+    remote: https://github.com/unum-cloud/USearch.git
+    pinned_commit: "<PIN_REQUIRED>"
+    verify_checksum: false
+
+  - name: sqlite
+    path: cpp/third_party/sqlite
+    remote: https://github.com/sqlite/sqlite.git
+    pinned_commit: "<PIN_REQUIRED>"
+    verify_checksum: false
+    notes:
+      - "FTS5 must be enabled in build configuration"
+
+  - name: googletest
+    path: cpp/third_party/googletest
+    remote: https://github.com/google/googletest.git
+    pinned_commit: "<PIN_REQUIRED>"
+    verify_checksum: false
+
+  - name: libtorch-dist
+    path: cpp/third_party/libtorch-dist
+    remote: https://github.com/christopherkarani/libtorch-dist.git
+    pinned_commit: "<PIN_REQUIRED>"
+    verify_checksum: true
+    required_manifest: manifest/libtorch-manifest.json
+    notes:
+      - "Practical hybrid mode: pinned artifact manifest + SHA256 validation"
+

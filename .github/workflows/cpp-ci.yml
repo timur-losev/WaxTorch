@@ -1,0 +1,47 @@
+name: C++ Port CI
+
+on:
+  pull_request:
+    paths:
+      - '.gitmodules'
+      - 'cpp/**'
+      - 'fixtures/parity/**'
+      - '.github/workflows/cpp-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.gitmodules'
+      - 'cpp/**'
+      - 'fixtures/parity/**'
+      - '.github/workflows/cpp-ci.yml'
+
+jobs:
+  cpp-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Sync submodules
+        run: git submodule sync --recursive
+
+      - name: Update submodules
+        run: git submodule update --init --recursive
+
+      - name: Verify dependency policy
+        run: python3 cpp/scripts/verify_submodules.py
+
+      - name: Configure
+        run: cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DWAXCPP_REQUIRE_PARITY_FIXTURES=ON
+
+      - name: Build
+        run: cmake --build cpp/build --config Release --parallel
+
+      - name: Generate parity fixtures
+        run: ./cpp/build/waxcpp_mv2s_fixture_generator
+
+      - name: Test
+        run: ctest --test-dir cpp/build --output-on-failure

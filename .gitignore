@@ -10,3 +10,10 @@ DerivedData/
 .home/
 /Towery/
 .wax-repo/
+
+# C++ port build artifacts
+/cpp/build/
+/cpp/build-*/
+/cpp/cmake-build-*/
+/cpp/out/
+/cpp/.cache/
