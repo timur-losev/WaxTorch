@@ -24,6 +24,10 @@ Generation command (run on a macOS machine with Swift toolchain):
 swift run WaxParityFixtureGenerator --output fixtures/parity/swift
 ```
 
+Size note:
+- The generator uses compact WAL size (`64 KiB`) for repository-friendly fixture sizes.
+- If you see ~268MB files, regenerate with the latest generator code before committing.
+
 If you do not have macOS locally:
 1. Run GitHub Actions workflow `Swift Parity Fixtures` (manual `workflow_dispatch`).
 2. Download uploaded artifact (`swift-parity-fixtures` by default).

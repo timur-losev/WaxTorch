@@ -53,6 +53,7 @@ private struct GeneratorConfig: Sendable {
 private struct FixtureGenerator {
     let outputDirectory: URL
     let fileManager = FileManager.default
+    private let fixtureWalSize: UInt64 = 64 * 1024
 
     func run() async throws {
         try fileManager.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
@@ -76,7 +77,7 @@ private struct FixtureGenerator {
 
     private func generateValidEmpty(at fixtureURL: URL) async throws {
         try resetFixtureFiles(at: fixtureURL)
-        let wax = try await Wax.create(at: fixtureURL)
+        let wax = try await Wax.create(at: fixtureURL, walSize: fixtureWalSize)
         try await wax.close()
 
         let stats = try await verifyAndCollectStats(at: fixtureURL)
@@ -94,7 +95,7 @@ private struct FixtureGenerator {
 
     private func generateValidPayload(at fixtureURL: URL) async throws {
         try resetFixtureFiles(at: fixtureURL)
-        let wax = try await Wax.create(at: fixtureURL)
+        let wax = try await Wax.create(at: fixtureURL, walSize: fixtureWalSize)
         _ = try await wax.put(Data("swift parity payload fixture".utf8))
         try await wax.commit()
         try await wax.close()
@@ -114,7 +115,7 @@ private struct FixtureGenerator {
 
     private func generateValidCompressed(at fixtureURL: URL) async throws {
         try resetFixtureFiles(at: fixtureURL)
-        let wax = try await Wax.create(at: fixtureURL)
+        let wax = try await Wax.create(at: fixtureURL, walSize: fixtureWalSize)
 
         // Repetitive payload makes compression deterministic enough for fixture generation.
         let largePayload = String(repeating: "swift-compressed-parity-fixture-", count: 512)
