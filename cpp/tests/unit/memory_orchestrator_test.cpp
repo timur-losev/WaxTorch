@@ -70,24 +70,51 @@ void ScenarioRememberFlushPersistsFrame(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioRecallReturnsRankedItems(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: recall returns ranked items");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+  config.rag.search_top_k = 10;
+  config.rag.preview_max_bytes = 256;
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("apple apple banana", {});
+    orchestrator.Remember("apple", {});
+    orchestrator.Remember("banana", {});
+    orchestrator.Flush();
+    const auto context = orchestrator.Recall("apple");
+    Require(!context.items.empty(), "recall should return non-empty context for matching query");
+    Require(context.items[0].frame_id == 0, "higher overlap document should rank first");
+    Require(context.items[0].text == "apple apple banana", "unexpected top recalled text");
+    orchestrator.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
-  const auto path = UniquePath();
   try {
     waxcpp::tests::Log("memory_orchestrator_test: start");
-    ScenarioVectorPolicyValidation(path);
-    ScenarioRememberFlushPersistsFrame(path);
+    const auto path0 = UniquePath();
+    const auto path1 = UniquePath();
+    const auto path2 = UniquePath();
+
+    ScenarioVectorPolicyValidation(path0);
+    ScenarioRememberFlushPersistsFrame(path1);
+    ScenarioRecallReturnsRankedItems(path2);
+
     std::error_code ec;
-    std::filesystem::remove(path, ec);
-    std::filesystem::remove(path.string() + ".writer.lock", ec);
+    std::filesystem::remove(path0, ec);
+    std::filesystem::remove(path0.string() + ".writer.lock", ec);
+    std::filesystem::remove(path1, ec);
+    std::filesystem::remove(path1.string() + ".writer.lock", ec);
+    std::filesystem::remove(path2, ec);
+    std::filesystem::remove(path2.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
     waxcpp::tests::LogError(ex.what());
-    std::error_code ec;
-    std::filesystem::remove(path, ec);
-    std::filesystem::remove(path.string() + ".writer.lock", ec);
     return EXIT_FAILURE;
   }
 }
