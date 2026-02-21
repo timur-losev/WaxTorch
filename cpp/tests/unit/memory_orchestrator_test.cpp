@@ -366,6 +366,37 @@ void ScenarioStructuredMemoryFacts(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioRecallIncludesStructuredMemory(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: recall includes structured memory");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+  config.rag.search_top_k = 10;
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("ordinary frame text", {});
+    orchestrator.RememberFact("user:42", "city", "tokyo");
+    orchestrator.RememberFact("user:42", "favorite", "sushi");
+    orchestrator.Flush();
+
+    const auto context = orchestrator.Recall("tokyo");
+    Require(!context.items.empty(), "recall should include structured memory hit");
+    bool found_structured = false;
+    for (const auto& item : context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          found_structured = true;
+          break;
+        }
+      }
+    }
+    Require(found_structured, "structured memory source must appear in recall context");
+    orchestrator.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -383,6 +414,7 @@ int main() {
     const auto path9 = UniquePath();
     const auto path10 = UniquePath();
     const auto path11 = UniquePath();
+    const auto path12 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioRememberFlushPersistsFrame(path1);
@@ -396,6 +428,7 @@ int main() {
     ScenarioRememberRespectsIngestBatchSize(path9);
     ScenarioTextOnlyRecallSkipsVectorEmbedding(path10);
     ScenarioStructuredMemoryFacts(path11);
+    ScenarioRecallIncludesStructuredMemory(path12);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -422,6 +455,8 @@ int main() {
     std::filesystem::remove(path10.string() + ".writer.lock", ec);
     std::filesystem::remove(path11, ec);
     std::filesystem::remove(path11.string() + ".writer.lock", ec);
+    std::filesystem::remove(path12, ec);
+    std::filesystem::remove(path12.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

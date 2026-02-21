@@ -161,6 +161,7 @@ struct DocCandidate {
 };
 
 StoreSearchChannels BuildStoreChannels(WaxStore& store,
+                                       StructuredMemoryStore* structured_memory,
                                        std::shared_ptr<EmbeddingProvider> embedder,
                                        bool enable_text_search,
                                        bool enable_vector_search,
@@ -174,6 +175,7 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
   const bool text_mode_enabled = request.mode.kind != SearchModeKind::kVectorOnly;
   const bool vector_mode_enabled = request.mode.kind != SearchModeKind::kTextOnly;
   const bool text_channel_enabled = enable_text_search && text_mode_enabled;
+  constexpr std::uint64_t kStructuredMemoryFrameIdBase = (1ULL << 63);
 
   std::optional<std::vector<float>> query_embedding = request.embedding;
   if (!query_embedding.has_value() && enable_vector_search && vector_mode_enabled && embedder != nullptr) {
@@ -294,6 +296,23 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
       channels.vector_results.push_back(std::move(vector_result));
     }
   }
+
+  if (text_channel_enabled && structured_memory != nullptr) {
+    const auto facts = structured_memory->All(-1);
+    for (const auto& fact : facts) {
+      const std::string fact_text = fact.entity + " " + fact.attribute + " " + fact.value;
+      const auto fact_score = TextOverlapScore(*request.query, fact_text);
+      if (fact_score <= 0.0F) {
+        continue;
+      }
+      SearchResult fact_result{};
+      fact_result.frame_id = kStructuredMemoryFrameIdBase + fact.id;
+      fact_result.score = fact_score;
+      fact_result.preview_text = fact_text;
+      fact_result.sources = {SearchSource::kStructuredMemory};
+      channels.text_results.push_back(std::move(fact_result));
+    }
+  }
   return channels;
 }
 
@@ -379,6 +398,7 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
   req.snippet_max_tokens = config_.rag.snippet_max_tokens;
   const auto channels = BuildStoreChannels(
       store_,
+      &structured_memory_,
       embedder_,
       config_.enable_text_search,
       config_.enable_vector_search,
@@ -403,6 +423,7 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
   req.snippet_max_tokens = config_.rag.snippet_max_tokens;
   const auto channels = BuildStoreChannels(
       store_,
+      &structured_memory_,
       embedder_,
       config_.enable_text_search,
       config_.enable_vector_search,
