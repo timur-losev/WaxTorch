@@ -71,6 +71,7 @@ class WaxStore {
   std::uint64_t footer_offset_ = 0;
   std::uint64_t next_frame_id_ = 0;
   bool dirty_ = false;
+  bool has_local_mutations_ = false;
   bool is_open_ = false;
   WaxStats stats_{};
 };

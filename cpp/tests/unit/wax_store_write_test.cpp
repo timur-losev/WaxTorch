@@ -118,12 +118,14 @@ void RunScenarioPutCommitReopen(const std::filesystem::path& path) {
 
 void RunScenarioPendingRecoveryCommit(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: pending WAL recovery then commit");
-  auto store = waxcpp::WaxStore::Create(path);
-  const std::vector<std::byte> payload = {
-      std::byte{0x01}, std::byte{0x02}, std::byte{0x03},
-  };
-  (void)store.Put(payload);
-  store.Close();
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    const std::vector<std::byte> payload = {
+        std::byte{0x01}, std::byte{0x02}, std::byte{0x03},
+    };
+    (void)store.Put(payload);
+    // Simulate crash/no-graceful-close: do not call Close() so WAL remains pending.
+  }
 
   auto reopened = waxcpp::WaxStore::Open(path);
   auto stats_before = reopened.Stats();
@@ -161,24 +163,26 @@ void RunScenarioDeleteAndSupersedePersist(const std::filesystem::path& path) {
 
 void RunScenarioCrashWindowAfterTocWrite(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: crash-window after TOC write (before footer)");
-  auto store = waxcpp::WaxStore::Create(path);
-  const std::vector<std::byte> payload0 = {std::byte{0x31}};
-  const std::vector<std::byte> payload1 = {std::byte{0x32}};
-  (void)store.Put(payload0);
-  store.Commit();
-
-  (void)store.Put(payload1);
-  bool threw = false;
   {
-    ScopedCommitFailStep fail_step(1);
-    try {
-      store.Commit();
-    } catch (const std::exception&) {
-      threw = true;
+    auto store = waxcpp::WaxStore::Create(path);
+    const std::vector<std::byte> payload0 = {std::byte{0x31}};
+    const std::vector<std::byte> payload1 = {std::byte{0x32}};
+    (void)store.Put(payload0);
+    store.Commit();
+
+    (void)store.Put(payload1);
+    bool threw = false;
+    {
+      ScopedCommitFailStep fail_step(1);
+      try {
+        store.Commit();
+      } catch (const std::exception&) {
+        threw = true;
+      }
     }
+    Require(threw, "commit should fail at injected step 1");
+    // Simulate crash: do not call Close() to avoid graceful auto-commit.
   }
-  Require(threw, "commit should fail at injected step 1");
-  store.Close();
 
   auto reopened = waxcpp::WaxStore::Open(path);
   const auto stats = reopened.Stats();
@@ -189,24 +193,26 @@ void RunScenarioCrashWindowAfterTocWrite(const std::filesystem::path& path) {
 
 void RunScenarioCrashWindowAfterFooterWrite(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: crash-window after footer write (before headers)");
-  auto store = waxcpp::WaxStore::Create(path);
-  const std::vector<std::byte> payload0 = {std::byte{0x41}};
-  const std::vector<std::byte> payload1 = {std::byte{0x42}};
-  (void)store.Put(payload0);
-  store.Commit();
-
-  (void)store.Put(payload1);
-  bool threw = false;
   {
-    ScopedCommitFailStep fail_step(2);
-    try {
-      store.Commit();
-    } catch (const std::exception&) {
-      threw = true;
+    auto store = waxcpp::WaxStore::Create(path);
+    const std::vector<std::byte> payload0 = {std::byte{0x41}};
+    const std::vector<std::byte> payload1 = {std::byte{0x42}};
+    (void)store.Put(payload0);
+    store.Commit();
+
+    (void)store.Put(payload1);
+    bool threw = false;
+    {
+      ScopedCommitFailStep fail_step(2);
+      try {
+        store.Commit();
+      } catch (const std::exception&) {
+        threw = true;
+      }
     }
+    Require(threw, "commit should fail at injected step 2");
+    // Simulate crash: do not call Close().
   }
-  Require(threw, "commit should fail at injected step 2");
-  store.Close();
 
   auto reopened = waxcpp::WaxStore::Open(path);
   const auto stats = reopened.Stats();
@@ -217,30 +223,99 @@ void RunScenarioCrashWindowAfterFooterWrite(const std::filesystem::path& path) {
 
 void RunScenarioCrashWindowAfterHeaderA(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: crash-window after header A write (before header B)");
-  auto store = waxcpp::WaxStore::Create(path);
-  const std::vector<std::byte> payload0 = {std::byte{0x51}};
-  const std::vector<std::byte> payload1 = {std::byte{0x52}};
-  (void)store.Put(payload0);
-  store.Commit();
-
-  (void)store.Put(payload1);
-  bool threw = false;
   {
-    ScopedCommitFailStep fail_step(3);
-    try {
-      store.Commit();
-    } catch (const std::exception&) {
-      threw = true;
+    auto store = waxcpp::WaxStore::Create(path);
+    const std::vector<std::byte> payload0 = {std::byte{0x51}};
+    const std::vector<std::byte> payload1 = {std::byte{0x52}};
+    (void)store.Put(payload0);
+    store.Commit();
+
+    (void)store.Put(payload1);
+    bool threw = false;
+    {
+      ScopedCommitFailStep fail_step(3);
+      try {
+        store.Commit();
+      } catch (const std::exception&) {
+        threw = true;
+      }
     }
+    Require(threw, "commit should fail at injected step 3");
+    // Simulate crash: do not call Close().
   }
-  Require(threw, "commit should fail at injected step 3");
-  store.Close();
 
   auto reopened = waxcpp::WaxStore::Open(path);
   reopened.Verify(true);
   const auto stats = reopened.Stats();
   Require(stats.frame_count == 2, "expected new committed frame_count after header-A crash");
   Require(stats.pending_frames == 0, "expected no pending put after header-A crash");
+  reopened.Close();
+}
+
+void RunScenarioSupersedeCycleRejected(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: supersede cycle rejected at commit");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    const std::vector<std::byte> payload_a = {std::byte{0x61}};
+    const std::vector<std::byte> payload_b = {std::byte{0x62}};
+    const auto a = store.Put(payload_a);
+    const auto b = store.Put(payload_b);
+    Require(a == 0 && b == 1, "expected dense ids for cycle scenario");
+
+    store.Supersede(a, b);  // b -> a
+    store.Supersede(b, a);  // a -> b (cycle)
+
+    bool threw = false;
+    try {
+      store.Commit();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "commit must reject supersede cycle");
+    // Simulate abrupt end; avoid Close() auto-commit retry.
+  }
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  // Nothing committed, both puts and supersede ops remain pending.
+  Require(reopened.Stats().frame_count == 0, "cycle-rejected commit must not advance committed frame_count");
+  reopened.Close();
+}
+
+void RunScenarioSupersedeConflictRejected(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: supersede conflict rejected at commit");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    const auto a = store.Put({std::byte{0x71}});
+    const auto b = store.Put({std::byte{0x72}});
+    const auto c = store.Put({std::byte{0x73}});
+    Require(a == 0 && b == 1 && c == 2, "expected dense ids for supersede conflict scenario");
+
+    store.Supersede(a, b);  // b -> a
+    store.Supersede(c, b);  // b -> c (conflict: b already supersedes a)
+
+    bool threw = false;
+    try {
+      store.Commit();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "commit must reject supersede conflict");
+    // Simulate abrupt end; avoid Close() auto-commit retry.
+  }
+}
+
+void RunScenarioCloseAutoCommitsPending(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: close auto-commits pending mutations");
+  auto store = waxcpp::WaxStore::Create(path);
+  const auto id = store.Put({std::byte{0x81}, std::byte{0x82}});
+  Require(id == 0, "expected first id=0 in close auto-commit scenario");
+  Require(store.Stats().pending_frames == 1, "pending_frames should be 1 before close");
+  store.Close();
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  const auto stats = reopened.Stats();
+  Require(stats.frame_count == 1, "close should commit pending put");
+  Require(stats.pending_frames == 0, "no pending frames expected after close auto-commit");
   reopened.Close();
 }
 
@@ -258,6 +333,9 @@ int main() {
     RunScenarioCrashWindowAfterTocWrite(path);
     RunScenarioCrashWindowAfterFooterWrite(path);
     RunScenarioCrashWindowAfterHeaderA(path);
+    RunScenarioSupersedeCycleRejected(path);
+    RunScenarioSupersedeConflictRejected(path);
+    RunScenarioCloseAutoCommitsPending(path);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);

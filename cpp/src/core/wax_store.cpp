@@ -420,6 +420,26 @@ void ValidateDataRanges(const std::vector<core::mv2s::FrameSummary>& frames,
   }
 }
 
+bool WouldCreateSupersedeCycle(const std::vector<core::mv2s::FrameSummary>& frames,
+                               std::uint64_t superseded_id,
+                               std::uint64_t superseding_id) {
+  std::uint64_t cursor = superseded_id;
+  for (std::size_t hops = 0; hops < frames.size(); ++hops) {
+    const auto& frame = frames[static_cast<std::size_t>(cursor)];
+    if (!frame.supersedes.has_value()) {
+      return false;
+    }
+    cursor = *frame.supersedes;
+    if (cursor == superseding_id) {
+      return true;
+    }
+    if (cursor >= frames.size()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 namespace core::testing {
@@ -553,6 +573,7 @@ std::uint64_t WaxStore::Put(const std::vector<std::byte>& content, const Metadat
   stats_.pending_frames += 1;
   next_frame_id_ = frame_id + 1;
   dirty_ = true;
+  has_local_mutations_ = true;
   return frame_id;
 }
 
@@ -601,6 +622,7 @@ void WaxStore::Delete(std::uint64_t frame_id) {
   wal_sentinel_write_count_ = writer.sentinel_write_count();
   wal_write_call_count_ = writer.write_call_count();
   dirty_ = true;
+  has_local_mutations_ = true;
 }
 
 void WaxStore::Supersede(std::uint64_t superseded_id, std::uint64_t superseding_id) {
@@ -637,6 +659,7 @@ void WaxStore::Supersede(std::uint64_t superseded_id, std::uint64_t superseding_
   wal_sentinel_write_count_ = writer.sentinel_write_count();
   wal_write_call_count_ = writer.write_call_count();
   dirty_ = true;
+  has_local_mutations_ = true;
 }
 
 void WaxStore::Commit() {
@@ -709,8 +732,19 @@ void WaxStore::Commit() {
         if (superseded_id == superseding_id) {
           throw StoreError("wal supersede self-reference");
         }
-        frames[static_cast<std::size_t>(superseded_id)].superseded_by = superseding_id;
-        frames[static_cast<std::size_t>(superseding_id)].supersedes = superseded_id;
+        auto& superseded = frames[static_cast<std::size_t>(superseded_id)];
+        auto& superseding = frames[static_cast<std::size_t>(superseding_id)];
+        if (superseded.superseded_by.has_value() && *superseded.superseded_by != superseding_id) {
+          throw StoreError("wal supersede conflict: superseded frame already has different superseding frame");
+        }
+        if (superseding.supersedes.has_value() && *superseding.supersedes != superseded_id) {
+          throw StoreError("wal supersede conflict: superseding frame already supersedes different frame");
+        }
+        if (WouldCreateSupersedeCycle(frames, superseded_id, superseding_id)) {
+          throw StoreError("wal supersede cycle detected");
+        }
+        superseded.superseded_by = superseding_id;
+        superseding.supersedes = superseded_id;
         break;
       }
       case core::wal::WalMutationKind::kPutEmbedding:
@@ -804,6 +838,7 @@ void WaxStore::Commit() {
   wal_write_call_count_ = writer.write_call_count();
   footer_offset_ = footer_offset;
   dirty_ = false;
+  has_local_mutations_ = false;
 
   stats_.generation = file_generation_;
   stats_.frame_count = frames.size();
@@ -812,6 +847,9 @@ void WaxStore::Commit() {
 }
 
 void WaxStore::Close() {
+  if (is_open_ && dirty_ && has_local_mutations_) {
+    Commit();
+  }
   is_open_ = false;
 }
 
@@ -991,6 +1029,7 @@ void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
   footer_offset_ = footer_slice->footer_offset;
   next_frame_id_ = pending_max_frame_id_plus_one;
   dirty_ = wal_scan_state.last_sequence > committed_seq;
+  has_local_mutations_ = false;
   is_open_ = true;
   (void)file_size;
   (void)used_replay_snapshot;
