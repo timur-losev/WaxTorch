@@ -704,6 +704,89 @@ void ScenarioFlushFailureThenCloseReopenRecoversText(const std::filesystem::path
   }
 }
 
+void ScenarioFlushFailureThenCloseReopenRecoversVector(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: flush failure then close/reopen recovers vector");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("flush close reopen vector apple", {});
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(1);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw when failpoint is enabled");
+
+    const auto before_close = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(before_close.items.empty(), "failed flush should keep staged vector hidden in current process");
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, embedder);
+    embedder->Reset();
+    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "reopen should rebuild vector index from committed store state");
+    Require(embedder->batch_calls() == 0, "explicit vector recall should not re-embed docs after reopen");
+    Require(embedder->embed_calls() == 0, "explicit vector recall should avoid query embed calls");
+    reopened.Close();
+  }
+}
+
+void ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: flush failure then close/reopen recovers structured fact");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:reopen", "city", "rome");
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(1);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw when failpoint is enabled");
+
+    const auto before_close = orchestrator.Recall("rome");
+    Require(before_close.items.empty(), "failed flush should keep staged structured fact hidden");
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto facts = reopened.RecallFactsByEntityPrefix("user:reopen", 10);
+    Require(facts.size() == 1, "structured fact should be restored after reopen");
+    const auto context = reopened.Recall("rome");
+    bool has_structured = false;
+    for (const auto& item : context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          has_structured = true;
+          break;
+        }
+      }
+    }
+    Require(has_structured, "reopen should rebuild structured-text index from committed fact");
+    reopened.Close();
+  }
+}
+
 void ScenarioStructuredMemoryRemovePersists(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: structured memory remove persists");
   waxcpp::OrchestratorConfig config{};
@@ -773,6 +856,8 @@ int main() {
     const auto path21 = UniquePath();
     const auto path22 = UniquePath();
     const auto path23 = UniquePath();
+    const auto path24 = UniquePath();
+    const auto path25 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -798,6 +883,8 @@ int main() {
     ScenarioFlushFailureDoesNotExposeStagedText(path20);
     ScenarioFlushFailureDoesNotExposeStagedVector(path21);
     ScenarioFlushFailureThenCloseReopenRecoversText(path23);
+    ScenarioFlushFailureThenCloseReopenRecoversVector(path24);
+    ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(path25);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -848,6 +935,10 @@ int main() {
     std::filesystem::remove(path22.string() + ".writer.lock", ec);
     std::filesystem::remove(path23, ec);
     std::filesystem::remove(path23.string() + ".writer.lock", ec);
+    std::filesystem::remove(path24, ec);
+    std::filesystem::remove(path24.string() + ".writer.lock", ec);
+    std::filesystem::remove(path25, ec);
+    std::filesystem::remove(path25.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
