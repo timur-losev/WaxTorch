@@ -356,6 +356,32 @@ void RunScenarioFrameReadApis(const std::filesystem::path& path) {
   reopened.Close();
 }
 
+void RunScenarioCloseDoesNotCommitRecoveredPending(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: close does not auto-commit recovered pending WAL");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    (void)store.Put({std::byte{0xB1}});
+    // Simulate crash/no graceful close.
+  }
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto stats = reopened.Stats();
+    Require(stats.frame_count == 0, "recovered pending scenario should still have 0 committed frames");
+    Require(stats.pending_frames == 1, "recovered pending scenario should expose pending frame");
+    // Close must not auto-commit recovery-only pending mutations.
+    reopened.Close();
+  }
+
+  {
+    auto reopened_again = waxcpp::WaxStore::Open(path);
+    const auto stats_again = reopened_again.Stats();
+    Require(stats_again.frame_count == 0, "close must not commit recovery-only pending WAL");
+    Require(stats_again.pending_frames == 1, "pending WAL should remain after close on recovered state");
+    reopened_again.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -374,6 +400,7 @@ int main() {
     RunScenarioSupersedeConflictRejected(path);
     RunScenarioCloseAutoCommitsPending(path);
     RunScenarioFrameReadApis(path);
+    RunScenarioCloseDoesNotCommitRecoveredPending(path);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);

@@ -92,6 +92,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add negative integration coverage for supersede cycle/conflict rejection in C++ store write tests
 - [x] Add `Close()` auto-commit for locally staged pending mutations while preserving recovery-only pending WAL semantics
 - [x] Add frame read API surface in C++ store (`FrameMeta`, `FrameMetas`, `FrameContent`, `FrameContents`)
+- [x] Add explicit regression test for `Close()` behavior on recovered pending WAL (must not silently commit)
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -159,6 +160,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/include/waxcpp/wax_store.hpp` | Added read API declarations for committed frames (`FrameMeta(s)`, `FrameContent(s)`) | Codex |
 | `cpp/src/core/wax_store.cpp` | Added committed frame cache and read API implementations backed by `.mv2s` payload reads | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added frame read API parity scenario (meta/status/content before and after reopen) | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added regression for `Close()` on recovered pending WAL to lock local-vs-recovered auto-commit semantics | Codex |
 | `cpp/src/core/wax_store.cpp` | Replaced pending-WAL fail gate with Swift-like pending scan integration, `requiredEnd` protection, open-time trailing-byte repair, non-mutating verify path, `Open(path, repair)` control, internal WAL state capture, and `WalStats()` reporting | Codex |
 | `cpp/include/waxcpp/wax_store.hpp` | Added internal WAL runtime state fields plus public `WaxWALStats`/`WalStats()` API and `Open(path, repair)` overload | Codex |
 | `cpp/tests/unit/wax_store_verify_test.cpp` | Extended WAL parity scenarios with tail-repair checks, explicit WAL-state assertions, non-mutating verify regression, clean-WAL cursor normalization coverage, and `open(repair=false)` regression | Codex |
