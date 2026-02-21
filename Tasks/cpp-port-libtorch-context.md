@@ -161,6 +161,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Enforce post-close lifecycle contract in orchestrator (operations throw after `Close`, `Close` is idempotent)
 - [x] Add staged structured-memory ordering regression (`upsert -> upsert -> remove` before flush results in deterministic remove outcome after flush/reopen)
 - [x] Add structured-memory no-flush close regression (`RememberFact` + `Close` persists via store auto-commit and is rebuilt on reopen)
+- [x] Enforce `Recall(query, embedding)` policy contract (vector must be enabled and embedding dimension must match vector index)
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -319,6 +320,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added use-after-close regression scenario and extended flush-failure close/reopen coverage across text/vector/structured channels | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added staged structured-fact ordering regression to lock final-mutation-wins semantics across flush/reopen | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added no-flush structured-fact close/reopen regression to verify store auto-commit + structured index rebuild path | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Added explicit validation in `Recall(query, embedding)` for vector-enabled requirement and embedding dimension parity with vector index | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added policy-validation scenarios for `Recall(query, embedding)` misuse (vector disabled and dimension mismatch) | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

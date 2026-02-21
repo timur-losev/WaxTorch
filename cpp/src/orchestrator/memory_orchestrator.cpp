@@ -577,6 +577,12 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
 
 RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vector<float>& embedding) {
   ThrowIfClosed(closed_);
+  if (!config_.enable_vector_search) {
+    throw std::runtime_error("Recall(query, embedding) requires vector search to be enabled");
+  }
+  if (vector_index_ != nullptr && embedding.size() != static_cast<std::size_t>(vector_index_->dimensions())) {
+    throw std::runtime_error("Recall(query, embedding) dimension mismatch with vector index");
+  }
   SearchRequest req;
   req.query = query;
   req.embedding = embedding;

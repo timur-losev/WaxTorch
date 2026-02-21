@@ -172,6 +172,48 @@ void ScenarioSearchModePolicyValidation(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioRecallEmbeddingPolicyValidation(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: recall embedding policy validation");
+
+  {
+    waxcpp::OrchestratorConfig config{};
+    config.enable_text_search = true;
+    config.enable_vector_search = false;
+    config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("text only", {});
+    orchestrator.Flush();
+    bool threw = false;
+    try {
+      (void)orchestrator.Recall("text", {1.0F, 0.0F, 0.0F, 0.0F});
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "Recall(query, embedding) should throw when vector search is disabled");
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::OrchestratorConfig config{};
+    config.enable_text_search = false;
+    config.enable_vector_search = true;
+    config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+    auto embedder = std::make_shared<CountingBatchEmbedder>();
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("vector doc", {});
+    orchestrator.Flush();
+    bool threw = false;
+    try {
+      (void)orchestrator.Recall("vector", {1.0F, 0.0F, 0.0F});  // wrong dims
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "Recall(query, embedding) should throw on dimension mismatch");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioRememberFlushPersistsFrame(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: remember/flush persists frame");
   waxcpp::OrchestratorConfig config{};
@@ -981,9 +1023,11 @@ int main() {
     const auto path26 = UniquePath();
     const auto path27 = UniquePath();
     const auto path28 = UniquePath();
+    const auto path29 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
+    ScenarioRecallEmbeddingPolicyValidation(path29);
     ScenarioRememberFlushPersistsFrame(path1);
     ScenarioRecallReturnsRankedItems(path2);
     ScenarioHybridRecallWithEmbedder(path3);
@@ -1071,6 +1115,8 @@ int main() {
     std::filesystem::remove(path27.string() + ".writer.lock", ec);
     std::filesystem::remove(path28, ec);
     std::filesystem::remove(path28.string() + ".writer.lock", ec);
+    std::filesystem::remove(path29, ec);
+    std::filesystem::remove(path29.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
