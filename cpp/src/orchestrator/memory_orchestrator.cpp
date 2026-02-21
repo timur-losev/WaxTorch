@@ -304,7 +304,24 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
   }
 
   if (text_channel_enabled && store_text_index != nullptr) {
-    channels.text_results = store_text_index->Search(*request.query, request.top_k);
+    const auto indexed_text_results = store_text_index->Search(*request.query, request.top_k);
+    channels.text_results.reserve(indexed_text_results.size());
+    for (const auto& indexed : indexed_text_results) {
+      const auto meta = store.FrameMeta(indexed.frame_id);
+      if (!meta.has_value() || meta->status != 0) {
+        continue;
+      }
+      const auto payload = store.FrameContent(indexed.frame_id);
+      if (ParseStructuredFactPayload(payload).has_value()) {
+        continue;
+      }
+      SearchResult store_text_result{};
+      store_text_result.frame_id = indexed.frame_id;
+      store_text_result.score = indexed.score;
+      store_text_result.preview_text = BytesToString(payload);
+      store_text_result.sources = {SearchSource::kText};
+      channels.text_results.push_back(std::move(store_text_result));
+    }
   }
 
   if (vector_channel_enabled && vector_index != nullptr) {
