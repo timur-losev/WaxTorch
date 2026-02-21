@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -29,6 +30,15 @@ inline constexpr std::array<std::byte, 6> kStructuredFactMagic = {
     std::byte{'1'},
 };
 
+inline constexpr std::array<std::byte, 6> kEmbeddingRecordMagic = {
+    std::byte{'W'},
+    std::byte{'A'},
+    std::byte{'X'},
+    std::byte{'E'},
+    std::byte{'M'},
+    std::byte{'1'},
+};
+
 enum class StructuredFactOpcode : std::uint8_t {
   kUpsert = 1,
   kRemove = 2,
@@ -42,14 +52,31 @@ struct StructuredFactRecord {
   Metadata metadata;
 };
 
+struct EmbeddingRecord {
+  std::uint64_t frame_id = 0;
+  std::vector<float> embedding;
+};
+
 void AppendU8(std::vector<std::byte>& out, std::uint8_t value) {
   out.push_back(static_cast<std::byte>(value));
+}
+
+void AppendU64LE(std::vector<std::byte>& out, std::uint64_t value) {
+  for (std::size_t i = 0; i < sizeof(value); ++i) {
+    out.push_back(static_cast<std::byte>((value >> (8U * i)) & 0xFFU));
+  }
 }
 
 void AppendU32LE(std::vector<std::byte>& out, std::uint32_t value) {
   for (std::size_t i = 0; i < sizeof(value); ++i) {
     out.push_back(static_cast<std::byte>((value >> (8U * i)) & 0xFFU));
   }
+}
+
+void AppendF32LE(std::vector<std::byte>& out, float value) {
+  std::uint32_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  AppendU32LE(out, bits);
 }
 
 void AppendString(std::vector<std::byte>& out, const std::string& value) {
@@ -92,6 +119,21 @@ std::vector<std::byte> BuildStructuredFactRemovePayload(const std::string& entit
   AppendU8(out, static_cast<std::uint8_t>(StructuredFactOpcode::kRemove));
   AppendString(out, entity);
   AppendString(out, attribute);
+  return out;
+}
+
+std::vector<std::byte> BuildEmbeddingRecordPayload(std::uint64_t frame_id, const std::vector<float>& embedding) {
+  if (embedding.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+    throw std::runtime_error("embedding record vector length exceeds uint32");
+  }
+  std::vector<std::byte> out{};
+  out.reserve(kEmbeddingRecordMagic.size() + 8 + 4 + embedding.size() * sizeof(float));
+  out.insert(out.end(), kEmbeddingRecordMagic.begin(), kEmbeddingRecordMagic.end());
+  AppendU64LE(out, frame_id);
+  AppendU32LE(out, static_cast<std::uint32_t>(embedding.size()));
+  for (const float value : embedding) {
+    AppendF32LE(out, value);
+  }
   return out;
 }
 
@@ -183,6 +225,72 @@ std::optional<StructuredFactRecord> ParseStructuredFactPayload(const std::vector
   return record;
 }
 
+std::optional<EmbeddingRecord> ParseEmbeddingRecordPayload(const std::vector<std::byte>& payload) {
+  if (payload.size() < kEmbeddingRecordMagic.size() + 8 + 4) {
+    return std::nullopt;
+  }
+  if (!std::equal(kEmbeddingRecordMagic.begin(), kEmbeddingRecordMagic.end(), payload.begin())) {
+    return std::nullopt;
+  }
+
+  std::size_t cursor = kEmbeddingRecordMagic.size();
+  auto read_u64 = [&]() -> std::optional<std::uint64_t> {
+    if (cursor + 8 > payload.size()) {
+      return std::nullopt;
+    }
+    std::uint64_t out = 0;
+    for (std::size_t i = 0; i < 8; ++i) {
+      out |= static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(payload[cursor + i])) << (8U * i);
+    }
+    cursor += 8;
+    return out;
+  };
+  auto read_u32 = [&]() -> std::optional<std::uint32_t> {
+    if (cursor + 4 > payload.size()) {
+      return std::nullopt;
+    }
+    std::uint32_t out = 0;
+    for (std::size_t i = 0; i < 4; ++i) {
+      out |= static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(payload[cursor + i])) << (8U * i);
+    }
+    cursor += 4;
+    return out;
+  };
+  auto read_f32 = [&]() -> std::optional<float> {
+    const auto bits = read_u32();
+    if (!bits.has_value()) {
+      return std::nullopt;
+    }
+    float value = 0.0F;
+    std::uint32_t raw = *bits;
+    std::memcpy(&value, &raw, sizeof(value));
+    return value;
+  };
+
+  const auto frame_id = read_u64();
+  const auto count = read_u32();
+  if (!frame_id.has_value() || !count.has_value()) {
+    return std::nullopt;
+  }
+  std::vector<float> embedding{};
+  embedding.reserve(*count);
+  for (std::uint32_t i = 0; i < *count; ++i) {
+    const auto value = read_f32();
+    if (!value.has_value()) {
+      return std::nullopt;
+    }
+    embedding.push_back(*value);
+  }
+  if (cursor != payload.size()) {
+    return std::nullopt;
+  }
+
+  EmbeddingRecord record{};
+  record.frame_id = *frame_id;
+  record.embedding = std::move(embedding);
+  return record;
+}
+
 std::string BytesToString(const std::vector<std::byte>& payload) {
   std::string out{};
   out.reserve(payload.size());
@@ -190,6 +298,10 @@ std::string BytesToString(const std::vector<std::byte>& payload) {
     out.push_back(static_cast<char>(std::to_integer<unsigned char>(b)));
   }
   return out;
+}
+
+bool IsInternalOrchestratorPayload(const std::vector<std::byte>& payload) {
+  return ParseStructuredFactPayload(payload).has_value() || ParseEmbeddingRecordPayload(payload).has_value();
 }
 
 std::vector<std::string> TokenizeWhitespace(std::string_view text) {
@@ -304,7 +416,7 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
     query_embedding = embedder->Embed(*request.query);
   }
   const bool vector_channel_enabled =
-      enable_vector_search && vector_mode_enabled && embedder != nullptr && query_embedding.has_value();
+      enable_vector_search && vector_mode_enabled && query_embedding.has_value();
   if (!text_channel_enabled && !vector_channel_enabled) {
     return channels;
   }
@@ -318,7 +430,7 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
         continue;
       }
       const auto payload = store.FrameContent(indexed.frame_id);
-      if (ParseStructuredFactPayload(payload).has_value()) {
+      if (IsInternalOrchestratorPayload(payload)) {
         continue;
       }
       SearchResult store_text_result{};
@@ -339,7 +451,7 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
         continue;
       }
       const auto payload = store.FrameContent(frame_id);
-      if (ParseStructuredFactPayload(payload).has_value()) {
+      if (IsInternalOrchestratorPayload(payload)) {
         continue;
       }
       SearchResult vector_result{};
@@ -376,12 +488,37 @@ void RebuildTextIndexFromStore(WaxStore& store, FTS5SearchEngine& store_text_ind
       continue;
     }
     const auto payload = store.FrameContent(meta.id);
-    if (ParseStructuredFactPayload(payload).has_value()) {
+    if (IsInternalOrchestratorPayload(payload)) {
       continue;
     }
     store_text_index.StageIndex(meta.id, BytesToString(payload));
   }
   store_text_index.CommitStaged();
+}
+
+struct PersistedEmbeddingSnapshot {
+  std::unordered_map<std::uint64_t, std::vector<float>> by_frame{};
+  std::optional<int> dimensions{};
+};
+
+PersistedEmbeddingSnapshot LoadPersistedEmbeddingsFromStore(WaxStore& store) {
+  PersistedEmbeddingSnapshot snapshot{};
+  const auto metas = store.FrameMetas();
+  for (const auto& meta : metas) {
+    if (meta.status != 0) {
+      continue;
+    }
+    const auto payload = store.FrameContent(meta.id);
+    const auto embedding_record = ParseEmbeddingRecordPayload(payload);
+    if (!embedding_record.has_value()) {
+      continue;
+    }
+    if (!snapshot.dimensions.has_value() && !embedding_record->embedding.empty()) {
+      snapshot.dimensions = static_cast<int>(embedding_record->embedding.size());
+    }
+    snapshot.by_frame[embedding_record->frame_id] = std::move(embedding_record->embedding);
+  }
+  return snapshot;
 }
 
 std::vector<std::vector<float>> BuildEmbeddingsForTexts(std::shared_ptr<EmbeddingProvider> embedder,
@@ -422,11 +559,10 @@ std::vector<std::vector<float>> BuildEmbeddingsForTexts(std::shared_ptr<Embeddin
 }
 
 void RebuildVectorIndexFromStore(WaxStore& store,
+                                 const PersistedEmbeddingSnapshot& persisted_embeddings,
                                  std::shared_ptr<EmbeddingProvider> embedder,
                                  int ingest_batch_size,
                                  USearchVectorEngine& vector_index) {
-  vector_index = USearchVectorEngine(embedder->dimensions());
-
   const auto metas = store.FrameMetas();
   std::vector<std::uint64_t> frame_ids{};
   std::vector<std::string> texts{};
@@ -437,32 +573,84 @@ void RebuildVectorIndexFromStore(WaxStore& store,
       continue;
     }
     const auto payload = store.FrameContent(meta.id);
-    if (ParseStructuredFactPayload(payload).has_value()) {
+    if (IsInternalOrchestratorPayload(payload)) {
       continue;
     }
     frame_ids.push_back(meta.id);
     texts.push_back(BytesToString(payload));
   }
-  auto embeddings = BuildEmbeddingsForTexts(embedder, texts, ingest_batch_size, "rebuild vector index");
-  if (embeddings.size() != frame_ids.size()) {
-    throw std::runtime_error("rebuild vector index: embedding count mismatch");
-  }
 
-  std::vector<std::uint64_t> valid_ids{};
-  std::vector<std::vector<float>> valid_embeddings{};
-  valid_ids.reserve(frame_ids.size());
-  valid_embeddings.reserve(frame_ids.size());
+  std::vector<std::uint64_t> missing_ids{};
+  std::vector<std::string> missing_texts{};
+  missing_ids.reserve(frame_ids.size());
+  missing_texts.reserve(frame_ids.size());
+
   for (std::size_t i = 0; i < frame_ids.size(); ++i) {
-    if (embeddings[i].size() != static_cast<std::size_t>(vector_index.dimensions())) {
+    const auto persisted_it = persisted_embeddings.by_frame.find(frame_ids[i]);
+    if (persisted_it == persisted_embeddings.by_frame.end() ||
+        persisted_it->second.size() != static_cast<std::size_t>(vector_index.dimensions())) {
+      missing_ids.push_back(frame_ids[i]);
+      missing_texts.push_back(texts[i]);
       continue;
     }
-    valid_ids.push_back(frame_ids[i]);
-    valid_embeddings.push_back(std::move(embeddings[i]));
+    vector_index.StageAdd(frame_ids[i], persisted_it->second);
   }
-  if (!valid_ids.empty()) {
-    vector_index.StageAddBatch(valid_ids, valid_embeddings);
-    vector_index.CommitStaged();
+
+  if (embedder != nullptr && !missing_ids.empty()) {
+    auto embeddings = BuildEmbeddingsForTexts(embedder, missing_texts, ingest_batch_size, "rebuild vector index");
+    if (embeddings.size() != missing_ids.size()) {
+      throw std::runtime_error("rebuild vector index: embedding count mismatch");
+    }
+    for (std::size_t i = 0; i < missing_ids.size(); ++i) {
+      if (embeddings[i].size() != static_cast<std::size_t>(vector_index.dimensions())) {
+        continue;
+      }
+      vector_index.StageAdd(missing_ids[i], embeddings[i]);
+    }
   }
+
+  vector_index.CommitStaged();
+}
+
+std::optional<int> ResolveVectorDimensions(std::shared_ptr<EmbeddingProvider> embedder,
+                                           const PersistedEmbeddingSnapshot& persisted_embeddings) {
+  if (embedder != nullptr) {
+    return embedder->dimensions();
+  }
+  if (persisted_embeddings.dimensions.has_value() && *persisted_embeddings.dimensions > 0) {
+    return persisted_embeddings.dimensions;
+  }
+  return std::nullopt;
+}
+
+void EnsureEmbedderRequiredForRemember(const OrchestratorConfig& config,
+                                       std::shared_ptr<EmbeddingProvider> embedder) {
+  if (config.enable_vector_search && embedder == nullptr) {
+    throw std::runtime_error("remember requires embedder when vector search is enabled");
+  }
+}
+
+void StagePersistedEmbeddingRecord(WaxStore& store,
+                                   std::uint64_t frame_id,
+                                   const std::vector<float>& embedding,
+                                   int expected_dimensions) {
+  if (expected_dimensions <= 0 || embedding.size() != static_cast<std::size_t>(expected_dimensions)) {
+    return;
+  }
+  const auto payload = BuildEmbeddingRecordPayload(frame_id, embedding);
+  (void)store.Put(payload, {});
+}
+
+void StageVectorIndexEmbedding(USearchVectorEngine* vector_index,
+                               std::uint64_t frame_id,
+                               const std::vector<float>& embedding) {
+  if (vector_index == nullptr) {
+    return;
+  }
+  if (embedding.size() != static_cast<std::size_t>(vector_index->dimensions())) {
+    return;
+  }
+  vector_index->StageAdd(frame_id, embedding);
 }
 
 void RebuildStructuredFactIndex(const StructuredMemoryStore& structured_memory, FTS5SearchEngine& structured_text_index) {
@@ -493,20 +681,29 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
       !config_.enable_vector_search) {
     throw std::runtime_error("hybrid search mode requires at least one enabled search channel");
   }
-  if (config_.enable_vector_search && !embedder_) {
-    throw std::runtime_error("vector search enabled requires embedder in current scaffold");
+  if (config_.enable_vector_search && embedder_ == nullptr) {
+    throw std::runtime_error("vector-enabled config requires embedder");
   }
   ReplayStructuredFactsFromStore(store_, structured_memory_);
   RebuildTextIndexFromStore(store_, store_text_index_);
   RebuildStructuredFactIndex(structured_memory_, structured_text_index_);
-  if (config_.enable_vector_search && embedder_ != nullptr) {
-    vector_index_ = std::make_unique<USearchVectorEngine>(embedder_->dimensions());
-    RebuildVectorIndexFromStore(store_, embedder_, config_.ingest_batch_size, *vector_index_);
+  if (config_.enable_vector_search) {
+    const auto persisted_embeddings = LoadPersistedEmbeddingsFromStore(store_);
+    const auto vector_dims = ResolveVectorDimensions(embedder_, persisted_embeddings);
+    if (vector_dims.has_value() && *vector_dims > 0) {
+      vector_index_ = std::make_unique<USearchVectorEngine>(*vector_dims);
+      RebuildVectorIndexFromStore(store_,
+                                  persisted_embeddings,
+                                  embedder_,
+                                  config_.ingest_batch_size,
+                                  *vector_index_);
+    }
   }
 }
 
 void MemoryOrchestrator::Remember(const std::string& content, const Metadata& metadata) {
   ThrowIfClosed(closed_);
+  EnsureEmbedderRequiredForRemember(config_, embedder_);
   const auto chunks = ChunkContent(content, config_.chunking.target_tokens, config_.chunking.overlap_tokens);
 
   std::optional<std::vector<std::vector<float>>> chunk_embeddings{};
@@ -537,9 +734,9 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
       } else {
         embedding = embedder_->Embed(chunk);
       }
-      if (vector_index_ != nullptr && embedding.size() == static_cast<std::size_t>(vector_index_->dimensions())) {
-        vector_index_->StageAdd(frame_id, embedding);
-      }
+      StageVectorIndexEmbedding(vector_index_.get(), frame_id, embedding);
+      const int vector_dims = vector_index_ != nullptr ? vector_index_->dimensions() : 0;
+      StagePersistedEmbeddingRecord(store_, frame_id, embedding, vector_dims);
       if (!embedding.empty() && config_.embedding_cache_capacity > 0) {
         if (embedding_cache_.size() >= static_cast<std::size_t>(config_.embedding_cache_capacity)) {
           embedding_cache_.clear();

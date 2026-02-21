@@ -1,6 +1,7 @@
 #include "waxcpp/wax_store.hpp"
 
 #include "../../src/core/mv2s_format.hpp"
+#include "../../src/core/wal_ring.hpp"
 #include "../../src/core/wax_store_test_hooks.hpp"
 #include "../test_logger.hpp"
 
@@ -135,6 +136,51 @@ void RunScenarioPendingRecoveryCommit(const std::filesystem::path& path) {
   auto stats_after = reopened.Stats();
   Require(stats_after.frame_count == 1, "frame_count must be 1 after committing recovered pending put");
   Require(stats_after.pending_frames == 0, "pending_frames must be 0 after commit");
+  reopened.Close();
+}
+
+void RunScenarioPendingRecoverySkipsUndecodableTail(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: pending WAL recovery skips undecodable tail record");
+  const std::vector<std::byte> payload = {
+      std::byte{0x0D}, std::byte{0x0E}, std::byte{0x0F},
+  };
+  waxcpp::WaxWALStats crashed_wal{};
+
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    (void)store.Put(payload);
+    crashed_wal = store.WalStats();
+    // Simulate abrupt crash: leave one valid pending record in WAL.
+  }
+
+  Require(crashed_wal.last_seq >= 1, "expected wal last_seq >= 1 after pending put");
+  Require(crashed_wal.wal_size > 0, "expected non-zero wal_size");
+
+  {
+    waxcpp::core::wal::WalRingWriter writer(path,
+                                            waxcpp::core::mv2s::kWalOffset,
+                                            crashed_wal.wal_size,
+                                            crashed_wal.write_pos,
+                                            crashed_wal.checkpoint_pos,
+                                            crashed_wal.pending_bytes,
+                                            crashed_wal.last_seq);
+    const std::vector<std::byte> unknown_opcode_payload = {std::byte{0xFF}};
+    (void)writer.Append(unknown_opcode_payload);
+    // Do not publish updated header state to simulate torn process after WAL append.
+  }
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  const auto before = reopened.Stats();
+  const auto before_wal = reopened.WalStats();
+  Require(before.frame_count == 0, "undecodable WAL tail must not change committed frame_count");
+  Require(before.pending_frames == 1, "only decodable pending putFrame should be exposed");
+  Require(before_wal.last_seq >= 2, "scan state should advance through undecodable tail record");
+
+  reopened.Commit();
+  const auto after = reopened.Stats();
+  Require(after.frame_count == 1, "commit should apply decodable pending putFrame");
+  Require(after.pending_frames == 0, "pending WAL state should clear after commit");
+  Require(reopened.FrameContent(0) == payload, "committed frame payload mismatch after decode-stop recovery");
   reopened.Close();
 }
 
@@ -442,6 +488,7 @@ int main() {
 
     RunScenarioPutCommitReopen(path);
     RunScenarioPendingRecoveryCommit(path);
+    RunScenarioPendingRecoverySkipsUndecodableTail(path);
     RunScenarioDeleteAndSupersedePersist(path);
     RunScenarioCrashWindowAfterTocWrite(path);
     RunScenarioCrashWindowAfterFooterWrite(path);

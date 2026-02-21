@@ -162,6 +162,10 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add staged structured-memory ordering regression (`upsert -> upsert -> remove` before flush results in deterministic remove outcome after flush/reopen)
 - [x] Add structured-memory no-flush close regression (`RememberFact` + `Close` persists via store auto-commit and is rebuilt on reopen)
 - [x] Enforce `Recall(query, embedding)` policy contract (vector must be enabled and embedding dimension must match vector index)
+- [x] Persist orchestrator-owned embedding records in store (`WAXEM1` internal payload) during `Remember` for deterministic vector rebuild support
+- [x] Rebuild vector index on orchestrator startup using persisted embedding records first, with embedder fallback only for missing/dimension-mismatched entries
+- [x] Add orchestrator regressions for persisted-embedding reopen behavior (no re-embed on reopen; embedding journal payload not surfaced in text recall)
+- [x] Add WAL recovery regression: undecodable tail record after valid pending putFrame does not block reopen/commit of earlier decodable mutation
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -322,6 +326,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added no-flush structured-fact close/reopen regression to verify store auto-commit + structured index rebuild path | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Added explicit validation in `Recall(query, embedding)` for vector-enabled requirement and embedding dimension parity with vector index | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added policy-validation scenarios for `Recall(query, embedding)` misuse (vector disabled and dimension mismatch) | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Added internal embedding-journal codec (`WAXEM1`), persisted embedding writes on remember, internal payload filtering, and persisted-first vector rebuild on reopen | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added persisted-embedding reopen regressions (no re-embed during reopen rebuild, no embedding-journal leakage into text recall) | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added recovery regression for WAL decode-stop path (`valid pending putFrame + undecodable tail`) to ensure reopen exposes/applys only decodable pending mutations | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

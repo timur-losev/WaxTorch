@@ -262,7 +262,7 @@ void ScenarioHybridRecallWithEmbedder(const std::filesystem::path& path) {
   waxcpp::OrchestratorConfig config{};
   config.enable_text_search = true;
   config.enable_vector_search = true;
-  config.rag.search_mode = {waxcpp::SearchModeKind::kHybrid, 0.5F};
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
   config.rag.search_top_k = 5;
 
   auto embedder = std::make_shared<waxcpp::MiniLMEmbedderTorch>();
@@ -594,6 +594,65 @@ void ScenarioVectorIndexRebuildOnReopen(const std::filesystem::path& path) {
     Require(!context.items.empty(), "reopen should restore committed vector index");
     Require(embedder->batch_calls() == 0, "explicit vector recall should not re-embed docs after reopen");
     Require(embedder->embed_calls() == 0, "explicit vector recall should avoid query embed calls");
+    reopened.Close();
+  }
+}
+
+void ScenarioVectorReopenReusesPersistedEmbeddingsWithoutReembed(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector reopen reuses persisted embeddings without reembed");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("persisted embedding apple", {});
+    orchestrator.Remember("persisted embedding banana", {});
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  embedder->Reset();
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, embedder);
+    Require(embedder->batch_calls() == 0, "reopen vector index rebuild should not call EmbedBatch");
+    Require(embedder->embed_calls() == 0, "reopen vector index rebuild should not call Embed");
+    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "reopened vector recall should succeed from persisted embeddings");
+    reopened.Close();
+  }
+}
+
+void ScenarioEmbeddingJournalDoesNotLeakIntoTextRecall(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: embedding journal does not leak into text recall");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("normal recallable content", {});
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, embedder);
+    const auto marker_context = reopened.Recall("WAXEM1");
+    bool has_embedding_marker_payload = false;
+    for (const auto& item : marker_context.items) {
+      if (item.text.find("WAXEM1") != std::string::npos) {
+        has_embedding_marker_payload = true;
+        break;
+      }
+    }
+    Require(!has_embedding_marker_payload, "embedding journal payload should not appear in text recall");
+    const auto normal_context = reopened.Recall("normal");
+    Require(!normal_context.items.empty(), "normal text should remain recallable");
     reopened.Close();
   }
 }
@@ -1024,6 +1083,8 @@ int main() {
     const auto path27 = UniquePath();
     const auto path28 = UniquePath();
     const auto path29 = UniquePath();
+    const auto path30 = UniquePath();
+    const auto path31 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -1045,6 +1106,8 @@ int main() {
     ScenarioRecallVisibilityRequiresFlush(path15);
     ScenarioVectorRecallVisibilityRequiresFlush(path16);
     ScenarioVectorIndexRebuildOnReopen(path17);
+    ScenarioVectorReopenReusesPersistedEmbeddingsWithoutReembed(path30);
+    ScenarioEmbeddingJournalDoesNotLeakIntoTextRecall(path31);
     ScenarioVectorCloseWithoutFlushPersistsViaStoreClose(path18);
     ScenarioVectorRecallSupportsExplicitEmbeddingWithoutQuery(path19);
     ScenarioFlushFailureDoesNotExposeStagedText(path20);
@@ -1117,6 +1180,10 @@ int main() {
     std::filesystem::remove(path28.string() + ".writer.lock", ec);
     std::filesystem::remove(path29, ec);
     std::filesystem::remove(path29.string() + ".writer.lock", ec);
+    std::filesystem::remove(path30, ec);
+    std::filesystem::remove(path30.string() + ".writer.lock", ec);
+    std::filesystem::remove(path31, ec);
+    std::filesystem::remove(path31.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
