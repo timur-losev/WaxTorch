@@ -51,9 +51,11 @@ void ScenarioPreviewClampAndTokenCount() {
   };
 
   const auto context = waxcpp::BuildFastRAGContext(request, response);
-  Require(context.items.size() == 1, "empty or missing previews should be skipped");
+  Require(context.items.size() == 3, "empty or missing previews should produce surrogate entries");
   Require(context.items[0].text == "alpha", "preview_max_bytes should truncate snippet");
-  Require(context.total_tokens == 1, "token counting mismatch");
+  Require(context.items[1].kind == waxcpp::RAGItemKind::kSurrogate, "empty preview should map to surrogate");
+  Require(context.items[2].kind == waxcpp::RAGItemKind::kSurrogate, "missing preview should map to surrogate");
+  Require(context.total_tokens == 5, "token counting mismatch");
 }
 
 void ScenarioNaNScoreNormalization() {
@@ -122,6 +124,7 @@ void ScenarioContextTokenBudgetClamp() {
   request.query = "budget";
   request.top_k = 10;
   request.preview_max_bytes = 256;
+  request.expansion_max_tokens = 2;
   request.snippet_max_tokens = 2;
   request.max_context_tokens = 3;
 
@@ -138,6 +141,51 @@ void ScenarioContextTokenBudgetClamp() {
   Require(context.total_tokens == 3, "context token budget mismatch");
 }
 
+void ScenarioRagItemKindPolicy() {
+  waxcpp::tests::Log("scenario: rag item kind policy");
+  waxcpp::SearchRequest request{};
+  request.query = "kinds";
+  request.top_k = 10;
+  request.preview_max_bytes = 256;
+  request.expansion_max_tokens = 4;
+  request.snippet_max_tokens = 2;
+  request.max_context_tokens = 20;
+
+  waxcpp::SearchResponse response{};
+  response.results = {
+      {.frame_id = 1, .score = 2.0F, .preview_text = std::string("a b c d e"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 2, .score = 1.0F, .preview_text = std::string("x y z"), .sources = {waxcpp::SearchSource::kText}},
+  };
+
+  const auto context = waxcpp::BuildFastRAGContext(request, response);
+  Require(context.items.size() == 2, "expected two items");
+  Require(context.items[0].kind == waxcpp::RAGItemKind::kExpanded, "first item should be expanded");
+  Require(context.items[0].text == "a b c d", "expanded token clamp mismatch");
+  Require(context.items[1].kind == waxcpp::RAGItemKind::kSnippet, "second item should be snippet");
+  Require(context.items[1].text == "x y", "snippet token clamp mismatch");
+}
+
+void ScenarioSurrogateFallback() {
+  waxcpp::tests::Log("scenario: surrogate fallback");
+  waxcpp::SearchRequest request{};
+  request.query = "surrogate";
+  request.top_k = 10;
+  request.preview_max_bytes = 0;  // force empty preview path
+  request.expansion_max_tokens = 5;
+  request.snippet_max_tokens = 2;
+  request.max_context_tokens = 10;
+
+  waxcpp::SearchResponse response{};
+  response.results = {
+      {.frame_id = 9, .score = 1.0F, .preview_text = std::string("unavailable"), .sources = {waxcpp::SearchSource::kText}},
+  };
+
+  const auto context = waxcpp::BuildFastRAGContext(request, response);
+  Require(context.items.size() == 1, "surrogate fallback should emit one item");
+  Require(context.items[0].kind == waxcpp::RAGItemKind::kSurrogate, "item kind should be surrogate");
+  Require(context.items[0].text == "frame 9", "surrogate text mismatch");
+}
+
 }  // namespace
 
 int main() {
@@ -148,6 +196,8 @@ int main() {
     ScenarioNaNScoreNormalization();
     ScenarioUnifiedSearchModesAndHybridRrf();
     ScenarioContextTokenBudgetClamp();
+    ScenarioRagItemKindPolicy();
+    ScenarioSurrogateFallback();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

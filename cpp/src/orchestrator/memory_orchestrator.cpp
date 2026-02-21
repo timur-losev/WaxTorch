@@ -334,6 +334,7 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
   req.top_k = std::min(config_.rag.search_top_k, max_snippets);
   req.rrf_k = config_.rag.rrf_k;
   req.preview_max_bytes = config_.rag.preview_max_bytes;
+  req.expansion_max_tokens = config_.rag.expansion_max_tokens;
   req.max_context_tokens = config_.rag.max_context_tokens;
   req.snippet_max_tokens = config_.rag.snippet_max_tokens;
   const auto channels = BuildStoreChannels(
@@ -357,6 +358,7 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
   req.top_k = std::min(config_.rag.search_top_k, max_snippets);
   req.rrf_k = config_.rag.rrf_k;
   req.preview_max_bytes = config_.rag.preview_max_bytes;
+  req.expansion_max_tokens = config_.rag.expansion_max_tokens;
   req.max_context_tokens = config_.rag.max_context_tokens;
   req.snippet_max_tokens = config_.rag.snippet_max_tokens;
   const auto channels = BuildStoreChannels(

@@ -47,6 +47,10 @@ std::string JoinPrefixTokens(const std::vector<std::string>& tokens, std::size_t
   return out;
 }
 
+std::string BuildSurrogateText(std::uint64_t frame_id) {
+  return "frame " + std::to_string(frame_id);
+}
+
 std::string TruncateBytes(const std::string& text, int max_bytes) {
   if (max_bytes <= 0) {
     return {};
@@ -181,22 +185,28 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
   context.items.reserve(sorted_results.size());
   const int max_context_tokens = request.max_context_tokens;
   const int snippet_max_tokens = request.snippet_max_tokens;
+  const int expansion_max_tokens = request.expansion_max_tokens;
   for (const auto& result : sorted_results) {
-    if (!result.preview_text.has_value()) {
-      continue;
+    const bool is_first_item = context.items.empty();
+    auto item_kind = is_first_item ? RAGItemKind::kExpanded : RAGItemKind::kSnippet;
+
+    std::string candidate_text{};
+    if (result.preview_text.has_value()) {
+      candidate_text = TruncateBytes(*result.preview_text, request.preview_max_bytes);
     }
-    const auto text = TruncateBytes(*result.preview_text, request.preview_max_bytes);
-    if (text.empty()) {
-      continue;
+    if (candidate_text.empty()) {
+      item_kind = RAGItemKind::kSurrogate;
+      candidate_text = BuildSurrogateText(result.frame_id);
     }
-    auto tokens = SplitWhitespaceTokens(text);
+
+    auto tokens = SplitWhitespaceTokens(candidate_text);
     if (tokens.empty()) {
       continue;
     }
-
-    const std::size_t per_item_limit = snippet_max_tokens > 0
-                                           ? std::min<std::size_t>(tokens.size(), static_cast<std::size_t>(snippet_max_tokens))
-                                           : tokens.size();
+    const int configured_limit = (item_kind == RAGItemKind::kExpanded) ? expansion_max_tokens : snippet_max_tokens;
+    const std::size_t per_item_limit =
+        configured_limit > 0 ? std::min<std::size_t>(tokens.size(), static_cast<std::size_t>(configured_limit))
+                             : tokens.size();
     std::size_t emit_tokens = per_item_limit;
     if (max_context_tokens > 0) {
       const int remaining = max_context_tokens - context.total_tokens;
@@ -210,7 +220,7 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
     }
 
     RAGItem item{};
-    item.kind = RAGItemKind::kSnippet;
+    item.kind = item_kind;
     item.frame_id = result.frame_id;
     item.score = std::isnan(result.score) ? 0.0F : result.score;
     item.sources = result.sources;
