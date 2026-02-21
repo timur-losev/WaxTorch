@@ -320,6 +320,28 @@ void RunScenarioPutEmbeddingUnknownFrameRejected(const std::filesystem::path& pa
   reopened.Close();
 }
 
+void RunScenarioPutEmbeddingBatchUnknownFrameRejected(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: putEmbedding batch with unknown frame rejected at commit");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    const auto valid_frame = store.Put({std::byte{0xE3}});
+    store.PutEmbeddingBatch({valid_frame, 777}, {{0.2F, 0.4F}, {0.6F, 0.8F}});
+    bool threw = false;
+    try {
+      store.Commit();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "commit must reject putEmbeddingBatch containing unknown frame_id");
+    // Simulate abrupt stop; avoid Close() auto-commit retry path.
+  }
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  const auto stats = reopened.Stats();
+  Require(stats.frame_count == 0, "rejected putEmbeddingBatch commit must not change frame_count");
+  reopened.Close();
+}
+
 void RunScenarioPendingRecoveryCommit(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: pending WAL recovery then commit");
   {
@@ -765,6 +787,7 @@ int main() {
     RunScenarioPendingEmbeddingSnapshot(path);
     RunScenarioPendingEmbeddingSnapshotReopenRecovery(path);
     RunScenarioPutEmbeddingUnknownFrameRejected(path);
+    RunScenarioPutEmbeddingBatchUnknownFrameRejected(path);
     RunScenarioPendingRecoveryCommit(path);
     RunScenarioPendingRecoverySkipsUndecodableTail(path);
     RunScenarioDeleteAndSupersedePersist(path);

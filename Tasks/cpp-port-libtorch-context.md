@@ -354,6 +354,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added recovery regression for pending embedding snapshots across reopen/close cycles (recovered-only pending survives close; commit clears it) | Codex |
 | `cpp/src/core/wax_store.cpp` | Added `Commit()` validation for WAL `putEmbedding` references and payload consistency before applying mutation batch | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added negative regression: `putEmbedding` with unknown `frame_id` must fail commit without advancing committed frame state | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added negative regression: mixed-validity `putEmbeddingBatch` (known + unknown `frame_id`) must fail atomically at commit | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
