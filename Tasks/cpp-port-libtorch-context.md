@@ -158,6 +158,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Harden text recall channel by validating text-index hits against committed frame metadata and payload
 - [x] Add lifecycle regression: flush failure + close + reopen must recover text visibility via store-committed rebuild
 - [x] Add lifecycle regressions for vector and structured-memory channels: flush failure + close + reopen recovers visibility via committed-state rebuild
+- [x] Enforce post-close lifecycle contract in orchestrator (operations throw after `Close`, `Close` is idempotent)
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -311,6 +312,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added policy-validation scenarios for invalid text-only/vector-only/hybrid configuration combinations | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added regression scenario for `flush fail -> close -> reopen` recovery path, ensuring text index rebuild from committed store state | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added `flush fail -> close -> reopen` regressions for vector and structured-memory recovery paths | Codex |
+| `cpp/include/waxcpp/memory_orchestrator.hpp` | Added orchestrator closed-state tracking for explicit post-close lifecycle enforcement | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Added guardrails so `remember/recall/flush/fact` APIs throw after `Close`; `Close` made idempotent | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added use-after-close regression scenario and extended flush-failure close/reopen coverage across text/vector/structured channels | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

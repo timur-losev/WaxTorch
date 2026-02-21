@@ -225,6 +225,12 @@ std::string JoinTokenRange(const std::vector<std::string>& tokens, std::size_t b
   return out;
 }
 
+void ThrowIfClosed(bool closed) {
+  if (closed) {
+    throw std::runtime_error("memory orchestrator is closed");
+  }
+}
+
 std::vector<std::string> ChunkContent(const std::string& content, int target_tokens, int overlap_tokens) {
   if (target_tokens <= 0) {
     return {content};
@@ -500,6 +506,7 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
 }
 
 void MemoryOrchestrator::Remember(const std::string& content, const Metadata& metadata) {
+  ThrowIfClosed(closed_);
   const auto chunks = ChunkContent(content, config_.chunking.target_tokens, config_.chunking.overlap_tokens);
 
   std::optional<std::vector<std::vector<float>>> chunk_embeddings{};
@@ -544,6 +551,7 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
 }
 
 RAGContext MemoryOrchestrator::Recall(const std::string& query) {
+  ThrowIfClosed(closed_);
   SearchRequest req;
   req.query = query;
   req.mode = config_.rag.search_mode;
@@ -568,6 +576,7 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
 }
 
 RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vector<float>& embedding) {
+  ThrowIfClosed(closed_);
   SearchRequest req;
   req.query = query;
   req.embedding = embedding;
@@ -596,6 +605,7 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
                                       const std::string& attribute,
                                       const std::string& value,
                                       const Metadata& metadata) {
+  ThrowIfClosed(closed_);
   const auto fact_id = structured_memory_.Upsert(entity, attribute, value, metadata);
   if (config_.enable_text_search) {
     StructuredMemoryEntry preview_entry{};
@@ -610,6 +620,7 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
 }
 
 bool MemoryOrchestrator::ForgetFact(const std::string& entity, const std::string& attribute) {
+  ThrowIfClosed(closed_);
   const auto existing = structured_memory_.Get(entity, attribute);
   if (!existing.has_value()) {
     return false;
@@ -625,10 +636,12 @@ bool MemoryOrchestrator::ForgetFact(const std::string& entity, const std::string
 
 std::vector<StructuredMemoryEntry> MemoryOrchestrator::RecallFactsByEntityPrefix(const std::string& entity_prefix,
                                                                                   int limit) {
+  ThrowIfClosed(closed_);
   return structured_memory_.QueryByEntityPrefix(entity_prefix, limit);
 }
 
 void MemoryOrchestrator::Flush() {
+  ThrowIfClosed(closed_);
   store_.Commit();
   if (config_.enable_text_search) {
     store_text_index_.CommitStaged();
@@ -640,7 +653,11 @@ void MemoryOrchestrator::Flush() {
 }
 
 void MemoryOrchestrator::Close() {
+  if (closed_) {
+    return;
+  }
   store_.Close();
+  closed_ = true;
 }
 
 }  // namespace waxcpp

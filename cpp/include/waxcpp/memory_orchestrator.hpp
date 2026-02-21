@@ -43,6 +43,7 @@ class MemoryOrchestrator {
   FTS5SearchEngine store_text_index_;
   FTS5SearchEngine structured_text_index_;
   std::unique_ptr<USearchVectorEngine> vector_index_;
+  bool closed_ = false;
 };
 
 }  // namespace waxcpp

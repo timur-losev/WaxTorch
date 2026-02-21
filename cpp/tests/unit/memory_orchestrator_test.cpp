@@ -787,6 +787,52 @@ void ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(const std::filesy
   }
 }
 
+void ScenarioUseAfterCloseThrows(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: use-after-close throws");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember("close semantics text", {});
+  orchestrator.Flush();
+  orchestrator.Close();
+  orchestrator.Close();  // idempotent
+
+  bool recall_threw = false;
+  try {
+    (void)orchestrator.Recall("text");
+  } catch (const std::exception&) {
+    recall_threw = true;
+  }
+  Require(recall_threw, "Recall should throw after Close");
+
+  bool remember_threw = false;
+  try {
+    orchestrator.Remember("again", {});
+  } catch (const std::exception&) {
+    remember_threw = true;
+  }
+  Require(remember_threw, "Remember should throw after Close");
+
+  bool flush_threw = false;
+  try {
+    orchestrator.Flush();
+  } catch (const std::exception&) {
+    flush_threw = true;
+  }
+  Require(flush_threw, "Flush should throw after Close");
+
+  bool fact_threw = false;
+  try {
+    orchestrator.RememberFact("user:closed", "city", "rome");
+  } catch (const std::exception&) {
+    fact_threw = true;
+  }
+  Require(fact_threw, "RememberFact should throw after Close");
+}
+
 void ScenarioStructuredMemoryRemovePersists(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: structured memory remove persists");
   waxcpp::OrchestratorConfig config{};
@@ -858,6 +904,7 @@ int main() {
     const auto path23 = UniquePath();
     const auto path24 = UniquePath();
     const auto path25 = UniquePath();
+    const auto path26 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -885,6 +932,7 @@ int main() {
     ScenarioFlushFailureThenCloseReopenRecoversText(path23);
     ScenarioFlushFailureThenCloseReopenRecoversVector(path24);
     ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(path25);
+    ScenarioUseAfterCloseThrows(path26);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -939,6 +987,8 @@ int main() {
     std::filesystem::remove(path24.string() + ".writer.lock", ec);
     std::filesystem::remove(path25, ec);
     std::filesystem::remove(path25.string() + ".writer.lock", ec);
+    std::filesystem::remove(path26, ec);
+    std::filesystem::remove(path26.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
