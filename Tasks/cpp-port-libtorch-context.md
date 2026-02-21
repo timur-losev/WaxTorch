@@ -156,6 +156,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add flush-failure regression coverage for vector channel: failed store commit must not expose staged vector index mutations
 - [x] Add orchestrator config policy checks for incompatible `search_mode` / enabled-channel combinations
 - [x] Harden text recall channel by validating text-index hits against committed frame metadata and payload
+- [x] Add lifecycle regression: flush failure + close + reopen must recover text visibility via store-committed rebuild
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -307,6 +308,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added failpoint-driven flush failure scenario ensuring staged vector results remain hidden until successful retry commit | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Added constructor policy validation for `search_mode` vs enabled channels and extra filtering of text index hits against committed store frame state | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added policy-validation scenarios for invalid text-only/vector-only/hybrid configuration combinations | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added regression scenario for `flush fail -> close -> reopen` recovery path, ensuring text index rebuild from committed store state | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
