@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <unordered_map>
 #include <vector>
 
 namespace waxcpp {
@@ -29,6 +30,16 @@ struct WaxWALStats {
   std::uint64_t replay_snapshot_hit_count = 0;
 };
 
+struct WaxFrameMeta {
+  std::uint64_t id = 0;
+  std::uint64_t payload_offset = 0;
+  std::uint64_t payload_length = 0;
+  std::uint8_t canonical_encoding = 0;
+  std::uint8_t status = 0;
+  std::optional<std::uint64_t> supersedes;
+  std::optional<std::uint64_t> superseded_by;
+};
+
 class WaxStore {
  public:
   static WaxStore Create(const std::filesystem::path& path);
@@ -48,6 +59,10 @@ class WaxStore {
 
  [[nodiscard]] WaxStats Stats() const;
  [[nodiscard]] WaxWALStats WalStats() const;
+ [[nodiscard]] std::optional<WaxFrameMeta> FrameMeta(std::uint64_t frame_id) const;
+ [[nodiscard]] std::vector<WaxFrameMeta> FrameMetas() const;
+ [[nodiscard]] std::vector<std::byte> FrameContent(std::uint64_t frame_id) const;
+ [[nodiscard]] std::unordered_map<std::uint64_t, std::vector<std::byte>> FrameContents(const std::vector<std::uint64_t>& frame_ids) const;
 
  private:
   void LoadState(bool deep_verify, bool repair_trailing_bytes);
@@ -73,6 +88,7 @@ class WaxStore {
   bool dirty_ = false;
   bool has_local_mutations_ = false;
   bool is_open_ = false;
+  std::vector<WaxFrameMeta> committed_frame_metas_{};
   WaxStats stats_{};
 };
 

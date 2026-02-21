@@ -319,6 +319,43 @@ void RunScenarioCloseAutoCommitsPending(const std::filesystem::path& path) {
   reopened.Close();
 }
 
+void RunScenarioFrameReadApis(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: frame read APIs expose committed payloads");
+  auto store = waxcpp::WaxStore::Create(path);
+  const std::vector<std::byte> payload0 = {std::byte{0x91}, std::byte{0x92}};
+  const std::vector<std::byte> payload1 = {std::byte{0xA1}, std::byte{0xA2}, std::byte{0xA3}};
+  const auto id0 = store.Put(payload0);
+  const auto id1 = store.Put(payload1);
+  Require(id0 == 0 && id1 == 1, "expected dense ids for frame read API scenario");
+  store.Delete(id0);
+  store.Commit();
+
+  const auto maybe_meta0 = store.FrameMeta(id0);
+  Require(maybe_meta0.has_value(), "FrameMeta(0) must exist");
+  Require(maybe_meta0->status == 1, "FrameMeta(0).status must reflect delete");
+
+  const auto maybe_meta1 = store.FrameMeta(id1);
+  Require(maybe_meta1.has_value(), "FrameMeta(1) must exist");
+  Require(maybe_meta1->payload_length == payload1.size(), "FrameMeta(1).payload_length mismatch");
+
+  const auto metas = store.FrameMetas();
+  Require(metas.size() == 2, "FrameMetas size mismatch");
+
+  const auto content1 = store.FrameContent(id1);
+  Require(content1 == payload1, "FrameContent(1) mismatch");
+
+  const auto contents = store.FrameContents({id0, id1});
+  Require(contents.size() == 2, "FrameContents size mismatch");
+  Require(contents.at(id0) == payload0, "FrameContents(0) mismatch");
+  Require(contents.at(id1) == payload1, "FrameContents(1) mismatch");
+  store.Close();
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  const auto reopened_content1 = reopened.FrameContent(id1);
+  Require(reopened_content1 == payload1, "reopened FrameContent(1) mismatch");
+  reopened.Close();
+}
+
 }  // namespace
 
 int main() {
@@ -336,6 +373,7 @@ int main() {
     RunScenarioSupersedeCycleRejected(path);
     RunScenarioSupersedeConflictRejected(path);
     RunScenarioCloseAutoCommitsPending(path);
+    RunScenarioFrameReadApis(path);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);

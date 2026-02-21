@@ -440,6 +440,23 @@ bool WouldCreateSupersedeCycle(const std::vector<core::mv2s::FrameSummary>& fram
   return true;
 }
 
+std::vector<WaxFrameMeta> ToWaxFrameMetas(std::span<const core::mv2s::FrameSummary> frames) {
+  std::vector<WaxFrameMeta> metas{};
+  metas.reserve(frames.size());
+  for (const auto& frame : frames) {
+    WaxFrameMeta meta{};
+    meta.id = frame.id;
+    meta.payload_offset = frame.payload_offset;
+    meta.payload_length = frame.payload_length;
+    meta.canonical_encoding = frame.canonical_encoding;
+    meta.status = frame.status;
+    meta.supersedes = frame.supersedes;
+    meta.superseded_by = frame.superseded_by;
+    metas.push_back(meta);
+  }
+  return metas;
+}
+
 }  // namespace
 
 namespace core::testing {
@@ -844,6 +861,7 @@ void WaxStore::Commit() {
   stats_.frame_count = frames.size();
   stats_.pending_frames = 0;
   next_frame_id_ = frames.size();
+  committed_frame_metas_ = ToWaxFrameMetas(frames);
 }
 
 void WaxStore::Close() {
@@ -871,6 +889,53 @@ WaxWALStats WaxStore::WalStats() const {
   stats.write_call_count = wal_write_call_count_;
   stats.replay_snapshot_hit_count = wal_replay_snapshot_hit_count_;
   return stats;
+}
+
+std::optional<WaxFrameMeta> WaxStore::FrameMeta(std::uint64_t frame_id) const {
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
+  if (frame_id >= committed_frame_metas_.size()) {
+    return std::nullopt;
+  }
+  return committed_frame_metas_[static_cast<std::size_t>(frame_id)];
+}
+
+std::vector<WaxFrameMeta> WaxStore::FrameMetas() const {
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
+  return committed_frame_metas_;
+}
+
+std::vector<std::byte> WaxStore::FrameContent(std::uint64_t frame_id) const {
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
+  if (frame_id >= committed_frame_metas_.size()) {
+    throw StoreError("frame_id out of range");
+  }
+  const auto& meta = committed_frame_metas_[static_cast<std::size_t>(frame_id)];
+  if (meta.payload_length == 0) {
+    return {};
+  }
+  if (meta.payload_length > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    throw StoreError("payload_length exceeds addressable memory");
+  }
+  return ReadExactly(path_, meta.payload_offset, static_cast<std::size_t>(meta.payload_length));
+}
+
+std::unordered_map<std::uint64_t, std::vector<std::byte>> WaxStore::FrameContents(
+    const std::vector<std::uint64_t>& frame_ids) const {
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
+  std::unordered_map<std::uint64_t, std::vector<std::byte>> out{};
+  out.reserve(frame_ids.size());
+  for (const auto frame_id : frame_ids) {
+    out.emplace(frame_id, FrameContent(frame_id));
+  }
+  return out;
 }
 
 WaxStore::WaxStore(std::filesystem::path path) : path_(std::move(path)) {}
@@ -1037,6 +1102,7 @@ void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
   stats_.generation = file_generation_;
   stats_.frame_count = toc_summary.frame_count;
   stats_.pending_frames = pending_put_frames;
+  committed_frame_metas_ = ToWaxFrameMetas(toc_summary.frames);
 }
 
 }  // namespace waxcpp
