@@ -102,6 +102,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add `usearch_vector_engine` unit suite (constructor/dimension validation, tie-break determinism, remove, top-k clamp)
 - [x] Replace `MiniLMEmbedderTorch` throw stubs with deterministic CPU fallback embeddings (token hash projection + optional L2 normalization)
 - [x] Add embedding unit suite (identity/dimension contract, determinism, normalization, batch parity)
+- [x] Implement `MemoryOrchestrator::Remember` baseline write-path (`content -> WaxStore::Put`) and auto-create store when file is missing
+- [x] Add MemoryOrchestrator unit coverage (vector policy guard + remember/flush persistence roundtrip)
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -188,6 +190,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/rag/embeddings.cpp` | Implemented deterministic CPU fallback for `MiniLMEmbedderTorch` (`Embed/EmbedBatch`) with hash projection + L2 normalization | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added embedding baseline tests for determinism, normalization, and batch consistency | Codex |
 | `cpp/CMakeLists.txt` | Added `waxcpp_embeddings_test` target to C++ test matrix | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Implemented baseline `Remember` path and constructor auto-create behavior for missing store files | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added orchestrator unit tests for vector-policy validation and persisted remember/flush flow | Codex |
+| `cpp/CMakeLists.txt` | Added `waxcpp_memory_orchestrator_test` target to C++ test matrix | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
@@ -204,7 +209,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - **Invariants in play**: 1, 2, 4, 6, 7, 8, 9 explicitly tracked; M2 work directly advances deterministic retrieval and two-phase safety foundations.
 
 ## Handoff Notes
-M1 and M2 are complete. M3 baseline is in place: C++ parses WAL headers, detects terminal markers for replay snapshot/header cursor fast paths, scans pending mutations with Swift-compatible decode-stop semantics, validates pending putFrame payload ranges, truncates trailing bytes on open while preserving bytes referenced by pending putFrame, stores effective WAL open-state internally, supports WAL append/capacity/padding-wrap/sentinel/checkpoint behavior via `WalRingWriter`, and wires that into `WaxStore::Put/PutBatch/Delete/Supersede/Commit`. `Commit` applies decoded pending WAL mutations into TOC, writes new footer/header generations, and checkpoints WAL cursor state. Crash-window behavior is covered by deterministic failpoint tests for post-TOC/pre-footer, post-footer/pre-header, and single-header-published windows. Writer-lease exclusion is now enforced in `Open/Create` with `.writer.lock` sentinel semantics and reopen-after-close test coverage. Text-search, vector-search, and embedding layers now have deterministic CPU baselines (`FTS5SearchEngine`, `USearchVectorEngine`, and `MiniLMEmbedderTorch` fallback) with dedicated unit coverage. Remaining gap is full parity hardening for advanced mutation semantics/index coupling and replay edge equivalence beyond current scope.
+M1 and M2 are complete. M3 baseline is in place: C++ parses WAL headers, detects terminal markers for replay snapshot/header cursor fast paths, scans pending mutations with Swift-compatible decode-stop semantics, validates pending putFrame payload ranges, truncates trailing bytes on open while preserving bytes referenced by pending putFrame, stores effective WAL open-state internally, supports WAL append/capacity/padding-wrap/sentinel/checkpoint behavior via `WalRingWriter`, and wires that into `WaxStore::Put/PutBatch/Delete/Supersede/Commit`. `Commit` applies decoded pending WAL mutations into TOC, writes new footer/header generations, and checkpoints WAL cursor state. Crash-window behavior is covered by deterministic failpoint tests for post-TOC/pre-footer, post-footer/pre-header, and single-header-published windows. Writer-lease exclusion is now enforced in `Open/Create` with `.writer.lock` sentinel semantics and reopen-after-close test coverage. Text-search, vector-search, embedding, and orchestrator ingest now have deterministic CPU baselines (`FTS5SearchEngine`, `USearchVectorEngine`, `MiniLMEmbedderTorch` fallback, `MemoryOrchestrator::Remember`) with dedicated unit coverage. Remaining gap is full parity hardening for advanced mutation semantics/index coupling and replay edge equivalence beyond current scope.
 
 ## Open Questions
 1. Final remote for `cpp/third_party/libtorch-dist` should be replaced with dedicated artifact mirror before release.

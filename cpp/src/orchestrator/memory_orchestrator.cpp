@@ -2,6 +2,7 @@
 #include "waxcpp/search.hpp"
 
 #include <stdexcept>
+#include <vector>
 #include <utility>
 
 namespace waxcpp {
@@ -9,14 +10,21 @@ namespace waxcpp {
 MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
                                        const OrchestratorConfig& config,
                                        std::shared_ptr<EmbeddingProvider> embedder)
-    : config_(config), store_(WaxStore::Open(path)), embedder_(std::move(embedder)) {
+    : config_(config),
+      store_(std::filesystem::exists(path) ? WaxStore::Open(path) : WaxStore::Create(path)),
+      embedder_(std::move(embedder)) {
   if (config_.enable_vector_search && !embedder_) {
     throw std::runtime_error("vector search enabled requires embedder in current scaffold");
   }
 }
 
-void MemoryOrchestrator::Remember(const std::string& /*content*/, const Metadata& /*metadata*/) {
-  throw std::runtime_error("MemoryOrchestrator::Remember not implemented");
+void MemoryOrchestrator::Remember(const std::string& content, const Metadata& metadata) {
+  std::vector<std::byte> payload{};
+  payload.reserve(content.size());
+  for (const char ch : content) {
+    payload.push_back(static_cast<std::byte>(static_cast<unsigned char>(ch)));
+  }
+  (void)store_.Put(payload, metadata);
 }
 
 RAGContext MemoryOrchestrator::Recall(const std::string& query) {
