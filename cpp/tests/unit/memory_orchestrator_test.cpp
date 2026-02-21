@@ -225,6 +225,26 @@ void ScenarioBatchProviderUsedForVectorRecall(const std::filesystem::path& path)
   }
 }
 
+void ScenarioMaxSnippetsClamp(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: max_snippets clamp");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_top_k = 10;
+  config.rag.max_snippets = 1;
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("apple alpha", {});
+    orchestrator.Remember("apple beta", {});
+    orchestrator.Flush();
+
+    const auto context = orchestrator.Recall("apple");
+    Require(context.items.size() == 1, "max_snippets should clamp recall item count");
+    orchestrator.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -236,6 +256,7 @@ int main() {
     const auto path3 = UniquePath();
     const auto path4 = UniquePath();
     const auto path5 = UniquePath();
+    const auto path6 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioRememberFlushPersistsFrame(path1);
@@ -243,6 +264,7 @@ int main() {
     ScenarioHybridRecallWithEmbedder(path3);
     ScenarioEmbeddingMemoizationInRecall(path4);
     ScenarioBatchProviderUsedForVectorRecall(path5);
+    ScenarioMaxSnippetsClamp(path6);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -257,6 +279,8 @@ int main() {
     std::filesystem::remove(path4.string() + ".writer.lock", ec);
     std::filesystem::remove(path5, ec);
     std::filesystem::remove(path5.string() + ".writer.lock", ec);
+    std::filesystem::remove(path6, ec);
+    std::filesystem::remove(path6.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
