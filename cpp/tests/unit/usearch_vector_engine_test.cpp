@@ -94,6 +94,48 @@ void ScenarioTopKAndEmptyCases() {
   Require(results.size() == 1, "top_k clamp must limit result count");
 }
 
+void ScenarioStagedMutationsRequireCommit() {
+  waxcpp::tests::Log("scenario: staged mutations require commit");
+  waxcpp::USearchVectorEngine engine(2);
+  engine.StageAdd(1, {1.0F, 0.0F});
+  Require(engine.PendingMutationCount() == 1, "pending mutation count mismatch after stage add");
+  Require(engine.Search({1.0F, 0.0F}, 10).empty(), "staged vector add should not be visible before commit");
+
+  engine.CommitStaged();
+  Require(engine.PendingMutationCount() == 0, "pending mutation count should reset after commit");
+  Require(engine.Search({1.0F, 0.0F}, 10).size() == 1, "committed staged vector should be searchable");
+
+  engine.StageRemove(1);
+  Require(engine.Search({1.0F, 0.0F}, 10).size() == 1, "staged remove should stay invisible before commit");
+  engine.CommitStaged();
+  Require(engine.Search({1.0F, 0.0F}, 10).empty(), "committed staged remove should clear vector");
+}
+
+void ScenarioRollbackStagedMutations() {
+  waxcpp::tests::Log("scenario: rollback staged mutations");
+  waxcpp::USearchVectorEngine engine(2);
+  engine.StageAddBatch({10, 11}, {{1.0F, 0.0F}, {0.0F, 1.0F}});
+  Require(engine.PendingMutationCount() == 2, "pending mutation count mismatch after stage batch");
+  engine.RollbackStaged();
+  Require(engine.PendingMutationCount() == 0, "pending mutation count should reset after rollback");
+  Require(engine.Search({1.0F, 0.0F}, 10).empty(), "rolled-back staged vectors should not be visible");
+}
+
+void ScenarioStagedOrderDeterminism() {
+  waxcpp::tests::Log("scenario: staged order determinism");
+  waxcpp::USearchVectorEngine engine(2);
+  engine.StageAdd(7, {1.0F, 0.0F});
+  engine.StageAdd(7, {0.0F, 1.0F});
+  engine.StageRemove(7);
+  engine.StageAdd(7, {1.0F, 0.0F});
+  Require(engine.PendingMutationCount() == 4, "pending mutation count mismatch in order scenario");
+  engine.CommitStaged();
+
+  const auto results = engine.Search({1.0F, 0.0F}, 10);
+  Require(results.size() == 1, "final staged state should leave one vector");
+  Require(results[0].first == 7, "unexpected frame_id after staged mutation order apply");
+}
+
 }  // namespace
 
 int main() {
@@ -104,6 +146,9 @@ int main() {
     ScenarioBatchAndRemove();
     ScenarioValidationErrors();
     ScenarioTopKAndEmptyCases();
+    ScenarioStagedMutationsRequireCommit();
+    ScenarioRollbackStagedMutations();
+    ScenarioStagedOrderDeterminism();
     waxcpp::tests::Log("usearch_vector_engine_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

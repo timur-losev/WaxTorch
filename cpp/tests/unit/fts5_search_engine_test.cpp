@@ -86,6 +86,48 @@ void ScenarioEmptyInputs() {
   Require(engine.Search("content", -1).empty(), "negative top_k must return no results");
 }
 
+void ScenarioStagedMutationsRequireCommit() {
+  waxcpp::tests::Log("scenario: staged mutations require commit");
+  waxcpp::FTS5SearchEngine engine;
+  engine.StageIndex(1, "alpha staged");
+  Require(engine.PendingMutationCount() == 1, "pending mutation count mismatch after stage index");
+  Require(engine.Search("alpha", 10).empty(), "staged index should not be visible before commit");
+
+  engine.CommitStaged();
+  Require(engine.PendingMutationCount() == 0, "pending mutation count should reset after commit");
+  Require(engine.Search("alpha", 10).size() == 1, "committed staged index should be searchable");
+
+  engine.StageRemove(1);
+  Require(engine.Search("alpha", 10).size() == 1, "staged remove should not be visible before commit");
+  engine.CommitStaged();
+  Require(engine.Search("alpha", 10).empty(), "committed staged remove should clear document");
+}
+
+void ScenarioRollbackStagedMutations() {
+  waxcpp::tests::Log("scenario: rollback staged mutations");
+  waxcpp::FTS5SearchEngine engine;
+  engine.StageIndexBatch({10, 11}, {"alpha", "beta"});
+  Require(engine.PendingMutationCount() == 2, "pending mutation count mismatch after stage batch");
+  engine.RollbackStaged();
+  Require(engine.PendingMutationCount() == 0, "pending mutation count should reset after rollback");
+  Require(engine.Search("alpha", 10).empty(), "rolled-back staged index should not be visible");
+}
+
+void ScenarioStagedOrderDeterminism() {
+  waxcpp::tests::Log("scenario: staged order determinism");
+  waxcpp::FTS5SearchEngine engine;
+  engine.StageIndex(7, "old");
+  engine.StageIndex(7, "new");
+  engine.StageRemove(7);
+  engine.StageIndex(7, "final");
+  Require(engine.PendingMutationCount() == 4, "pending mutation count mismatch in order scenario");
+  engine.CommitStaged();
+
+  const auto results = engine.Search("final", 10);
+  Require(results.size() == 1, "final staged state should leave one searchable document");
+  Require(results[0].frame_id == 7, "unexpected frame_id after staged mutation order apply");
+}
+
 }  // namespace
 
 int main() {
@@ -97,6 +139,9 @@ int main() {
     ScenarioRemoveAndTopK();
     ScenarioIndexBatchMismatchThrows();
     ScenarioEmptyInputs();
+    ScenarioStagedMutationsRequireCommit();
+    ScenarioRollbackStagedMutations();
+    ScenarioStagedOrderDeterminism();
     waxcpp::tests::Log("fts5_search_engine_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

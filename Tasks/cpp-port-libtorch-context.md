@@ -135,6 +135,24 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Persist structured-memory facts via internal orchestrator journal records stored in `WaxStore` frames
 - [x] Replay structured-memory fact journal on orchestrator startup to restore facts across `close/reopen`
 - [x] Exclude internal structured-memory journal frames from regular text/vector candidate scans to prevent source leakage
+- [x] Extend structured-memory journal codec with remove operation and replay support
+- [x] Add orchestrator `ForgetFact` API with persisted remove journal entries
+- [x] Add reopen parity coverage for fact removal and recall exclusion after delete
+- [x] Switch orchestrator text recall channel to `FTS5SearchEngine` baseline (document + structured-fact indexes) with deterministic source attribution
+- [x] Extend `FTS5SearchEngine` with two-phase staging primitives (`StageIndex/StageIndexBatch/StageRemove/CommitStaged/RollbackStaged`)
+- [x] Add text-index staging tests for visibility (pre-commit hidden), rollback, and deterministic staged apply order
+- [x] Integrate staged text indexes into orchestrator lifecycle (`Remember/RememberFact/ForgetFact` stage, `Flush` commits index mutations)
+- [x] Rebuild committed text indexes on orchestrator startup from store + structured-memory replay state
+- [x] Add orchestrator-level flush-gating coverage for text recall visibility
+- [x] Extend `USearchVectorEngine` with two-phase staging primitives (`StageAdd/StageAddBatch/StageRemove/CommitStaged/RollbackStaged`)
+- [x] Add vector-index staging tests for visibility (pre-commit hidden), rollback, and deterministic staged apply order
+- [x] Integrate committed vector index into orchestrator lifecycle (`Remember` stages vectors, `Flush` commits vector mutations, startup rebuild from committed store)
+- [x] Switch vector recall candidate path to committed `USearchVectorEngine` search results (no per-recall document re-embedding)
+- [x] Add orchestrator-level flush-gating coverage for vector recall visibility
+- [x] Add orchestrator reopen coverage for vector index rebuild (committed vectors searchable after restart)
+- [x] Add orchestrator close-without-flush vector coverage (store close auto-commit + vector rebuild on reopen)
+- [x] Allow vector-only recall with explicit embedding and empty query string
+- [x] Add flush-failure regression coverage: failed store commit must not expose staged text index mutations
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -263,6 +281,26 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added recall scenario validating structured-memory sources are present in context results | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Added internal structured-fact journal codec (encode/parse), fact persistence in `RememberFact`, startup replay from store, and internal-frame filtering from normal channels | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Extended structured-memory scenarios to validate persistence across reopen and absence of leaked text-source hits from internal fact journal frames | Codex |
+| `cpp/include/waxcpp/memory_orchestrator.hpp` | Added `ForgetFact(entity, attribute)` API for structured-memory delete parity | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Extended structured fact journal format with remove opcode; replay now applies upsert/remove deterministically | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added persisted remove scenario (`remove -> flush -> reopen`) and recall exclusion checks | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Replaced local text-overlap scoring with `FTS5SearchEngine`-backed text channel construction for store docs and structured facts | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added source-attribution coverage to ensure store text recall keeps `SearchSource::kText` after FTS-backed channel switch | Codex |
+| `cpp/include/waxcpp/fts5_search_engine.hpp` | Added two-phase text indexing API (`Stage*`, `CommitStaged`, `RollbackStaged`, pending mutation introspection) | Codex |
+| `cpp/src/text/fts5_search_engine.cpp` | Implemented deterministic staged mutation queue for text index; legacy `Index/IndexBatch/Remove` now immediate wrappers over stage+commit | Codex |
+| `cpp/tests/unit/fts5_search_engine_test.cpp` | Added staged-index unit scenarios for commit visibility, rollback behavior, and ordered mutation application | Codex |
+| `cpp/include/waxcpp/memory_orchestrator.hpp` | Added persistent orchestrator-owned text indexes for store content and structured facts | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Switched recall text channel to long-lived staged indexes; constructor now rebuilds committed index snapshots and flush commits staged text mutations | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added flush-gating scenario proving staged text/fact mutations are invisible before flush and visible after commit | Codex |
+| `cpp/include/waxcpp/vector_engine.hpp` | Added two-phase vector indexing API (`Stage*`, `CommitStaged`, `RollbackStaged`, pending mutation introspection) | Codex |
+| `cpp/src/vector/usearch_vector_engine.cpp` | Implemented deterministic staged mutation queue for vector index; legacy `Add/AddBatch/Remove` now immediate wrappers over stage+commit | Codex |
+| `cpp/tests/unit/usearch_vector_engine_test.cpp` | Added staged-vector unit scenarios for commit visibility, rollback behavior, and ordered mutation application | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Switched vector recall channel to committed vector index hits; constructor rebuilds vector index from committed store with embedder batch support | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Updated vector recall expectations for committed index path and added flush-gating scenario for vector visibility | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added vector reopen/close lifecycle scenarios validating committed index rebuild and no re-embed on explicit vector recall | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Relaxed recall preconditions so vector-only path can run with explicit embedding even when query is empty | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added regression scenario for `Recall(\"\", embedding)` in vector-only mode | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added failpoint-driven flush failure scenario ensuring staged text remains hidden until successful retry commit | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
@@ -274,12 +312,12 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - **Actor boundaries crossed**: Planned parity for `MemoryOrchestrator` actor semantics via serialized C++ orchestrator runtime.
 - **Frame kinds involved**: Core frame model only (no new multimodal kinds introduced).
 - **Metadata keys introduced/changed**: None (reserved for future implementation milestones).
-- **Index implications**: Read-only format + TOC structural validation are now real; text/vector indexing still scaffolded.
+- **Index implications**: Text and vector indexes now have deterministic in-memory two-phase staging in C++; orchestrator commits them on `flush` and rebuilds committed snapshots on reopen.
 - **Token budget impact**: FastRAG/token budgeting types remain scaffolded, logic pending.
 - **Invariants in play**: 1, 2, 4, 6, 7, 8, 9 explicitly tracked; M2 work directly advances deterministic retrieval and two-phase safety foundations.
 
 ## Handoff Notes
-M1 and M2 are complete. M3 baseline is in place: C++ parses WAL headers, detects terminal markers for replay snapshot/header cursor fast paths, scans pending mutations with Swift-compatible decode-stop semantics, validates pending putFrame payload ranges, truncates trailing bytes on open while preserving bytes referenced by pending putFrame, stores effective WAL open-state internally, supports WAL append/capacity/padding-wrap/sentinel/checkpoint behavior via `WalRingWriter`, and wires that into `WaxStore::Put/PutBatch/Delete/Supersede/Commit`. `Commit` applies decoded pending WAL mutations into TOC, writes new footer/header generations, and checkpoints WAL cursor state. Crash-window behavior is covered by deterministic failpoint tests for post-TOC/pre-footer, post-footer/pre-header, and single-header-published windows. Writer-lease exclusion is now enforced in `Open/Create` with `.writer.lock` sentinel semantics and reopen-after-close test coverage. Search stack baseline now includes deterministic mode-aware unified fusion (`UnifiedSearchWithCandidates`, text/vector channel routing, hybrid RRF), context materialization with explicit token budgeting and item-kind policy (`BuildFastRAGContext` with expanded/snippet/surrogate policy), and orchestrator `Remember/Recall` over committed store frames with deterministic chunking ingest, batch-aware remember/recall embedding paths (including `ingest_batch_size` slicing), memoized embeddings, `max_snippets` clamp wiring, and mode-aware channel gating. Structured-memory baseline now has orchestrator-level persistence via internal store-backed fact journal and startup replay, plus recall integration as `kStructuredMemory` candidates without internal-record leakage into text/vector channels.
+M1 and M2 are complete. M3 baseline is in place: C++ parses WAL headers, detects terminal markers for replay snapshot/header cursor fast paths, scans pending mutations with Swift-compatible decode-stop semantics, validates pending putFrame payload ranges, truncates trailing bytes on open while preserving bytes referenced by pending putFrame, stores effective WAL open-state internally, supports WAL append/capacity/padding-wrap/sentinel/checkpoint behavior via `WalRingWriter`, and wires that into `WaxStore::Put/PutBatch/Delete/Supersede/Commit`. `Commit` applies decoded pending WAL mutations into TOC, writes new footer/header generations, and checkpoints WAL cursor state. Crash-window behavior is covered by deterministic failpoint tests for post-TOC/pre-footer, post-footer/pre-header, and single-header-published windows. Writer-lease exclusion is now enforced in `Open/Create` with `.writer.lock` sentinel semantics and reopen-after-close test coverage. Search stack baseline now includes deterministic mode-aware unified fusion (`UnifiedSearchWithCandidates`, text/vector channel routing, hybrid RRF), context materialization with explicit token budgeting and item-kind policy (`BuildFastRAGContext` with expanded/snippet/surrogate policy), and orchestrator `Remember/Recall` over committed store frames with deterministic chunking ingest. Text and vector recall channels now run via committed two-phase indexes (stage on ingest, commit on `flush`, rebuild on reopen). Structured-memory baseline now has orchestrator-level persistence via internal store-backed fact journal and startup replay, plus recall integration as `kStructuredMemory` candidates without internal-record leakage into text/vector channels.
 
 ## Open Questions
 1. Final remote for `cpp/third_party/libtorch-dist` should be replaced with dedicated artifact mirror before release.

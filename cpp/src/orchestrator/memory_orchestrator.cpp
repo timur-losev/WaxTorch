@@ -1,4 +1,5 @@
 #include "waxcpp/memory_orchestrator.hpp"
+#include "waxcpp/fts5_search_engine.hpp"
 #include "waxcpp/search.hpp"
 
 #include <algorithm>
@@ -30,6 +31,7 @@ inline constexpr std::array<std::byte, 6> kStructuredFactMagic = {
 
 enum class StructuredFactOpcode : std::uint8_t {
   kUpsert = 1,
+  kRemove = 2,
 };
 
 struct StructuredFactRecord {
@@ -82,8 +84,19 @@ std::vector<std::byte> BuildStructuredFactUpsertPayload(const std::string& entit
   return out;
 }
 
+std::vector<std::byte> BuildStructuredFactRemovePayload(const std::string& entity,
+                                                        const std::string& attribute) {
+  std::vector<std::byte> out{};
+  out.reserve(32 + entity.size() + attribute.size());
+  out.insert(out.end(), kStructuredFactMagic.begin(), kStructuredFactMagic.end());
+  AppendU8(out, static_cast<std::uint8_t>(StructuredFactOpcode::kRemove));
+  AppendString(out, entity);
+  AppendString(out, attribute);
+  return out;
+}
+
 std::optional<StructuredFactRecord> ParseStructuredFactPayload(const std::vector<std::byte>& payload) {
-  if (payload.size() < kStructuredFactMagic.size() + 1 + 4 + 4 + 4 + 4) {
+  if (payload.size() < kStructuredFactMagic.size() + 1 + 4 + 4) {
     return std::nullopt;
   }
   if (!std::equal(kStructuredFactMagic.begin(), kStructuredFactMagic.end(), payload.begin())) {
@@ -129,37 +142,44 @@ std::optional<StructuredFactRecord> ParseStructuredFactPayload(const std::vector
   if (!opcode_u8.has_value()) {
     return std::nullopt;
   }
-  if (*opcode_u8 != static_cast<std::uint8_t>(StructuredFactOpcode::kUpsert)) {
-    return std::nullopt;
-  }
-
-  const auto entity = read_string();
-  const auto attribute = read_string();
-  const auto value = read_string();
-  const auto metadata_count = read_u32();
-  if (!entity.has_value() || !attribute.has_value() || !value.has_value() || !metadata_count.has_value()) {
-    return std::nullopt;
-  }
-
-  Metadata metadata{};
-  for (std::uint32_t i = 0; i < *metadata_count; ++i) {
-    const auto key = read_string();
-    const auto val = read_string();
-    if (!key.has_value() || !val.has_value()) {
+  StructuredFactRecord record{};
+  if (*opcode_u8 == static_cast<std::uint8_t>(StructuredFactOpcode::kUpsert)) {
+    const auto entity = read_string();
+    const auto attribute = read_string();
+    const auto value = read_string();
+    const auto metadata_count = read_u32();
+    if (!entity.has_value() || !attribute.has_value() || !value.has_value() || !metadata_count.has_value()) {
       return std::nullopt;
     }
-    metadata[*key] = *val;
+    Metadata metadata{};
+    for (std::uint32_t i = 0; i < *metadata_count; ++i) {
+      const auto key = read_string();
+      const auto val = read_string();
+      if (!key.has_value() || !val.has_value()) {
+        return std::nullopt;
+      }
+      metadata[*key] = *val;
+    }
+    record.opcode = StructuredFactOpcode::kUpsert;
+    record.entity = *entity;
+    record.attribute = *attribute;
+    record.value = *value;
+    record.metadata = std::move(metadata);
+  } else if (*opcode_u8 == static_cast<std::uint8_t>(StructuredFactOpcode::kRemove)) {
+    const auto entity = read_string();
+    const auto attribute = read_string();
+    if (!entity.has_value() || !attribute.has_value()) {
+      return std::nullopt;
+    }
+    record.opcode = StructuredFactOpcode::kRemove;
+    record.entity = *entity;
+    record.attribute = *attribute;
+  } else {
+    return std::nullopt;
   }
   if (cursor != payload.size()) {
     return std::nullopt;
   }
-
-  StructuredFactRecord record{};
-  record.opcode = StructuredFactOpcode::kUpsert;
-  record.entity = *entity;
-  record.attribute = *attribute;
-  record.value = *value;
-  record.metadata = std::move(metadata);
   return record;
 }
 
@@ -170,26 +190,6 @@ std::string BytesToString(const std::vector<std::byte>& payload) {
     out.push_back(static_cast<char>(std::to_integer<unsigned char>(b)));
   }
   return out;
-}
-
-std::vector<std::string> TokenizeLower(std::string_view text) {
-  std::vector<std::string> tokens{};
-  std::string current{};
-  current.reserve(32);
-  for (const unsigned char ch : text) {
-    if (std::isalnum(ch) != 0) {
-      current.push_back(static_cast<char>(std::tolower(ch)));
-      continue;
-    }
-    if (!current.empty()) {
-      tokens.push_back(current);
-      current.clear();
-    }
-  }
-  if (!current.empty()) {
-    tokens.push_back(current);
-  }
-  return tokens;
 }
 
 std::vector<std::string> TokenizeWhitespace(std::string_view text) {
@@ -249,62 +249,9 @@ std::vector<std::string> ChunkContent(const std::string& content, int target_tok
   return chunks;
 }
 
-float TextOverlapScore(std::string_view query, std::string_view text) {
-  const auto query_tokens = TokenizeLower(query);
-  if (query_tokens.empty()) {
-    return 0.0F;
-  }
-
-  std::unordered_map<std::string, std::uint32_t> text_freq{};
-  for (const auto& token : TokenizeLower(text)) {
-    auto it = text_freq.find(token);
-    if (it == text_freq.end()) {
-      text_freq.emplace(token, 1U);
-    } else {
-      it->second += 1U;
-    }
-  }
-
-  float score = 0.0F;
-  for (const auto& token : query_tokens) {
-    const auto it = text_freq.find(token);
-    if (it != text_freq.end()) {
-      score += static_cast<float>(it->second);
-    }
-  }
-  return score;
-}
-
-float Dot(std::span<const float> lhs, std::span<const float> rhs) {
-  float dot = 0.0F;
-  for (std::size_t i = 0; i < lhs.size(); ++i) {
-    dot += lhs[i] * rhs[i];
-  }
-  return dot;
-}
-
-float Norm(std::span<const float> v) {
-  const auto d = Dot(v, v);
-  return std::sqrt(std::max(d, 0.0F));
-}
-
-float CosineSimilarity(std::span<const float> lhs, std::span<const float> rhs) {
-  const auto lhs_norm = Norm(lhs);
-  const auto rhs_norm = Norm(rhs);
-  if (lhs_norm <= 0.0F || rhs_norm <= 0.0F) {
-    return 0.0F;
-  }
-  return Dot(lhs, rhs) / (lhs_norm * rhs_norm);
-}
-
 struct StoreSearchChannels {
   std::vector<SearchResult> text_results;
   std::vector<SearchResult> vector_results;
-};
-
-struct DocCandidate {
-  std::uint64_t frame_id = 0;
-  std::string text;
 };
 
 void ReplayStructuredFactsFromStore(WaxStore& store, StructuredMemoryStore& structured_memory) {
@@ -320,168 +267,188 @@ void ReplayStructuredFactsFromStore(WaxStore& store, StructuredMemoryStore& stru
     }
     if (fact->opcode == StructuredFactOpcode::kUpsert) {
       (void)structured_memory.Upsert(fact->entity, fact->attribute, fact->value, fact->metadata);
+      continue;
+    }
+    if (fact->opcode == StructuredFactOpcode::kRemove) {
+      (void)structured_memory.Remove(fact->entity, fact->attribute);
     }
   }
 }
 
 StoreSearchChannels BuildStoreChannels(WaxStore& store,
-                                       StructuredMemoryStore* structured_memory,
+                                       const FTS5SearchEngine* store_text_index,
+                                       const FTS5SearchEngine* structured_text_index,
+                                       const VectorSearchEngine* vector_index,
                                        std::shared_ptr<EmbeddingProvider> embedder,
                                        bool enable_text_search,
                                        bool enable_vector_search,
-                                       std::unordered_map<std::uint64_t, std::vector<float>>* embedding_cache,
-                                       int embedding_cache_capacity,
                                        const SearchRequest& request) {
   StoreSearchChannels channels{};
-  if (!request.query.has_value() || request.query->empty() || request.top_k <= 0) {
+  if (request.top_k <= 0) {
     return channels;
   }
   const bool text_mode_enabled = request.mode.kind != SearchModeKind::kVectorOnly;
   const bool vector_mode_enabled = request.mode.kind != SearchModeKind::kTextOnly;
-  const bool text_channel_enabled = enable_text_search && text_mode_enabled;
-  constexpr std::uint64_t kStructuredMemoryFrameIdBase = (1ULL << 63);
+  const bool has_query_text = request.query.has_value() && !request.query->empty();
+  const bool text_channel_enabled = enable_text_search && text_mode_enabled && has_query_text;
 
   std::optional<std::vector<float>> query_embedding = request.embedding;
-  if (!query_embedding.has_value() && enable_vector_search && vector_mode_enabled && embedder != nullptr) {
+  if (!query_embedding.has_value() && enable_vector_search && vector_mode_enabled && embedder != nullptr &&
+      has_query_text) {
     query_embedding = embedder->Embed(*request.query);
   }
   const bool vector_channel_enabled =
       enable_vector_search && vector_mode_enabled && embedder != nullptr && query_embedding.has_value();
+  if (!text_channel_enabled && !vector_channel_enabled) {
+    return channels;
+  }
+
+  if (text_channel_enabled && store_text_index != nullptr) {
+    channels.text_results = store_text_index->Search(*request.query, request.top_k);
+  }
+
+  if (vector_channel_enabled && vector_index != nullptr) {
+    const auto vector_hits = vector_index->Search(*query_embedding, request.top_k);
+    channels.vector_results.reserve(vector_hits.size());
+    for (const auto& [frame_id, score] : vector_hits) {
+      const auto meta = store.FrameMeta(frame_id);
+      if (!meta.has_value() || meta->status != 0) {
+        continue;
+      }
+      const auto payload = store.FrameContent(frame_id);
+      if (ParseStructuredFactPayload(payload).has_value()) {
+        continue;
+      }
+      SearchResult vector_result{};
+      vector_result.frame_id = frame_id;
+      vector_result.score = score;
+      vector_result.preview_text = BytesToString(payload);
+      vector_result.sources = {SearchSource::kVector};
+      channels.vector_results.push_back(std::move(vector_result));
+    }
+  }
+
+  if (text_channel_enabled && structured_text_index != nullptr) {
+    auto fact_results = structured_text_index->Search(*request.query, request.top_k);
+    for (auto& result : fact_results) {
+      result.sources = {SearchSource::kStructuredMemory};
+      channels.text_results.push_back(std::move(result));
+    }
+  }
+  return channels;
+}
+
+inline constexpr std::uint64_t kStructuredMemoryFrameIdBase = (1ULL << 63);
+
+std::string StructuredFactPreviewText(const StructuredMemoryEntry& entry) {
+  return entry.entity + " " + entry.attribute + " " + entry.value;
+}
+
+void RebuildTextIndexFromStore(WaxStore& store, FTS5SearchEngine& store_text_index) {
+  store_text_index = FTS5SearchEngine{};
 
   const auto metas = store.FrameMetas();
-  std::vector<DocCandidate> docs{};
-  docs.reserve(metas.size());
-  channels.text_results.reserve(metas.size());
-  channels.vector_results.reserve(metas.size());
   for (const auto& meta : metas) {
     if (meta.status != 0) {
       continue;
     }
     const auto payload = store.FrameContent(meta.id);
     if (ParseStructuredFactPayload(payload).has_value()) {
-      // Internal structured-memory journal entry; excluded from regular text/vector channels.
       continue;
     }
-    const auto text = BytesToString(payload);
-    docs.push_back(DocCandidate{meta.id, text});
+    store_text_index.StageIndex(meta.id, BytesToString(payload));
+  }
+  store_text_index.CommitStaged();
+}
 
-    if (text_channel_enabled) {
-      const auto text_score = TextOverlapScore(*request.query, text);
-      if (text_score > 0.0F) {
-        SearchResult text_result{};
-        text_result.frame_id = meta.id;
-        text_result.score = text_score;
-        text_result.preview_text = text;
-        text_result.sources = {SearchSource::kText};
-        channels.text_results.push_back(std::move(text_result));
+std::vector<std::vector<float>> BuildEmbeddingsForTexts(std::shared_ptr<EmbeddingProvider> embedder,
+                                                         const std::vector<std::string>& texts,
+                                                         int ingest_batch_size,
+                                                         const char* error_context) {
+  if (texts.empty()) {
+    return {};
+  }
+  std::vector<std::vector<float>> out{};
+  out.reserve(texts.size());
+
+  if (auto* batch_embedder = dynamic_cast<BatchEmbeddingProvider*>(embedder.get()); batch_embedder != nullptr &&
+      texts.size() > 1) {
+    const std::size_t batch_size =
+        ingest_batch_size > 0 ? static_cast<std::size_t>(ingest_batch_size) : texts.size();
+    for (std::size_t start = 0; start < texts.size(); start += batch_size) {
+      const auto end = std::min(texts.size(), start + batch_size);
+      std::vector<std::string> slice{};
+      slice.reserve(end - start);
+      for (std::size_t i = start; i < end; ++i) {
+        slice.push_back(texts[i]);
       }
+      auto partial = batch_embedder->EmbedBatch(slice);
+      if (partial.size() != slice.size()) {
+        throw std::runtime_error(std::string(error_context) + ": mismatched embedding batch size");
+      }
+      out.insert(out.end(),
+                 std::make_move_iterator(partial.begin()),
+                 std::make_move_iterator(partial.end()));
+    }
+  } else {
+    for (const auto& text : texts) {
+      out.push_back(embedder->Embed(text));
     }
   }
+  return out;
+}
 
-  if (vector_channel_enabled) {
-    std::unordered_map<std::uint64_t, std::vector<float>> computed_embeddings{};
-    computed_embeddings.reserve(docs.size());
-    std::vector<std::uint64_t> missing_ids{};
-    std::vector<std::string> missing_texts{};
-    missing_ids.reserve(docs.size());
-    missing_texts.reserve(docs.size());
+void RebuildVectorIndexFromStore(WaxStore& store,
+                                 std::shared_ptr<EmbeddingProvider> embedder,
+                                 int ingest_batch_size,
+                                 USearchVectorEngine& vector_index) {
+  vector_index = USearchVectorEngine(embedder->dimensions());
 
-    for (const auto& doc : docs) {
-      bool has_cached_embedding = false;
-      if (embedding_cache != nullptr) {
-        const auto cache_it = embedding_cache->find(doc.frame_id);
-        if (cache_it != embedding_cache->end()) {
-          has_cached_embedding = true;
-        }
-      }
-      if (!has_cached_embedding) {
-        missing_ids.push_back(doc.frame_id);
-        missing_texts.push_back(doc.text);
-      }
+  const auto metas = store.FrameMetas();
+  std::vector<std::uint64_t> frame_ids{};
+  std::vector<std::string> texts{};
+  frame_ids.reserve(metas.size());
+  texts.reserve(metas.size());
+  for (const auto& meta : metas) {
+    if (meta.status != 0) {
+      continue;
     }
-
-    if (!missing_ids.empty()) {
-      std::vector<std::vector<float>> missing_embeddings{};
-      if (auto* batch_embedder = dynamic_cast<BatchEmbeddingProvider*>(embedder.get()); batch_embedder != nullptr) {
-        missing_embeddings = batch_embedder->EmbedBatch(missing_texts);
-      } else {
-        missing_embeddings.reserve(missing_texts.size());
-        for (const auto& text : missing_texts) {
-          missing_embeddings.push_back(embedder->Embed(text));
-        }
-      }
-      if (missing_embeddings.size() != missing_ids.size()) {
-        throw std::runtime_error("embedding provider returned mismatched batch size");
-      }
-
-      for (std::size_t i = 0; i < missing_ids.size(); ++i) {
-        auto& embedding = missing_embeddings[i];
-        if (embedding.size() != query_embedding->size()) {
-          continue;
-        }
-        const auto frame_id = missing_ids[i];
-        if (embedding_cache != nullptr && embedding_cache_capacity > 0) {
-          if (embedding_cache->size() >= static_cast<std::size_t>(embedding_cache_capacity)) {
-            embedding_cache->clear();
-          }
-          auto [it, inserted] = embedding_cache->emplace(frame_id, embedding);
-          if (!inserted) {
-            it->second = embedding;
-          }
-        } else {
-          computed_embeddings.emplace(frame_id, std::move(embedding));
-        }
-      }
+    const auto payload = store.FrameContent(meta.id);
+    if (ParseStructuredFactPayload(payload).has_value()) {
+      continue;
     }
-
-    for (const auto& doc : docs) {
-      const std::vector<float>* doc_embedding_ptr = nullptr;
-      if (embedding_cache != nullptr) {
-        const auto cache_it = embedding_cache->find(doc.frame_id);
-        if (cache_it != embedding_cache->end()) {
-          doc_embedding_ptr = &cache_it->second;
-        }
-      }
-      if (doc_embedding_ptr == nullptr) {
-        const auto computed_it = computed_embeddings.find(doc.frame_id);
-        if (computed_it != computed_embeddings.end()) {
-          doc_embedding_ptr = &computed_it->second;
-        }
-      }
-      if (doc_embedding_ptr == nullptr) {
-        continue;
-      }
-      if (doc_embedding_ptr->size() != query_embedding->size()) {
-        continue;
-      }
-      const auto vector_score = CosineSimilarity(std::span<const float>(doc_embedding_ptr->data(), doc_embedding_ptr->size()),
-                                                 std::span<const float>(query_embedding->data(), query_embedding->size()));
-      SearchResult vector_result{};
-      vector_result.frame_id = doc.frame_id;
-      vector_result.score = vector_score;
-      vector_result.preview_text = doc.text;
-      vector_result.sources = {SearchSource::kVector};
-      channels.vector_results.push_back(std::move(vector_result));
-    }
+    frame_ids.push_back(meta.id);
+    texts.push_back(BytesToString(payload));
+  }
+  auto embeddings = BuildEmbeddingsForTexts(embedder, texts, ingest_batch_size, "rebuild vector index");
+  if (embeddings.size() != frame_ids.size()) {
+    throw std::runtime_error("rebuild vector index: embedding count mismatch");
   }
 
-  if (text_channel_enabled && structured_memory != nullptr) {
-    const auto facts = structured_memory->All(-1);
-    for (const auto& fact : facts) {
-      const std::string fact_text = fact.entity + " " + fact.attribute + " " + fact.value;
-      const auto fact_score = TextOverlapScore(*request.query, fact_text);
-      if (fact_score <= 0.0F) {
-        continue;
-      }
-      SearchResult fact_result{};
-      fact_result.frame_id = kStructuredMemoryFrameIdBase + fact.id;
-      fact_result.score = fact_score;
-      fact_result.preview_text = fact_text;
-      fact_result.sources = {SearchSource::kStructuredMemory};
-      channels.text_results.push_back(std::move(fact_result));
+  std::vector<std::uint64_t> valid_ids{};
+  std::vector<std::vector<float>> valid_embeddings{};
+  valid_ids.reserve(frame_ids.size());
+  valid_embeddings.reserve(frame_ids.size());
+  for (std::size_t i = 0; i < frame_ids.size(); ++i) {
+    if (embeddings[i].size() != static_cast<std::size_t>(vector_index.dimensions())) {
+      continue;
     }
+    valid_ids.push_back(frame_ids[i]);
+    valid_embeddings.push_back(std::move(embeddings[i]));
   }
-  return channels;
+  if (!valid_ids.empty()) {
+    vector_index.StageAddBatch(valid_ids, valid_embeddings);
+    vector_index.CommitStaged();
+  }
+}
+
+void RebuildStructuredFactIndex(const StructuredMemoryStore& structured_memory, FTS5SearchEngine& structured_text_index) {
+  structured_text_index = FTS5SearchEngine{};
+  const auto facts = structured_memory.All(-1);
+  for (const auto& fact : facts) {
+    structured_text_index.StageIndex(kStructuredMemoryFrameIdBase + fact.id, StructuredFactPreviewText(fact));
+  }
+  structured_text_index.CommitStaged();
 }
 
 }  // namespace
@@ -496,35 +463,23 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
     throw std::runtime_error("vector search enabled requires embedder in current scaffold");
   }
   ReplayStructuredFactsFromStore(store_, structured_memory_);
+  RebuildTextIndexFromStore(store_, store_text_index_);
+  RebuildStructuredFactIndex(structured_memory_, structured_text_index_);
+  if (config_.enable_vector_search && embedder_ != nullptr) {
+    vector_index_ = std::make_unique<USearchVectorEngine>(embedder_->dimensions());
+    RebuildVectorIndexFromStore(store_, embedder_, config_.ingest_batch_size, *vector_index_);
+  }
 }
 
 void MemoryOrchestrator::Remember(const std::string& content, const Metadata& metadata) {
   const auto chunks = ChunkContent(content, config_.chunking.target_tokens, config_.chunking.overlap_tokens);
 
   std::optional<std::vector<std::vector<float>>> chunk_embeddings{};
-  if (config_.enable_vector_search && embedder_ != nullptr && config_.embedding_cache_capacity > 0) {
-    if (auto* batch_embedder = dynamic_cast<BatchEmbeddingProvider*>(embedder_.get()); batch_embedder != nullptr &&
-        chunks.size() > 1) {
-      const std::size_t batch_size =
-          config_.ingest_batch_size > 0 ? static_cast<std::size_t>(config_.ingest_batch_size) : chunks.size();
-      std::vector<std::vector<float>> embeddings{};
-      embeddings.reserve(chunks.size());
-      for (std::size_t start = 0; start < chunks.size(); start += batch_size) {
-        const auto end = std::min(chunks.size(), start + batch_size);
-        std::vector<std::string> slice{};
-        slice.reserve(end - start);
-        for (std::size_t i = start; i < end; ++i) {
-          slice.push_back(chunks[i]);
-        }
-        auto partial = batch_embedder->EmbedBatch(slice);
-        if (partial.size() != slice.size()) {
-          throw std::runtime_error("batch embedding provider returned mismatched chunk embedding count");
-        }
-        embeddings.insert(embeddings.end(),
-                          std::make_move_iterator(partial.begin()),
-                          std::make_move_iterator(partial.end()));
-      }
-      chunk_embeddings = std::move(embeddings);
+  if (config_.enable_vector_search && embedder_ != nullptr) {
+    chunk_embeddings = BuildEmbeddingsForTexts(
+        embedder_, chunks, config_.ingest_batch_size, "remember");
+    if (chunk_embeddings->size() != chunks.size()) {
+      throw std::runtime_error("remember: embedding count mismatch");
     }
   }
 
@@ -536,15 +491,21 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
       payload.push_back(static_cast<std::byte>(static_cast<unsigned char>(ch)));
     }
     const auto frame_id = store_.Put(payload, metadata);
+    if (config_.enable_text_search) {
+      store_text_index_.StageIndex(frame_id, chunk);
+    }
 
-    if (config_.enable_vector_search && embedder_ != nullptr && config_.embedding_cache_capacity > 0) {
+    if (config_.enable_vector_search && embedder_ != nullptr) {
       std::vector<float> embedding{};
       if (chunk_embeddings.has_value()) {
         embedding = std::move((*chunk_embeddings)[chunk_index]);
       } else {
         embedding = embedder_->Embed(chunk);
       }
-      if (!embedding.empty()) {
+      if (vector_index_ != nullptr && embedding.size() == static_cast<std::size_t>(vector_index_->dimensions())) {
+        vector_index_->StageAdd(frame_id, embedding);
+      }
+      if (!embedding.empty() && config_.embedding_cache_capacity > 0) {
         if (embedding_cache_.size() >= static_cast<std::size_t>(config_.embedding_cache_capacity)) {
           embedding_cache_.clear();
         }
@@ -567,12 +528,12 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
   req.snippet_max_tokens = config_.rag.snippet_max_tokens;
   const auto channels = BuildStoreChannels(
       store_,
-      &structured_memory_,
+      config_.enable_text_search ? &store_text_index_ : nullptr,
+      config_.enable_text_search ? &structured_text_index_ : nullptr,
+      vector_index_.get(),
       embedder_,
       config_.enable_text_search,
       config_.enable_vector_search,
-      &embedding_cache_,
-      config_.embedding_cache_capacity,
       req);
   const auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
   return BuildFastRAGContext(req, response);
@@ -592,12 +553,12 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
   req.snippet_max_tokens = config_.rag.snippet_max_tokens;
   const auto channels = BuildStoreChannels(
       store_,
-      &structured_memory_,
+      config_.enable_text_search ? &store_text_index_ : nullptr,
+      config_.enable_text_search ? &structured_text_index_ : nullptr,
+      vector_index_.get(),
       embedder_,
       config_.enable_text_search,
       config_.enable_vector_search,
-      &embedding_cache_,
-      config_.embedding_cache_capacity,
       req);
   const auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
   return BuildFastRAGContext(req, response);
@@ -607,9 +568,31 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
                                       const std::string& attribute,
                                       const std::string& value,
                                       const Metadata& metadata) {
-  (void)structured_memory_.Upsert(entity, attribute, value, metadata);
+  const auto fact_id = structured_memory_.Upsert(entity, attribute, value, metadata);
+  if (config_.enable_text_search) {
+    StructuredMemoryEntry preview_entry{};
+    preview_entry.id = fact_id;
+    preview_entry.entity = entity;
+    preview_entry.attribute = attribute;
+    preview_entry.value = value;
+    structured_text_index_.StageIndex(kStructuredMemoryFrameIdBase + fact_id, StructuredFactPreviewText(preview_entry));
+  }
   const auto payload = BuildStructuredFactUpsertPayload(entity, attribute, value, metadata);
   (void)store_.Put(payload, {});
+}
+
+bool MemoryOrchestrator::ForgetFact(const std::string& entity, const std::string& attribute) {
+  const auto existing = structured_memory_.Get(entity, attribute);
+  if (!existing.has_value()) {
+    return false;
+  }
+  (void)structured_memory_.Remove(entity, attribute);
+  if (config_.enable_text_search) {
+    structured_text_index_.StageRemove(kStructuredMemoryFrameIdBase + existing->id);
+  }
+  const auto payload = BuildStructuredFactRemovePayload(entity, attribute);
+  (void)store_.Put(payload, {});
+  return true;
 }
 
 std::vector<StructuredMemoryEntry> MemoryOrchestrator::RecallFactsByEntityPrefix(const std::string& entity_prefix,
@@ -619,6 +602,13 @@ std::vector<StructuredMemoryEntry> MemoryOrchestrator::RecallFactsByEntityPrefix
 
 void MemoryOrchestrator::Flush() {
   store_.Commit();
+  if (config_.enable_text_search) {
+    store_text_index_.CommitStaged();
+    structured_text_index_.CommitStaged();
+  }
+  if (vector_index_ != nullptr) {
+    vector_index_->CommitStaged();
+  }
 }
 
 void MemoryOrchestrator::Close() {

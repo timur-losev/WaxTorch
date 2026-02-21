@@ -1,5 +1,6 @@
 #include "waxcpp/memory_orchestrator.hpp"
 #include "waxcpp/wax_store.hpp"
+#include "../../src/core/wax_store_test_hooks.hpp"
 
 #include "../test_logger.hpp"
 
@@ -212,7 +213,7 @@ void ScenarioEmbeddingMemoizationInRecall(const std::filesystem::path& path) {
 }
 
 void ScenarioBatchProviderUsedForVectorRecall(const std::filesystem::path& path) {
-  waxcpp::tests::Log("scenario: batch provider used for vector recall");
+  waxcpp::tests::Log("scenario: vector recall uses committed vector index");
   waxcpp::OrchestratorConfig config{};
   config.enable_text_search = false;
   config.enable_vector_search = true;
@@ -228,7 +229,7 @@ void ScenarioBatchProviderUsedForVectorRecall(const std::filesystem::path& path)
 
     embedder->Reset();
     (void)orchestrator.Recall("doc", {1.0F, 0.0F, 0.0F, 0.0F});
-    Require(embedder->batch_calls() == 1, "vector recall should call EmbedBatch once for missing docs");
+    Require(embedder->batch_calls() == 0, "vector recall should read committed vector index without EmbedBatch");
     Require(embedder->embed_calls() == 0, "vector recall with explicit query embedding should avoid Embed");
     orchestrator.Close();
   }
@@ -410,6 +411,222 @@ void ScenarioRecallIncludesStructuredMemory(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioRecallTextChannelUsesTextSource(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: recall text channel uses text source");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("apple orchard", {});
+    orchestrator.Flush();
+
+    const auto context = orchestrator.Recall("apple");
+    Require(!context.items.empty(), "text recall should return at least one item");
+    bool has_text_source = false;
+    for (const auto source : context.items.front().sources) {
+      if (source == waxcpp::SearchSource::kText) {
+        has_text_source = true;
+        break;
+      }
+    }
+    Require(has_text_source, "store text recall result should keep kText source");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioRecallVisibilityRequiresFlush(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: recall visibility requires flush");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("flush gated text apple", {});
+    orchestrator.RememberFact("user:flush", "fruit", "apple");
+
+    const auto before_flush = orchestrator.Recall("apple");
+    Require(before_flush.items.empty(), "staged text mutations should stay invisible before flush");
+
+    orchestrator.Flush();
+    const auto after_flush = orchestrator.Recall("apple");
+    Require(!after_flush.items.empty(), "committed text mutations should be visible after flush");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioVectorRecallVisibilityRequiresFlush(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector recall visibility requires flush");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("vector gated apple", {});
+
+    const auto before_flush = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(before_flush.items.empty(), "staged vector mutation should stay invisible before flush");
+
+    orchestrator.Flush();
+    const auto after_flush = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!after_flush.items.empty(), "committed vector mutation should be visible after flush");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioVectorIndexRebuildOnReopen(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector index rebuild on reopen");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("reopen vector apple", {});
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, embedder);
+    embedder->Reset();
+    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "reopen should restore committed vector index");
+    Require(embedder->batch_calls() == 0, "explicit vector recall should not re-embed docs after reopen");
+    Require(embedder->embed_calls() == 0, "explicit vector recall should avoid query embed calls");
+    reopened.Close();
+  }
+}
+
+void ScenarioVectorCloseWithoutFlushPersistsViaStoreClose(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector close without flush persists via store close");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("close persist vector apple", {});
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, embedder);
+    embedder->Reset();
+    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "Close() should persist local mutations and reopen should rebuild vector index");
+    Require(embedder->batch_calls() == 0, "explicit vector recall should not batch-embed docs");
+    Require(embedder->embed_calls() == 0, "explicit vector recall should avoid query embed calls");
+    reopened.Close();
+  }
+}
+
+void ScenarioVectorRecallSupportsExplicitEmbeddingWithoutQuery(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector recall supports explicit embedding without query");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("embedding only recall doc", {});
+    orchestrator.Flush();
+
+    embedder->Reset();
+    const auto context = orchestrator.Recall("", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "explicit embedding recall should work with empty query");
+    Require(embedder->embed_calls() == 0, "explicit embedding recall should not call Embed");
+    Require(embedder->batch_calls() == 0, "explicit embedding recall should not call EmbedBatch");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioFlushFailureDoesNotExposeStagedText(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: flush failure does not expose staged text");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("failing flush apple", {});
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(1);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw when store commit failpoint is set");
+
+    const auto before_successful_flush = orchestrator.Recall("apple");
+    Require(before_successful_flush.items.empty(),
+            "failed flush must not expose staged text index mutations");
+
+    orchestrator.Flush();
+    const auto after_successful_flush = orchestrator.Recall("apple");
+    Require(!after_successful_flush.items.empty(),
+            "successful retry flush should expose committed text mutation");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioStructuredMemoryRemovePersists(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: structured memory remove persists");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:9", "city", "Paris");
+    orchestrator.RememberFact("user:9", "name", "Dora");
+    const bool removed = orchestrator.ForgetFact("user:9", "city");
+    const bool removed_missing = orchestrator.ForgetFact("user:9", "missing");
+    Require(removed, "ForgetFact should return true when key exists");
+    Require(!removed_missing, "ForgetFact should return false for missing key");
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto facts = reopened.RecallFactsByEntityPrefix("user:9", 10);
+    Require(facts.size() == 1, "removed fact should stay removed after reopen");
+    Require(facts[0].attribute == "name", "unexpected fact left after remove replay");
+
+    const auto context = reopened.Recall("paris");
+    bool has_structured = false;
+    for (const auto& item : context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          has_structured = true;
+          break;
+        }
+      }
+    }
+    Require(!has_structured, "removed fact must not participate in recall");
+    reopened.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -428,6 +645,14 @@ int main() {
     const auto path10 = UniquePath();
     const auto path11 = UniquePath();
     const auto path12 = UniquePath();
+    const auto path13 = UniquePath();
+    const auto path14 = UniquePath();
+    const auto path15 = UniquePath();
+    const auto path16 = UniquePath();
+    const auto path17 = UniquePath();
+    const auto path18 = UniquePath();
+    const auto path19 = UniquePath();
+    const auto path20 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioRememberFlushPersistsFrame(path1);
@@ -442,6 +667,14 @@ int main() {
     ScenarioTextOnlyRecallSkipsVectorEmbedding(path10);
     ScenarioStructuredMemoryFacts(path11);
     ScenarioRecallIncludesStructuredMemory(path12);
+    ScenarioRecallTextChannelUsesTextSource(path13);
+    ScenarioStructuredMemoryRemovePersists(path14);
+    ScenarioRecallVisibilityRequiresFlush(path15);
+    ScenarioVectorRecallVisibilityRequiresFlush(path16);
+    ScenarioVectorIndexRebuildOnReopen(path17);
+    ScenarioVectorCloseWithoutFlushPersistsViaStoreClose(path18);
+    ScenarioVectorRecallSupportsExplicitEmbeddingWithoutQuery(path19);
+    ScenarioFlushFailureDoesNotExposeStagedText(path20);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -470,6 +703,22 @@ int main() {
     std::filesystem::remove(path11.string() + ".writer.lock", ec);
     std::filesystem::remove(path12, ec);
     std::filesystem::remove(path12.string() + ".writer.lock", ec);
+    std::filesystem::remove(path13, ec);
+    std::filesystem::remove(path13.string() + ".writer.lock", ec);
+    std::filesystem::remove(path14, ec);
+    std::filesystem::remove(path14.string() + ".writer.lock", ec);
+    std::filesystem::remove(path15, ec);
+    std::filesystem::remove(path15.string() + ".writer.lock", ec);
+    std::filesystem::remove(path16, ec);
+    std::filesystem::remove(path16.string() + ".writer.lock", ec);
+    std::filesystem::remove(path17, ec);
+    std::filesystem::remove(path17.string() + ".writer.lock", ec);
+    std::filesystem::remove(path18, ec);
+    std::filesystem::remove(path18.string() + ".writer.lock", ec);
+    std::filesystem::remove(path19, ec);
+    std::filesystem::remove(path19.string() + ".writer.lock", ec);
+    std::filesystem::remove(path20, ec);
+    std::filesystem::remove(path20.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

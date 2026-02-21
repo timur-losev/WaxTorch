@@ -11,7 +11,14 @@ class VectorSearchEngine {
   virtual ~VectorSearchEngine() = default;
 
   virtual int dimensions() const = 0;
-  virtual std::vector<std::pair<std::uint64_t, float>> Search(const std::vector<float>& vector, int top_k) = 0;
+  virtual std::vector<std::pair<std::uint64_t, float>> Search(const std::vector<float>& vector, int top_k) const = 0;
+  virtual void StageAdd(std::uint64_t frame_id, const std::vector<float>& vector) = 0;
+  virtual void StageAddBatch(const std::vector<std::uint64_t>& frame_ids,
+                             const std::vector<std::vector<float>>& vectors) = 0;
+  virtual void StageRemove(std::uint64_t frame_id) = 0;
+  virtual void CommitStaged() = 0;
+  virtual void RollbackStaged() = 0;
+  virtual std::size_t PendingMutationCount() const = 0;
   virtual void Add(std::uint64_t frame_id, const std::vector<float>& vector) = 0;
   virtual void AddBatch(const std::vector<std::uint64_t>& frame_ids, const std::vector<std::vector<float>>& vectors) = 0;
   virtual void Remove(std::uint64_t frame_id) = 0;
@@ -22,14 +29,32 @@ class USearchVectorEngine final : public VectorSearchEngine {
   explicit USearchVectorEngine(int dimensions);
 
   int dimensions() const override;
-  std::vector<std::pair<std::uint64_t, float>> Search(const std::vector<float>& vector, int top_k) override;
+  std::vector<std::pair<std::uint64_t, float>> Search(const std::vector<float>& vector, int top_k) const override;
+  void StageAdd(std::uint64_t frame_id, const std::vector<float>& vector) override;
+  void StageAddBatch(const std::vector<std::uint64_t>& frame_ids,
+                     const std::vector<std::vector<float>>& vectors) override;
+  void StageRemove(std::uint64_t frame_id) override;
+  void CommitStaged() override;
+  void RollbackStaged() override;
+  std::size_t PendingMutationCount() const override;
   void Add(std::uint64_t frame_id, const std::vector<float>& vector) override;
   void AddBatch(const std::vector<std::uint64_t>& frame_ids, const std::vector<std::vector<float>>& vectors) override;
   void Remove(std::uint64_t frame_id) override;
 
  private:
+  enum class PendingMutationType {
+    kAdd,
+    kRemove,
+  };
+  struct PendingMutation {
+    PendingMutationType type = PendingMutationType::kAdd;
+    std::uint64_t frame_id = 0;
+    std::vector<float> vector{};
+  };
+
   int dimensions_;
   std::unordered_map<std::uint64_t, std::vector<float>> vectors_;
+  std::vector<PendingMutation> pending_mutations_;
 };
 
 }  // namespace waxcpp

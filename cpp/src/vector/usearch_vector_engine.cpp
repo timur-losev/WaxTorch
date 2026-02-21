@@ -44,7 +44,8 @@ int USearchVectorEngine::dimensions() const {
   return dimensions_;
 }
 
-std::vector<std::pair<std::uint64_t, float>> USearchVectorEngine::Search(const std::vector<float>& vector, int top_k) {
+std::vector<std::pair<std::uint64_t, float>> USearchVectorEngine::Search(const std::vector<float>& vector,
+                                                                          int top_k) const {
   if (vector.size() != static_cast<std::size_t>(dimensions_)) {
     throw std::runtime_error("USearchVectorEngine::Search dimension mismatch");
   }
@@ -72,25 +73,61 @@ std::vector<std::pair<std::uint64_t, float>> USearchVectorEngine::Search(const s
   return results;
 }
 
-void USearchVectorEngine::Add(std::uint64_t frame_id, const std::vector<float>& vector) {
+void USearchVectorEngine::StageAdd(std::uint64_t frame_id, const std::vector<float>& vector) {
   if (vector.size() != static_cast<std::size_t>(dimensions_)) {
-    throw std::runtime_error("USearchVectorEngine::Add dimension mismatch");
+    throw std::runtime_error("USearchVectorEngine::StageAdd dimension mismatch");
   }
-  vectors_[frame_id] = vector;
+  pending_mutations_.push_back(PendingMutation{PendingMutationType::kAdd, frame_id, vector});
+}
+
+void USearchVectorEngine::StageAddBatch(const std::vector<std::uint64_t>& frame_ids,
+                                        const std::vector<std::vector<float>>& vectors) {
+  if (frame_ids.size() != vectors.size()) {
+    throw std::runtime_error("USearchVectorEngine::StageAddBatch size mismatch");
+  }
+  pending_mutations_.reserve(pending_mutations_.size() + frame_ids.size());
+  for (std::size_t i = 0; i < frame_ids.size(); ++i) {
+    StageAdd(frame_ids[i], vectors[i]);
+  }
+}
+
+void USearchVectorEngine::StageRemove(std::uint64_t frame_id) {
+  pending_mutations_.push_back(PendingMutation{PendingMutationType::kRemove, frame_id, {}});
+}
+
+void USearchVectorEngine::CommitStaged() {
+  for (auto& mutation : pending_mutations_) {
+    if (mutation.type == PendingMutationType::kAdd) {
+      vectors_[mutation.frame_id] = std::move(mutation.vector);
+      continue;
+    }
+    vectors_.erase(mutation.frame_id);
+  }
+  pending_mutations_.clear();
+}
+
+void USearchVectorEngine::RollbackStaged() {
+  pending_mutations_.clear();
+}
+
+std::size_t USearchVectorEngine::PendingMutationCount() const {
+  return pending_mutations_.size();
+}
+
+void USearchVectorEngine::Add(std::uint64_t frame_id, const std::vector<float>& vector) {
+  StageAdd(frame_id, vector);
+  CommitStaged();
 }
 
 void USearchVectorEngine::AddBatch(const std::vector<std::uint64_t>& frame_ids,
                                    const std::vector<std::vector<float>>& vectors) {
-  if (frame_ids.size() != vectors.size()) {
-    throw std::runtime_error("USearchVectorEngine::AddBatch size mismatch");
-  }
-  for (std::size_t i = 0; i < frame_ids.size(); ++i) {
-    Add(frame_ids[i], vectors[i]);
-  }
+  StageAddBatch(frame_ids, vectors);
+  CommitStaged();
 }
 
 void USearchVectorEngine::Remove(std::uint64_t frame_id) {
-  vectors_.erase(frame_id);
+  StageRemove(frame_id);
+  CommitStaged();
 }
 
 }  // namespace waxcpp
