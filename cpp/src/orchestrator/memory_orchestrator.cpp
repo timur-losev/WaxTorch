@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <span>
 #include <string_view>
@@ -306,7 +307,21 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
 
 void MemoryOrchestrator::Remember(const std::string& content, const Metadata& metadata) {
   const auto chunks = ChunkContent(content, config_.chunking.target_tokens, config_.chunking.overlap_tokens);
-  for (const auto& chunk : chunks) {
+
+  std::optional<std::vector<std::vector<float>>> chunk_embeddings{};
+  if (config_.enable_vector_search && embedder_ != nullptr && config_.embedding_cache_capacity > 0) {
+    if (auto* batch_embedder = dynamic_cast<BatchEmbeddingProvider*>(embedder_.get()); batch_embedder != nullptr &&
+        chunks.size() > 1) {
+      auto embeddings = batch_embedder->EmbedBatch(chunks);
+      if (embeddings.size() != chunks.size()) {
+        throw std::runtime_error("batch embedding provider returned mismatched chunk embedding count");
+      }
+      chunk_embeddings = std::move(embeddings);
+    }
+  }
+
+  for (std::size_t chunk_index = 0; chunk_index < chunks.size(); ++chunk_index) {
+    const auto& chunk = chunks[chunk_index];
     std::vector<std::byte> payload{};
     payload.reserve(chunk.size());
     for (const char ch : chunk) {
@@ -315,7 +330,12 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
     const auto frame_id = store_.Put(payload, metadata);
 
     if (config_.enable_vector_search && embedder_ != nullptr && config_.embedding_cache_capacity > 0) {
-      auto embedding = embedder_->Embed(chunk);
+      std::vector<float> embedding{};
+      if (chunk_embeddings.has_value()) {
+        embedding = std::move((*chunk_embeddings)[chunk_index]);
+      } else {
+        embedding = embedder_->Embed(chunk);
+      }
       if (!embedding.empty()) {
         if (embedding_cache_.size() >= static_cast<std::size_t>(config_.embedding_cache_capacity)) {
           embedding_cache_.clear();

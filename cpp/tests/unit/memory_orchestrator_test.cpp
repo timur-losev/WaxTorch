@@ -278,6 +278,26 @@ void ScenarioRememberChunking(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioBatchProviderUsedForRemember(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: batch provider used for remember");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.embedding_cache_capacity = 64;
+  config.chunking.target_tokens = 2;
+  config.chunking.overlap_tokens = 0;
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("a b c d e", {});  // 3 chunks with target=2
+    Require(embedder->batch_calls() == 1, "remember should use EmbedBatch once for multi-chunk ingest");
+    Require(embedder->embed_calls() == 0, "remember should avoid per-chunk Embed when batch provider is available");
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -291,6 +311,7 @@ int main() {
     const auto path5 = UniquePath();
     const auto path6 = UniquePath();
     const auto path7 = UniquePath();
+    const auto path8 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioRememberFlushPersistsFrame(path1);
@@ -300,6 +321,7 @@ int main() {
     ScenarioBatchProviderUsedForVectorRecall(path5);
     ScenarioMaxSnippetsClamp(path6);
     ScenarioRememberChunking(path7);
+    ScenarioBatchProviderUsedForRemember(path8);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -318,6 +340,8 @@ int main() {
     std::filesystem::remove(path6.string() + ".writer.lock", ec);
     std::filesystem::remove(path7, ec);
     std::filesystem::remove(path7.string() + ".writer.lock", ec);
+    std::filesystem::remove(path8, ec);
+    std::filesystem::remove(path8.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
