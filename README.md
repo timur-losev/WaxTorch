@@ -357,7 +357,7 @@ Strict `cl100k_base` token counting. Same query produces the same context window
 ## Requirements
 
 - Swift 6.2
-- iOS 26 / macOS 26
+- iOS 17 / macOS 15
 - Apple Silicon (for Metal GPU features)
 
 ---

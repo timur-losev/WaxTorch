@@ -6,8 +6,8 @@ import PackageDescription
 let package = Package(
     name: "Wax",
     platforms: [
-        .iOS(.v26),
-        .macOS(.v26),
+        .iOS(.v17),
+        .macOS(.v15),
     ],
     products: [
         .library(

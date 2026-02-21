@@ -4,12 +4,17 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT_DIR"
 
+SWIFT_TEST_ARGS=()
 if [[ "$(uname -s)" == "Darwin" ]]; then
   if [[ -z "${MACOSX_DEPLOYMENT_TARGET:-}" ]]; then
     MACOS_MAJOR="$(sw_vers -productVersion | cut -d. -f1)"
     export MACOSX_DEPLOYMENT_TARGET="${MACOS_MAJOR}.0"
   fi
+  SWIFT_ARCH="$(uname -m)"
+  SWIFT_TEST_TRIPLE="${SWIFT_ARCH}-apple-macosx${MACOSX_DEPLOYMENT_TARGET}"
+  SWIFT_TEST_ARGS+=(--triple "$SWIFT_TEST_TRIPLE")
   echo "Using MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET}"
+  echo "Using Swift test triple=${SWIFT_TEST_TRIPLE}"
 fi
 
 run_and_capture() {
@@ -79,7 +84,7 @@ run_full() {
   skip_regex="(RAGBenchmarks|RAGBenchmarksMiniLM|WALCompactionBenchmarks|LongMemoryBenchmarkHarness|BatchEmbeddingBenchmark|MetalVectorEngineBenchmark|OptimizationComparisonBenchmark|TokenizerBenchmark|BufferSerializationBenchmark)"
 
   run_and_capture "$log_file" \
-    swift test --parallel --skip "$skip_regex"
+    swift test "${SWIFT_TEST_ARGS[@]}" --parallel --skip "$skip_regex"
   assert_no_skips "$log_file"
   assert_full_pass_rate "$log_file"
 
@@ -97,13 +102,13 @@ run_soak_smoke() {
     WAX_STABILITY_MAX_P50_DRIFT_PCT="${WAX_STABILITY_MAX_P50_DRIFT_PCT:-140}" \
     WAX_STABILITY_MAX_P95_DRIFT_PCT="${WAX_STABILITY_MAX_P95_DRIFT_PCT:-180}" \
     WAX_STABILITY_OUTPUT="${WAX_STABILITY_OUTPUT:-/tmp/wax-soak-stability.json}" \
-    swift test --enable-xctest --disable-swift-testing --filter ProductionReadinessStabilityTests.testSoakSmokeStability
+    swift test "${SWIFT_TEST_ARGS[@]}" --enable-xctest --disable-swift-testing --filter ProductionReadinessStabilityTests.testSoakSmokeStability
   assert_no_skips "$stability_log"
 
   run_and_capture "$wal_log" env \
     WAX_BENCHMARK_WAL_COMPACTION=1 \
     WAX_BENCHMARK_WAL_GUARDRAILS=1 \
-    swift test --enable-xctest --disable-swift-testing --filter WALCompactionBenchmarks.testProactivePressureGuardrails
+    swift test "${SWIFT_TEST_ARGS[@]}" --enable-xctest --disable-swift-testing --filter WALCompactionBenchmarks.testProactivePressureGuardrails
   assert_no_skips "$wal_log"
 }
 
@@ -118,13 +123,13 @@ run_burn_smoke() {
     WAX_STABILITY_MAX_P50_DRIFT_PCT="${WAX_STABILITY_MAX_P50_DRIFT_PCT:-200}" \
     WAX_STABILITY_MAX_P95_DRIFT_PCT="${WAX_STABILITY_MAX_P95_DRIFT_PCT:-260}" \
     WAX_STABILITY_OUTPUT="${WAX_STABILITY_OUTPUT:-/tmp/wax-burn-stability.json}" \
-    swift test --enable-xctest --disable-swift-testing --filter ProductionReadinessStabilityTests.testBurnSmokeStability
+    swift test "${SWIFT_TEST_ARGS[@]}" --enable-xctest --disable-swift-testing --filter ProductionReadinessStabilityTests.testBurnSmokeStability
   assert_no_skips "$stability_log"
 
   run_and_capture "$wal_log" env \
     WAX_BENCHMARK_WAL_COMPACTION=1 \
     WAX_BENCHMARK_WAL_REOPEN_GUARDRAILS=1 \
-    swift test --enable-xctest --disable-swift-testing --filter WALCompactionBenchmarks.testReplayStateSnapshotGuardrails
+    swift test "${SWIFT_TEST_ARGS[@]}" --enable-xctest --disable-swift-testing --filter WALCompactionBenchmarks.testReplayStateSnapshotGuardrails
   assert_no_skips "$wal_log"
 }
 
