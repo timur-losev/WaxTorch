@@ -58,6 +58,7 @@ struct WalSupersedeFrameInfo {
 struct WalPutEmbeddingInfo {
   std::uint64_t frame_id = 0;
   std::uint32_t dimension = 0;
+  std::vector<float> vector{};
 };
 
 struct WalPendingMutationInfo {

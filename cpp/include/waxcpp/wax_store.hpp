@@ -41,6 +41,17 @@ struct WaxFrameMeta {
   std::optional<std::uint64_t> superseded_by;
 };
 
+struct WaxPendingEmbedding {
+  std::uint64_t frame_id = 0;
+  std::uint32_t dimension = 0;
+  std::vector<float> vector{};
+};
+
+struct WaxPendingEmbeddingSnapshot {
+  std::vector<WaxPendingEmbedding> embeddings{};
+  std::optional<std::uint64_t> latest_sequence{};
+};
+
 class WaxStore {
  public:
   WaxStore(const WaxStore&) = delete;
@@ -58,6 +69,9 @@ class WaxStore {
   std::uint64_t Put(const std::vector<std::byte>& content, const Metadata& metadata = {});
   std::vector<std::uint64_t> PutBatch(const std::vector<std::vector<std::byte>>& contents,
                                       const std::vector<Metadata>& metadatas);
+  void PutEmbedding(std::uint64_t frame_id, const std::vector<float>& vector);
+  void PutEmbeddingBatch(const std::vector<std::uint64_t>& frame_ids,
+                         const std::vector<std::vector<float>>& vectors);
   void Delete(std::uint64_t frame_id);
   void Supersede(std::uint64_t superseded_id, std::uint64_t superseding_id);
 
@@ -70,6 +84,7 @@ class WaxStore {
  [[nodiscard]] std::vector<WaxFrameMeta> FrameMetas() const;
  [[nodiscard]] std::vector<std::byte> FrameContent(std::uint64_t frame_id) const;
  [[nodiscard]] std::unordered_map<std::uint64_t, std::vector<std::byte>> FrameContents(const std::vector<std::uint64_t>& frame_ids) const;
+ [[nodiscard]] WaxPendingEmbeddingSnapshot PendingEmbeddingMutations(std::optional<std::uint64_t> since_sequence = std::nullopt) const;
 
  private:
   void LoadState(bool deep_verify, bool repair_trailing_bytes);

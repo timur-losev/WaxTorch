@@ -7,6 +7,7 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -150,6 +151,86 @@ void RunScenarioPutBatchContracts(const std::filesystem::path& path) {
     threw = true;
   }
   Require(threw, "PutBatch must reject metadata size mismatch");
+}
+
+void RunScenarioPutEmbeddingContracts(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: putEmbedding contracts");
+  auto store = waxcpp::WaxStore::Create(path);
+  const auto pre_stats = store.Stats();
+  const auto pre_wal = store.WalStats();
+
+  store.PutEmbedding(42, {0.25F, 0.50F, 0.75F});
+  const auto staged_stats = store.Stats();
+  const auto staged_wal = store.WalStats();
+  Require(staged_stats.pending_frames == pre_stats.pending_frames,
+          "putEmbedding must not affect pending_frames counter");
+  Require(staged_wal.last_seq > pre_wal.last_seq, "putEmbedding must append WAL mutation");
+
+  store.Commit();
+  const auto after_commit = store.Stats();
+  const auto after_commit_wal = store.WalStats();
+  Require(after_commit.frame_count == pre_stats.frame_count,
+          "putEmbedding commit must not change frame_count without putFrame");
+  Require(after_commit.pending_frames == 0, "commit should clear pending WAL state");
+  Require(after_commit_wal.committed_seq >= staged_wal.last_seq,
+          "commit should checkpoint putEmbedding WAL sequence");
+  store.Close();
+
+  bool threw = false;
+  try {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    reopened.PutEmbeddingBatch({7, 8}, {{0.1F}, {0.2F, 0.3F}});
+    reopened.Close();
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  Require(threw, "PutEmbeddingBatch must reject mixed embedding dimensions");
+
+  threw = false;
+  try {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    reopened.PutEmbeddingBatch({7, 8}, {{0.1F}});
+    reopened.Close();
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  Require(threw, "PutEmbeddingBatch must reject frame_ids/vectors size mismatch");
+
+  threw = false;
+  try {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    reopened.PutEmbedding(7, {});
+    reopened.Close();
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  Require(threw, "PutEmbedding must reject empty vector");
+}
+
+void RunScenarioPendingEmbeddingSnapshot(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: pending embedding snapshot");
+  auto store = waxcpp::WaxStore::Create(path);
+  store.PutEmbedding(100, {0.1F, 0.2F});
+  store.PutEmbeddingBatch({101, 102}, {{0.3F, 0.4F}, {0.5F, 0.6F}});
+
+  const auto snapshot = store.PendingEmbeddingMutations();
+  Require(snapshot.embeddings.size() == 3, "expected three pending embeddings");
+  Require(snapshot.latest_sequence.has_value(), "expected latest_sequence for pending embeddings");
+  Require(snapshot.embeddings[0].frame_id == 100, "unexpected first pending embedding frame_id");
+  Require(snapshot.embeddings[0].dimension == 2, "unexpected first pending embedding dimension");
+  Require(snapshot.embeddings[0].vector.size() == 2, "unexpected first pending embedding vector size");
+  Require(std::fabs(snapshot.embeddings[0].vector[0] - 0.1F) < 1e-6F, "unexpected first pending embedding value");
+
+  const auto filtered = store.PendingEmbeddingMutations(snapshot.latest_sequence);
+  Require(filtered.embeddings.empty(), "since=latest_sequence should return empty pending embedding set");
+  Require(filtered.latest_sequence == snapshot.latest_sequence,
+          "latest_sequence should still reflect current pending embedding head");
+
+  store.Commit();
+  const auto after_commit = store.PendingEmbeddingMutations();
+  Require(after_commit.embeddings.empty(), "commit should clear pending embedding mutations");
+  Require(!after_commit.latest_sequence.has_value(), "latest_sequence should be empty after embedding commit");
+  store.Close();
 }
 
 void RunScenarioPendingRecoveryCommit(const std::filesystem::path& path) {
@@ -330,6 +411,37 @@ void RunScenarioCrashWindowAfterHeaderA(const std::filesystem::path& path) {
   const auto stats = reopened.Stats();
   Require(stats.frame_count == 2, "expected new committed frame_count after header-A crash");
   Require(stats.pending_frames == 0, "expected no pending put after header-A crash");
+  reopened.Close();
+}
+
+void RunScenarioCrashWindowAfterCheckpointBeforeHeaders(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: crash-window after checkpoint (before headers)");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    const std::vector<std::byte> payload0 = {std::byte{0x57}};
+    const std::vector<std::byte> payload1 = {std::byte{0x58}};
+    (void)store.Put(payload0);
+    store.Commit();
+
+    (void)store.Put(payload1);
+    bool threw = false;
+    {
+      ScopedCommitFailStep fail_step(5);
+      try {
+        store.Commit();
+      } catch (const std::exception&) {
+        threw = true;
+      }
+    }
+    Require(threw, "commit should fail at injected step 5");
+    // Simulate crash: do not call Close().
+  }
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  reopened.Verify(true);
+  const auto stats = reopened.Stats();
+  Require(stats.frame_count == 2, "expected new committed frame_count after checkpoint-before-headers crash");
+  Require(stats.pending_frames == 0, "expected no pending put after checkpoint-before-headers crash");
   reopened.Close();
 }
 
@@ -562,11 +674,14 @@ int main() {
 
     RunScenarioPutCommitReopen(path);
     RunScenarioPutBatchContracts(path);
+    RunScenarioPutEmbeddingContracts(path);
+    RunScenarioPendingEmbeddingSnapshot(path);
     RunScenarioPendingRecoveryCommit(path);
     RunScenarioPendingRecoverySkipsUndecodableTail(path);
     RunScenarioDeleteAndSupersedePersist(path);
     RunScenarioCrashWindowAfterTocWrite(path);
     RunScenarioCrashWindowAfterFooterWrite(path);
+    RunScenarioCrashWindowAfterCheckpointBeforeHeaders(path);
     RunScenarioCrashWindowAfterHeaderA(path);
     RunScenarioCrashWindowAfterHeaderB(path);
     RunScenarioSupersedeCycleRejected(path);

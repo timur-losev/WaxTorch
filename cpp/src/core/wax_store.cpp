@@ -215,6 +215,31 @@ std::vector<std::byte> BuildWalSupersedePayload(std::uint64_t superseded_id, std
   return payload;
 }
 
+std::vector<std::byte> BuildWalPutEmbeddingPayload(std::uint64_t frame_id, std::span<const float> vector) {
+  if (vector.empty()) {
+    throw StoreError("embedding vector must be non-empty");
+  }
+  if (vector.size() > core::mv2s::kMaxArrayCount) {
+    throw StoreError("embedding vector dimension exceeds max");
+  }
+  if (vector.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+    throw StoreError("embedding vector dimension exceeds UInt32.max");
+  }
+
+  std::vector<std::byte> payload{};
+  payload.reserve(1 + 8 + 4 + vector.size() * sizeof(float));
+  AppendU8(payload, 0x04);  // putEmbedding
+  AppendLE64(payload, frame_id);
+  AppendLE32(payload, static_cast<std::uint32_t>(vector.size()));
+  for (const float value : vector) {
+    std::uint32_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value));
+    std::memcpy(&bits, &value, sizeof(bits));
+    AppendLE32(payload, bits);
+  }
+  return payload;
+}
+
 std::optional<HeaderPage> TryDecodeHeader(const std::filesystem::path& path, std::uint64_t offset) {
   try {
     const auto bytes = ReadExactly(path, offset, static_cast<std::size_t>(core::mv2s::kHeaderPageSize));
@@ -635,6 +660,60 @@ std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std:
   return ids;
 }
 
+void WaxStore::PutEmbedding(std::uint64_t frame_id, const std::vector<float>& vector) {
+  PutEmbeddingBatch({frame_id}, {vector});
+}
+
+void WaxStore::PutEmbeddingBatch(const std::vector<std::uint64_t>& frame_ids,
+                                 const std::vector<std::vector<float>>& vectors) {
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
+  if (frame_ids.size() != vectors.size()) {
+    throw StoreError("PutEmbeddingBatch frame_ids size must match vectors size");
+  }
+  if (frame_ids.empty()) {
+    return;
+  }
+
+  core::wal::WalRingWriter writer(path_,
+                                  wal_offset_,
+                                  wal_size_,
+                                  wal_write_pos_,
+                                  wal_checkpoint_pos_,
+                                  wal_pending_bytes_,
+                                  wal_last_sequence_,
+                                  wal_wrap_count_,
+                                  wal_checkpoint_count_,
+                                  wal_sentinel_write_count_,
+                                  wal_write_call_count_);
+
+  std::optional<std::size_t> expected_dimension{};
+  for (std::size_t i = 0; i < frame_ids.size(); ++i) {
+    if (vectors[i].empty()) {
+      throw StoreError("embedding vector must be non-empty");
+    }
+    if (!expected_dimension.has_value()) {
+      expected_dimension = vectors[i].size();
+    } else if (*expected_dimension != vectors[i].size()) {
+      throw StoreError("PutEmbeddingBatch vectors must all have same dimension");
+    }
+    const auto wal_payload = BuildWalPutEmbeddingPayload(frame_ids[i], vectors[i]);
+    (void)writer.Append(wal_payload);
+  }
+
+  wal_write_pos_ = writer.write_pos();
+  wal_checkpoint_pos_ = writer.checkpoint_pos();
+  wal_pending_bytes_ = writer.pending_bytes();
+  wal_last_sequence_ = writer.last_sequence();
+  wal_wrap_count_ = writer.wrap_count();
+  wal_checkpoint_count_ = writer.checkpoint_count();
+  wal_sentinel_write_count_ = writer.sentinel_write_count();
+  wal_write_call_count_ = writer.write_call_count();
+  dirty_ = true;
+  has_local_mutations_ = true;
+}
+
 void WaxStore::Delete(std::uint64_t frame_id) {
   if (!is_open_) {
     throw StoreError("store is closed");
@@ -839,6 +918,7 @@ void WaxStore::Commit() {
                                   wal_sentinel_write_count_,
                                   wal_write_call_count_);
   writer.RecordCheckpoint();
+  MaybeInjectCommitCrash(5);
 
   HeaderPage page_a{};
   page_a.header_page_generation = header_page_generation_ + 1;
@@ -970,6 +1050,42 @@ std::unordered_map<std::uint64_t, std::vector<std::byte>> WaxStore::FrameContent
     out.emplace(frame_id, FrameContent(frame_id));
   }
   return out;
+}
+
+WaxPendingEmbeddingSnapshot WaxStore::PendingEmbeddingMutations(
+    std::optional<std::uint64_t> since_sequence) const {
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
+
+  core::wal::WalPendingScanResult pending_scan{};
+  try {
+    pending_scan = core::wal::ScanPendingMutationsWithState(
+        path_,
+        wal_offset_,
+        wal_size_,
+        wal_checkpoint_pos_,
+        wal_committed_seq_);
+  } catch (const std::exception& ex) {
+    throw StoreError(std::string("wal scan failed: ") + ex.what());
+  }
+
+  WaxPendingEmbeddingSnapshot snapshot{};
+  for (const auto& mutation : pending_scan.pending_mutations) {
+    if (!mutation.put_embedding.has_value()) {
+      continue;
+    }
+    snapshot.latest_sequence = mutation.sequence;
+    if (since_sequence.has_value() && mutation.sequence <= *since_sequence) {
+      continue;
+    }
+    WaxPendingEmbedding embedding{};
+    embedding.frame_id = mutation.put_embedding->frame_id;
+    embedding.dimension = mutation.put_embedding->dimension;
+    embedding.vector = mutation.put_embedding->vector;
+    snapshot.embeddings.push_back(std::move(embedding));
+  }
+  return snapshot;
 }
 
 WaxStore::WaxStore(std::filesystem::path path) : path_(std::move(path)) {}

@@ -169,6 +169,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add crash-window regression for failpoint step 4 (after header B write): reopen must observe new committed state with no pending WAL
 - [x] Wire `WaxWALStats.auto_commit_count` to real runtime state and add close-path regressions (increments only for local pending auto-commit)
 - [x] Add `PutBatch` write-path regressions (dense id allocation, pending/frame-count persistence, metadata-size contract validation)
+- [x] Add crash-window failpoint + regression for post-checkpoint/pre-header publication (commit step 5)
+- [x] Add `WaxStore::PutEmbedding`/`PutEmbeddingBatch` write-path support (WAL append + commit/recovery safety baseline)
+- [x] Add `WaxStore::PendingEmbeddingMutations(since)` snapshot API parity with decoded embedding vectors + latest-sequence tracking
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -336,6 +339,17 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/core/wax_store.cpp` | Wired `WalStats().auto_commit_count` and increment-on-`Close` auto-commit semantics for local pending mutations only | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added `auto_commit_count` assertions for local pending close auto-commit vs recovered-pending close no-op behavior | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added `PutBatch` regressions for id sequencing, commit persistence, and metadata-size mismatch rejection | Codex |
+| `cpp/src/core/wax_store.cpp` | Added commit failpoint step 5 immediately after WAL checkpoint write to model post-checkpoint/pre-header crash window | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added crash-window regression for step 5, validating reopen durability via footer scan with zero pending WAL | Codex |
+| `cpp/include/waxcpp/wax_store.hpp` | Added `PutEmbedding`/`PutEmbeddingBatch` APIs to C++ `WaxStore` parity surface | Codex |
+| `cpp/src/core/wax_store.cpp` | Implemented WAL payload encoding + append path for embedding mutations with batch dimension validation | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added embedding write-path regressions (WAL seq advance, no `pending_frames` drift, mixed-dimension rejection, size-mismatch rejection, empty-vector rejection) | Codex |
+| `cpp/src/core/wal_ring.hpp` | Extended decoded `WalPutEmbeddingInfo` with vector payload for pending embedding snapshot parity | Codex |
+| `cpp/src/core/wal_ring.cpp` | Added float32 decode path for embedding vectors in WAL mutation payloads | Codex |
+| `cpp/include/waxcpp/wax_store.hpp` | Added pending embedding snapshot structs + `PendingEmbeddingMutations(since)` public API | Codex |
+| `cpp/src/core/wax_store.cpp` | Added `PendingEmbeddingMutations(since)` implementation backed by WAL pending scan and sequence filter semantics | Codex |
+| `cpp/tests/unit/wal_ring_test.cpp` | Extended putEmbedding decode assertions to include decoded vector size | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added pending embedding snapshot regression (`latest_sequence`, `since` filter, commit-clear behavior) | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

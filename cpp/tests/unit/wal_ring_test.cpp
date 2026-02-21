@@ -218,6 +218,7 @@ void RunScenarioPutEmbeddingDecode(const std::filesystem::path& path) {
   Require(mutation.put_embedding.has_value(), "expected putEmbedding payload");
   Require(mutation.put_embedding->frame_id == 55, "unexpected putEmbedding frame_id");
   Require(mutation.put_embedding->dimension == 8, "unexpected putEmbedding dimension");
+  Require(mutation.put_embedding->vector.size() == 8, "unexpected putEmbedding vector size");
 }
 
 void RunScenarioScanStateParity(const std::filesystem::path& path) {

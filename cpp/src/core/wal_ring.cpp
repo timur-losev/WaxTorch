@@ -152,6 +152,14 @@ class PayloadCursor {
     return out;
   }
 
+  float ReadF32() {
+    const auto raw = ReadU32();
+    float out = 0.0F;
+    static_assert(sizeof(out) == sizeof(raw));
+    std::memcpy(&out, &raw, sizeof(out));
+    return out;
+  }
+
   std::vector<std::byte> ReadFixed(std::size_t count, const char* context) {
     EnsureAvailable(count, context);
     std::vector<std::byte> out(count);
@@ -361,7 +369,10 @@ WalPendingMutationInfo DecodeWalMutationPayload(std::uint64_t sequence, std::spa
         throw WalError("embedding dimension overflows byte length");
       }
       put_embedding.dimension = static_cast<std::uint32_t>(dimension);
-      cursor.Skip(dimension * 4, "embedding.vector");
+      put_embedding.vector.reserve(dimension);
+      for (std::size_t i = 0; i < dimension; ++i) {
+        put_embedding.vector.push_back(cursor.ReadF32());
+      }
       mutation.put_embedding = put_embedding;
       break;
     }
