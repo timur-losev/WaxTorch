@@ -2,9 +2,12 @@
 #include "waxcpp/search.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <span>
@@ -15,6 +18,150 @@
 
 namespace waxcpp {
 namespace {
+
+inline constexpr std::array<std::byte, 6> kStructuredFactMagic = {
+    std::byte{'W'},
+    std::byte{'A'},
+    std::byte{'X'},
+    std::byte{'S'},
+    std::byte{'M'},
+    std::byte{'1'},
+};
+
+enum class StructuredFactOpcode : std::uint8_t {
+  kUpsert = 1,
+};
+
+struct StructuredFactRecord {
+  StructuredFactOpcode opcode = StructuredFactOpcode::kUpsert;
+  std::string entity;
+  std::string attribute;
+  std::string value;
+  Metadata metadata;
+};
+
+void AppendU8(std::vector<std::byte>& out, std::uint8_t value) {
+  out.push_back(static_cast<std::byte>(value));
+}
+
+void AppendU32LE(std::vector<std::byte>& out, std::uint32_t value) {
+  for (std::size_t i = 0; i < sizeof(value); ++i) {
+    out.push_back(static_cast<std::byte>((value >> (8U * i)) & 0xFFU));
+  }
+}
+
+void AppendString(std::vector<std::byte>& out, const std::string& value) {
+  if (value.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+    throw std::runtime_error("structured fact field exceeds uint32 length");
+  }
+  AppendU32LE(out, static_cast<std::uint32_t>(value.size()));
+  for (const char ch : value) {
+    out.push_back(static_cast<std::byte>(static_cast<unsigned char>(ch)));
+  }
+}
+
+std::vector<std::byte> BuildStructuredFactUpsertPayload(const std::string& entity,
+                                                        const std::string& attribute,
+                                                        const std::string& value,
+                                                        const Metadata& metadata) {
+  std::vector<std::byte> out{};
+  out.reserve(64 + entity.size() + attribute.size() + value.size());
+  out.insert(out.end(), kStructuredFactMagic.begin(), kStructuredFactMagic.end());
+  AppendU8(out, static_cast<std::uint8_t>(StructuredFactOpcode::kUpsert));
+  AppendString(out, entity);
+  AppendString(out, attribute);
+  AppendString(out, value);
+  if (metadata.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+    throw std::runtime_error("structured fact metadata count exceeds uint32");
+  }
+  AppendU32LE(out, static_cast<std::uint32_t>(metadata.size()));
+  for (const auto& [key, val] : metadata) {
+    AppendString(out, key);
+    AppendString(out, val);
+  }
+  return out;
+}
+
+std::optional<StructuredFactRecord> ParseStructuredFactPayload(const std::vector<std::byte>& payload) {
+  if (payload.size() < kStructuredFactMagic.size() + 1 + 4 + 4 + 4 + 4) {
+    return std::nullopt;
+  }
+  if (!std::equal(kStructuredFactMagic.begin(), kStructuredFactMagic.end(), payload.begin())) {
+    return std::nullopt;
+  }
+
+  std::size_t cursor = kStructuredFactMagic.size();
+  auto read_u8 = [&]() -> std::optional<std::uint8_t> {
+    if (cursor >= payload.size()) {
+      return std::nullopt;
+    }
+    return std::to_integer<std::uint8_t>(payload[cursor++]);
+  };
+  auto read_u32 = [&]() -> std::optional<std::uint32_t> {
+    if (cursor + 4 > payload.size()) {
+      return std::nullopt;
+    }
+    std::uint32_t out = 0;
+    for (std::size_t i = 0; i < 4; ++i) {
+      out |= static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(payload[cursor + i])) << (8U * i);
+    }
+    cursor += 4;
+    return out;
+  };
+  auto read_string = [&]() -> std::optional<std::string> {
+    const auto length = read_u32();
+    if (!length.has_value()) {
+      return std::nullopt;
+    }
+    if (cursor + *length > payload.size()) {
+      return std::nullopt;
+    }
+    std::string out{};
+    out.reserve(*length);
+    for (std::size_t i = 0; i < *length; ++i) {
+      out.push_back(static_cast<char>(std::to_integer<std::uint8_t>(payload[cursor + i])));
+    }
+    cursor += *length;
+    return out;
+  };
+
+  const auto opcode_u8 = read_u8();
+  if (!opcode_u8.has_value()) {
+    return std::nullopt;
+  }
+  if (*opcode_u8 != static_cast<std::uint8_t>(StructuredFactOpcode::kUpsert)) {
+    return std::nullopt;
+  }
+
+  const auto entity = read_string();
+  const auto attribute = read_string();
+  const auto value = read_string();
+  const auto metadata_count = read_u32();
+  if (!entity.has_value() || !attribute.has_value() || !value.has_value() || !metadata_count.has_value()) {
+    return std::nullopt;
+  }
+
+  Metadata metadata{};
+  for (std::uint32_t i = 0; i < *metadata_count; ++i) {
+    const auto key = read_string();
+    const auto val = read_string();
+    if (!key.has_value() || !val.has_value()) {
+      return std::nullopt;
+    }
+    metadata[*key] = *val;
+  }
+  if (cursor != payload.size()) {
+    return std::nullopt;
+  }
+
+  StructuredFactRecord record{};
+  record.opcode = StructuredFactOpcode::kUpsert;
+  record.entity = *entity;
+  record.attribute = *attribute;
+  record.value = *value;
+  record.metadata = std::move(metadata);
+  return record;
+}
 
 std::string BytesToString(const std::vector<std::byte>& payload) {
   std::string out{};
@@ -160,6 +307,23 @@ struct DocCandidate {
   std::string text;
 };
 
+void ReplayStructuredFactsFromStore(WaxStore& store, StructuredMemoryStore& structured_memory) {
+  const auto metas = store.FrameMetas();
+  for (const auto& meta : metas) {
+    if (meta.status != 0) {
+      continue;
+    }
+    const auto payload = store.FrameContent(meta.id);
+    const auto fact = ParseStructuredFactPayload(payload);
+    if (!fact.has_value()) {
+      continue;
+    }
+    if (fact->opcode == StructuredFactOpcode::kUpsert) {
+      (void)structured_memory.Upsert(fact->entity, fact->attribute, fact->value, fact->metadata);
+    }
+  }
+}
+
 StoreSearchChannels BuildStoreChannels(WaxStore& store,
                                        StructuredMemoryStore* structured_memory,
                                        std::shared_ptr<EmbeddingProvider> embedder,
@@ -194,6 +358,10 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
       continue;
     }
     const auto payload = store.FrameContent(meta.id);
+    if (ParseStructuredFactPayload(payload).has_value()) {
+      // Internal structured-memory journal entry; excluded from regular text/vector channels.
+      continue;
+    }
     const auto text = BytesToString(payload);
     docs.push_back(DocCandidate{meta.id, text});
 
@@ -327,6 +495,7 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
   if (config_.enable_vector_search && !embedder_) {
     throw std::runtime_error("vector search enabled requires embedder in current scaffold");
   }
+  ReplayStructuredFactsFromStore(store_, structured_memory_);
 }
 
 void MemoryOrchestrator::Remember(const std::string& content, const Metadata& metadata) {
@@ -439,6 +608,8 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
                                       const std::string& value,
                                       const Metadata& metadata) {
   (void)structured_memory_.Upsert(entity, attribute, value, metadata);
+  const auto payload = BuildStructuredFactUpsertPayload(entity, attribute, value, metadata);
+  (void)store_.Put(payload, {});
 }
 
 std::vector<StructuredMemoryEntry> MemoryOrchestrator::RecallFactsByEntityPrefix(const std::string& entity_prefix,

@@ -353,8 +353,13 @@ void ScenarioStructuredMemoryFacts(const std::filesystem::path& path) {
     orchestrator.RememberFact("user:1", "city", "Paris");
     orchestrator.RememberFact("user:2", "name", "Bob");
     orchestrator.RememberFact("user:1", "name", "Alice B", {{"src", "edit"}});
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
 
-    const auto user_facts = orchestrator.RecallFactsByEntityPrefix("user:", 10);
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto user_facts = reopened.RecallFactsByEntityPrefix("user:", 10);
     Require(user_facts.size() == 3, "structured facts prefix query mismatch");
     Require(user_facts[0].entity == "user:1" && user_facts[0].attribute == "city", "fact order mismatch [0]");
     Require(user_facts[1].entity == "user:1" && user_facts[1].attribute == "name", "fact order mismatch [1]");
@@ -362,7 +367,7 @@ void ScenarioStructuredMemoryFacts(const std::filesystem::path& path) {
     Require(user_facts[1].version == 2, "fact version should increment on upsert");
     Require(user_facts[1].metadata.at("src") == "edit", "fact metadata mismatch");
     Require(user_facts[2].entity == "user:2", "fact order mismatch [2]");
-    orchestrator.Close();
+    reopened.Close();
   }
 }
 
@@ -376,24 +381,32 @@ void ScenarioRecallIncludesStructuredMemory(const std::filesystem::path& path) {
 
   {
     waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
-    orchestrator.Remember("ordinary frame text", {});
     orchestrator.RememberFact("user:42", "city", "tokyo");
     orchestrator.RememberFact("user:42", "favorite", "sushi");
     orchestrator.Flush();
+    orchestrator.Close();
+  }
 
-    const auto context = orchestrator.Recall("tokyo");
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto context = reopened.Recall("tokyo");
     Require(!context.items.empty(), "recall should include structured memory hit");
     bool found_structured = false;
+    bool found_text = false;
     for (const auto& item : context.items) {
       for (const auto source : item.sources) {
         if (source == waxcpp::SearchSource::kStructuredMemory) {
           found_structured = true;
           break;
         }
+        if (source == waxcpp::SearchSource::kText) {
+          found_text = true;
+        }
       }
     }
     Require(found_structured, "structured memory source must appear in recall context");
-    orchestrator.Close();
+    Require(!found_text, "internal structured records must not surface as text-source hits");
+    reopened.Close();
   }
 }
 
