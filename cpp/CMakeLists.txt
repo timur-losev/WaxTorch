@@ -15,6 +15,7 @@ set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/memory_orchestrator.hpp
   include/waxcpp/pch.hpp
   include/waxcpp/search.hpp
+  include/waxcpp/structured_memory.hpp
   include/waxcpp/types.hpp
   include/waxcpp/vector_engine.hpp
   include/waxcpp/wax_store.hpp
@@ -26,6 +27,7 @@ add_library(waxcpp STATIC
   src/core/wal_ring.cpp
   src/core/wax_store.cpp
   src/text/fts5_search_engine.cpp
+  src/text/structured_memory_store.cpp
   src/vector/usearch_vector_engine.cpp
   src/rag/search.cpp
   src/rag/embeddings.cpp
@@ -147,6 +149,16 @@ if (WAXCPP_BUILD_TESTS)
   endif()
   target_precompile_headers(waxcpp_search_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_search_test COMMAND waxcpp_search_test)
+
+  add_executable(waxcpp_structured_memory_store_test tests/unit/structured_memory_store_test.cpp)
+  target_link_libraries(waxcpp_structured_memory_store_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_structured_memory_store_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_structured_memory_store_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_structured_memory_store_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_structured_memory_store_test COMMAND waxcpp_structured_memory_store_test)
 
   add_executable(waxcpp_wal_ring_test tests/unit/wal_ring_test.cpp)
   target_link_libraries(waxcpp_wal_ring_test PRIVATE waxcpp)
