@@ -56,6 +56,48 @@ class CountingEmbedder final : public waxcpp::EmbeddingProvider {
   int calls_ = 0;
 };
 
+class CountingBatchEmbedder final : public waxcpp::BatchEmbeddingProvider {
+ public:
+  int dimensions() const override { return 4; }
+  bool normalize() const override { return true; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override { return std::nullopt; }
+
+  std::vector<float> Embed(const std::string& text) override {
+    ++embed_calls_;
+    return BuildEmbedding(text);
+  }
+
+  std::vector<std::vector<float>> EmbedBatch(const std::vector<std::string>& texts) override {
+    ++batch_calls_;
+    std::vector<std::vector<float>> out{};
+    out.reserve(texts.size());
+    for (const auto& text : texts) {
+      out.push_back(BuildEmbedding(text));
+    }
+    return out;
+  }
+
+  void Reset() {
+    embed_calls_ = 0;
+    batch_calls_ = 0;
+  }
+
+  int embed_calls() const { return embed_calls_; }
+  int batch_calls() const { return batch_calls_; }
+
+ private:
+  static std::vector<float> BuildEmbedding(const std::string& text) {
+    std::vector<float> out(4, 0.0F);
+    for (std::size_t i = 0; i < text.size(); ++i) {
+      out[i % out.size()] += static_cast<float>(static_cast<unsigned char>(text[i])) / 255.0F;
+    }
+    return out;
+  }
+
+  int embed_calls_ = 0;
+  int batch_calls_ = 0;
+};
+
 void ScenarioVectorPolicyValidation(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: vector policy validation");
   waxcpp::OrchestratorConfig config{};
@@ -160,6 +202,29 @@ void ScenarioEmbeddingMemoizationInRecall(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioBatchProviderUsedForVectorRecall(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: batch provider used for vector recall");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+  config.embedding_cache_capacity = 0;  // force no memoized doc embeddings.
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("batch doc one", {});
+    orchestrator.Remember("batch doc two", {});
+    orchestrator.Flush();
+
+    embedder->Reset();
+    (void)orchestrator.Recall("doc", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(embedder->batch_calls() == 1, "vector recall should call EmbedBatch once for missing docs");
+    Require(embedder->embed_calls() == 0, "vector recall with explicit query embedding should avoid Embed");
+    orchestrator.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -170,12 +235,14 @@ int main() {
     const auto path2 = UniquePath();
     const auto path3 = UniquePath();
     const auto path4 = UniquePath();
+    const auto path5 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioRememberFlushPersistsFrame(path1);
     ScenarioRecallReturnsRankedItems(path2);
     ScenarioHybridRecallWithEmbedder(path3);
     ScenarioEmbeddingMemoizationInRecall(path4);
+    ScenarioBatchProviderUsedForVectorRecall(path5);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -188,6 +255,8 @@ int main() {
     std::filesystem::remove(path3.string() + ".writer.lock", ec);
     std::filesystem::remove(path4, ec);
     std::filesystem::remove(path4.string() + ".writer.lock", ec);
+    std::filesystem::remove(path5, ec);
+    std::filesystem::remove(path5.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

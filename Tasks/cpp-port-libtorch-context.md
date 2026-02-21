@@ -111,6 +111,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Wire orchestrator recall path to mode-aware unified search with text/vector candidate channel generation from store + embedder
 - [x] Add embedding memoization baseline in orchestrator (`frame_id -> embedding` cache, populated on remember and reused in vector recall path)
 - [x] Add orchestrator memoization test with counting embedder (repeated recalls reuse cached doc embeddings)
+- [x] Add token-budget enforcement in `BuildFastRAGContext` (`snippet_max_tokens` and `max_context_tokens` with deterministic partial truncation)
+- [x] Add batch embedding path in orchestrator vector recall (`BatchEmbeddingProvider::EmbedBatch` for missing document embeddings)
+- [x] Add unit coverage for token-budget clamp and batch-provider vector recall behavior
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -209,6 +212,11 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/include/waxcpp/memory_orchestrator.hpp` | Added orchestrator embedding-cache state | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Added vector embedding cache population/reuse in remember/recall path | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added counting-embedder memoization scenario for repeated vector recalls | Codex |
+| `cpp/include/waxcpp/types.hpp` | Extended `SearchRequest` with context/token budget fields (`max_context_tokens`, `snippet_max_tokens`) | Codex |
+| `cpp/src/rag/search.cpp` | Added deterministic token-budget clamp in context assembly (snippet cap + total-context cap with partial final snippet) | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Added batch-provider vector embedding path and wired FastRAG budget fields from config into recall request | Codex |
+| `cpp/tests/unit/search_test.cpp` | Added context-budget clamp scenario for deterministic snippet and total token truncation | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added batch-embedder scenario to verify `EmbedBatch` usage in vector recall | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
@@ -225,7 +233,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - **Invariants in play**: 1, 2, 4, 6, 7, 8, 9 explicitly tracked; M2 work directly advances deterministic retrieval and two-phase safety foundations.
 
 ## Handoff Notes
-M1 and M2 are complete. M3 baseline is in place: C++ parses WAL headers, detects terminal markers for replay snapshot/header cursor fast paths, scans pending mutations with Swift-compatible decode-stop semantics, validates pending putFrame payload ranges, truncates trailing bytes on open while preserving bytes referenced by pending putFrame, stores effective WAL open-state internally, supports WAL append/capacity/padding-wrap/sentinel/checkpoint behavior via `WalRingWriter`, and wires that into `WaxStore::Put/PutBatch/Delete/Supersede/Commit`. `Commit` applies decoded pending WAL mutations into TOC, writes new footer/header generations, and checkpoints WAL cursor state. Crash-window behavior is covered by deterministic failpoint tests for post-TOC/pre-footer, post-footer/pre-header, and single-header-published windows. Writer-lease exclusion is now enforced in `Open/Create` with `.writer.lock` sentinel semantics and reopen-after-close test coverage. Search stack baseline now includes deterministic mode-aware unified fusion (`UnifiedSearchWithCandidates`, text/vector channel routing, hybrid RRF), context materialization (`BuildFastRAGContext`), and orchestrator `Remember/Recall` over committed store frames with embedder-driven vector channel plus baseline embedding memoization. Remaining gap is full parity hardening for advanced mutation semantics/index coupling and replay edge equivalence beyond current scope.
+M1 and M2 are complete. M3 baseline is in place: C++ parses WAL headers, detects terminal markers for replay snapshot/header cursor fast paths, scans pending mutations with Swift-compatible decode-stop semantics, validates pending putFrame payload ranges, truncates trailing bytes on open while preserving bytes referenced by pending putFrame, stores effective WAL open-state internally, supports WAL append/capacity/padding-wrap/sentinel/checkpoint behavior via `WalRingWriter`, and wires that into `WaxStore::Put/PutBatch/Delete/Supersede/Commit`. `Commit` applies decoded pending WAL mutations into TOC, writes new footer/header generations, and checkpoints WAL cursor state. Crash-window behavior is covered by deterministic failpoint tests for post-TOC/pre-footer, post-footer/pre-header, and single-header-published windows. Writer-lease exclusion is now enforced in `Open/Create` with `.writer.lock` sentinel semantics and reopen-after-close test coverage. Search stack baseline now includes deterministic mode-aware unified fusion (`UnifiedSearchWithCandidates`, text/vector channel routing, hybrid RRF), context materialization with explicit token budgeting (`BuildFastRAGContext`), and orchestrator `Remember/Recall` over committed store frames with embedder-driven vector channel, memoized embeddings, and batch-provider vector embedding support. Remaining gap is full parity hardening for advanced mutation semantics/index coupling and replay edge equivalence beyond current scope.
 
 ## Open Questions
 1. Final remote for `cpp/third_party/libtorch-dist` should be replaced with dedicated artifact mirror before release.

@@ -42,6 +42,8 @@ struct SearchRequest {
   int top_k = 10;
   int rrf_k = 60;
   int preview_max_bytes = 512;
+  int max_context_tokens = 1500;
+  int snippet_max_tokens = 200;
 };
 
 struct SearchResult {

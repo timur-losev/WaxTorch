@@ -96,6 +96,11 @@ struct StoreSearchChannels {
   std::vector<SearchResult> vector_results;
 };
 
+struct DocCandidate {
+  std::uint64_t frame_id = 0;
+  std::string text;
+};
+
 StoreSearchChannels BuildStoreChannels(WaxStore& store,
                                        std::shared_ptr<EmbeddingProvider> embedder,
                                        bool enable_text_search,
@@ -112,8 +117,11 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
   if (!query_embedding.has_value() && enable_vector_search && embedder != nullptr) {
     query_embedding = embedder->Embed(*request.query);
   }
+  const bool vector_channel_enabled = enable_vector_search && embedder != nullptr && query_embedding.has_value();
 
   const auto metas = store.FrameMetas();
+  std::vector<DocCandidate> docs{};
+  docs.reserve(metas.size());
   channels.text_results.reserve(metas.size());
   channels.vector_results.reserve(metas.size());
   for (const auto& meta : metas) {
@@ -122,6 +130,7 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
     }
     const auto payload = store.FrameContent(meta.id);
     const auto text = BytesToString(payload);
+    docs.push_back(DocCandidate{meta.id, text});
 
     if (enable_text_search) {
       const auto text_score = TextOverlapScore(*request.query, text);
@@ -134,43 +143,90 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
         channels.text_results.push_back(std::move(text_result));
       }
     }
+  }
 
-    if (enable_vector_search && embedder != nullptr && query_embedding.has_value()) {
-      const std::vector<float>* doc_embedding_ptr = nullptr;
-      std::vector<float> doc_embedding{};
+  if (vector_channel_enabled) {
+    std::unordered_map<std::uint64_t, std::vector<float>> computed_embeddings{};
+    computed_embeddings.reserve(docs.size());
+    std::vector<std::uint64_t> missing_ids{};
+    std::vector<std::string> missing_texts{};
+    missing_ids.reserve(docs.size());
+    missing_texts.reserve(docs.size());
+
+    for (const auto& doc : docs) {
+      bool has_cached_embedding = false;
       if (embedding_cache != nullptr) {
-        const auto cache_it = embedding_cache->find(meta.id);
+        const auto cache_it = embedding_cache->find(doc.frame_id);
+        if (cache_it != embedding_cache->end()) {
+          has_cached_embedding = true;
+        }
+      }
+      if (!has_cached_embedding) {
+        missing_ids.push_back(doc.frame_id);
+        missing_texts.push_back(doc.text);
+      }
+    }
+
+    if (!missing_ids.empty()) {
+      std::vector<std::vector<float>> missing_embeddings{};
+      if (auto* batch_embedder = dynamic_cast<BatchEmbeddingProvider*>(embedder.get()); batch_embedder != nullptr) {
+        missing_embeddings = batch_embedder->EmbedBatch(missing_texts);
+      } else {
+        missing_embeddings.reserve(missing_texts.size());
+        for (const auto& text : missing_texts) {
+          missing_embeddings.push_back(embedder->Embed(text));
+        }
+      }
+      if (missing_embeddings.size() != missing_ids.size()) {
+        throw std::runtime_error("embedding provider returned mismatched batch size");
+      }
+
+      for (std::size_t i = 0; i < missing_ids.size(); ++i) {
+        auto& embedding = missing_embeddings[i];
+        if (embedding.size() != query_embedding->size()) {
+          continue;
+        }
+        const auto frame_id = missing_ids[i];
+        if (embedding_cache != nullptr && embedding_cache_capacity > 0) {
+          if (embedding_cache->size() >= static_cast<std::size_t>(embedding_cache_capacity)) {
+            embedding_cache->clear();
+          }
+          auto [it, inserted] = embedding_cache->emplace(frame_id, embedding);
+          if (!inserted) {
+            it->second = embedding;
+          }
+        } else {
+          computed_embeddings.emplace(frame_id, std::move(embedding));
+        }
+      }
+    }
+
+    for (const auto& doc : docs) {
+      const std::vector<float>* doc_embedding_ptr = nullptr;
+      if (embedding_cache != nullptr) {
+        const auto cache_it = embedding_cache->find(doc.frame_id);
         if (cache_it != embedding_cache->end()) {
           doc_embedding_ptr = &cache_it->second;
         }
       }
       if (doc_embedding_ptr == nullptr) {
-        doc_embedding = embedder->Embed(text);
-        if (embedding_cache != nullptr && embedding_cache_capacity > 0 &&
-            doc_embedding.size() == query_embedding->size()) {
-          if (embedding_cache->size() >= static_cast<std::size_t>(embedding_cache_capacity)) {
-            embedding_cache->clear();
-          }
-          auto [it, inserted] = embedding_cache->emplace(meta.id, doc_embedding);
-          if (!inserted) {
-            it->second = doc_embedding;
-          }
-          doc_embedding_ptr = &it->second;
+        const auto computed_it = computed_embeddings.find(doc.frame_id);
+        if (computed_it != computed_embeddings.end()) {
+          doc_embedding_ptr = &computed_it->second;
         }
       }
       if (doc_embedding_ptr == nullptr) {
-        doc_embedding_ptr = &doc_embedding;
+        continue;
       }
-
       if (doc_embedding_ptr->size() != query_embedding->size()) {
         continue;
       }
       const auto vector_score = CosineSimilarity(std::span<const float>(doc_embedding_ptr->data(), doc_embedding_ptr->size()),
                                                  std::span<const float>(query_embedding->data(), query_embedding->size()));
       SearchResult vector_result{};
-      vector_result.frame_id = meta.id;
+      vector_result.frame_id = doc.frame_id;
       vector_result.score = vector_score;
-      vector_result.preview_text = text;
+      vector_result.preview_text = doc.text;
       vector_result.sources = {SearchSource::kVector};
       channels.vector_results.push_back(std::move(vector_result));
     }
@@ -217,6 +273,8 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
   req.top_k = config_.rag.search_top_k;
   req.rrf_k = config_.rag.rrf_k;
   req.preview_max_bytes = config_.rag.preview_max_bytes;
+  req.max_context_tokens = config_.rag.max_context_tokens;
+  req.snippet_max_tokens = config_.rag.snippet_max_tokens;
   const auto channels = BuildStoreChannels(
       store_,
       embedder_,
@@ -237,6 +295,8 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
   req.top_k = config_.rag.search_top_k;
   req.rrf_k = config_.rag.rrf_k;
   req.preview_max_bytes = config_.rag.preview_max_bytes;
+  req.max_context_tokens = config_.rag.max_context_tokens;
+  req.snippet_max_tokens = config_.rag.snippet_max_tokens;
   const auto channels = BuildStoreChannels(
       store_,
       embedder_,

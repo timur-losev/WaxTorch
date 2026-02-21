@@ -116,6 +116,28 @@ void ScenarioUnifiedSearchModesAndHybridRrf() {
   }
 }
 
+void ScenarioContextTokenBudgetClamp() {
+  waxcpp::tests::Log("scenario: context token budget clamp");
+  waxcpp::SearchRequest request{};
+  request.query = "budget";
+  request.top_k = 10;
+  request.preview_max_bytes = 256;
+  request.snippet_max_tokens = 2;
+  request.max_context_tokens = 3;
+
+  waxcpp::SearchResponse response{};
+  response.results = {
+      {.frame_id = 1, .score = 2.0F, .preview_text = std::string("one two three"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 2, .score = 1.0F, .preview_text = std::string("four five six"), .sources = {waxcpp::SearchSource::kText}},
+  };
+
+  const auto context = waxcpp::BuildFastRAGContext(request, response);
+  Require(context.items.size() == 2, "budget clamp should keep partial second item");
+  Require(context.items[0].text == "one two", "snippet per-item token clamp mismatch");
+  Require(context.items[1].text == "four", "remaining-budget truncation mismatch");
+  Require(context.total_tokens == 3, "context token budget mismatch");
+}
+
 }  // namespace
 
 int main() {
@@ -125,6 +147,7 @@ int main() {
     ScenarioPreviewClampAndTokenCount();
     ScenarioNaNScoreNormalization();
     ScenarioUnifiedSearchModesAndHybridRrf();
+    ScenarioContextTokenBudgetClamp();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
