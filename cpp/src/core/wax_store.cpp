@@ -871,7 +871,17 @@ void WaxStore::Commit() {
         break;
       }
       case core::wal::WalMutationKind::kPutEmbedding:
-        // M3/M4 scope: embedding WAL mutation is accepted in scan state, apply path is deferred.
+        if (!mutation.put_embedding.has_value()) {
+          throw StoreError("wal putEmbedding mutation missing payload");
+        }
+        if (mutation.put_embedding->frame_id >= frames.size()) {
+          throw StoreError("wal putEmbedding references unknown frame_id");
+        }
+        if (mutation.put_embedding->dimension == 0 ||
+            mutation.put_embedding->vector.size() != static_cast<std::size_t>(mutation.put_embedding->dimension)) {
+          throw StoreError("wal putEmbedding payload dimension mismatch");
+        }
+        // M4 scope note: embedding payload is WAL-validated but not persisted into TOC/index manifests yet.
         break;
     }
   }

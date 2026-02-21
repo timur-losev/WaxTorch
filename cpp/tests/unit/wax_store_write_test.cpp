@@ -156,10 +156,12 @@ void RunScenarioPutBatchContracts(const std::filesystem::path& path) {
 void RunScenarioPutEmbeddingContracts(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: putEmbedding contracts");
   auto store = waxcpp::WaxStore::Create(path);
+  const auto frame_id = store.Put({std::byte{0xE1}});
+  Require(frame_id == 0, "expected initial frame id for putEmbedding contract scenario");
   const auto pre_stats = store.Stats();
   const auto pre_wal = store.WalStats();
 
-  store.PutEmbedding(42, {0.25F, 0.50F, 0.75F});
+  store.PutEmbedding(frame_id, {0.25F, 0.50F, 0.75F});
   const auto staged_stats = store.Stats();
   const auto staged_wal = store.WalStats();
   Require(staged_stats.pending_frames == pre_stats.pending_frames,
@@ -169,8 +171,8 @@ void RunScenarioPutEmbeddingContracts(const std::filesystem::path& path) {
   store.Commit();
   const auto after_commit = store.Stats();
   const auto after_commit_wal = store.WalStats();
-  Require(after_commit.frame_count == pre_stats.frame_count,
-          "putEmbedding commit must not change frame_count without putFrame");
+  Require(after_commit.frame_count == pre_stats.frame_count + 1,
+          "commit should persist the one staged putFrame alongside putEmbedding");
   Require(after_commit.pending_frames == 0, "commit should clear pending WAL state");
   Require(after_commit_wal.committed_seq >= staged_wal.last_seq,
           "commit should checkpoint putEmbedding WAL sequence");
@@ -179,7 +181,7 @@ void RunScenarioPutEmbeddingContracts(const std::filesystem::path& path) {
   bool threw = false;
   try {
     auto reopened = waxcpp::WaxStore::Open(path);
-    reopened.PutEmbeddingBatch({7, 8}, {{0.1F}, {0.2F, 0.3F}});
+    reopened.PutEmbeddingBatch({frame_id, frame_id}, {{0.1F}, {0.2F, 0.3F}});
     reopened.Close();
   } catch (const std::exception&) {
     threw = true;
@@ -189,7 +191,7 @@ void RunScenarioPutEmbeddingContracts(const std::filesystem::path& path) {
   threw = false;
   try {
     auto reopened = waxcpp::WaxStore::Open(path);
-    reopened.PutEmbeddingBatch({7, 8}, {{0.1F}});
+    reopened.PutEmbeddingBatch({frame_id, frame_id}, {{0.1F}});
     reopened.Close();
   } catch (const std::exception&) {
     threw = true;
@@ -199,7 +201,7 @@ void RunScenarioPutEmbeddingContracts(const std::filesystem::path& path) {
   threw = false;
   try {
     auto reopened = waxcpp::WaxStore::Open(path);
-    reopened.PutEmbedding(7, {});
+    reopened.PutEmbedding(frame_id, {});
     reopened.Close();
   } catch (const std::exception&) {
     threw = true;
@@ -210,16 +212,39 @@ void RunScenarioPutEmbeddingContracts(const std::filesystem::path& path) {
 void RunScenarioPendingEmbeddingSnapshot(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: pending embedding snapshot");
   auto store = waxcpp::WaxStore::Create(path);
-  store.PutEmbedding(100, {0.1F, 0.2F});
-  store.PutEmbeddingBatch({101, 102}, {{0.3F, 0.4F}, {0.5F, 0.6F}});
+  const auto frame_ids = store.PutBatch(
+      {{std::byte{0xD1}}, {std::byte{0xD2}}, {std::byte{0xD3}}},
+      {});
+  Require(frame_ids.size() == 3, "expected 3 frame ids in pending embedding snapshot scenario");
+  store.Commit();
+
+  store.PutEmbedding(frame_ids[0], {0.1F, 0.2F});
+  store.PutEmbeddingBatch({frame_ids[1], frame_ids[2]}, {{0.3F, 0.4F}, {0.5F, 0.6F}});
 
   const auto snapshot = store.PendingEmbeddingMutations();
   Require(snapshot.embeddings.size() == 3, "expected three pending embeddings");
   Require(snapshot.latest_sequence.has_value(), "expected latest_sequence for pending embeddings");
-  Require(snapshot.embeddings[0].frame_id == 100, "unexpected first pending embedding frame_id");
-  Require(snapshot.embeddings[0].dimension == 2, "unexpected first pending embedding dimension");
-  Require(snapshot.embeddings[0].vector.size() == 2, "unexpected first pending embedding vector size");
-  Require(std::fabs(snapshot.embeddings[0].vector[0] - 0.1F) < 1e-6F, "unexpected first pending embedding value");
+  bool has_frame0 = false;
+  bool has_frame1 = false;
+  bool has_frame2 = false;
+  bool has_expected_value = false;
+  for (const auto& embedding : snapshot.embeddings) {
+    if (embedding.frame_id == frame_ids[0]) {
+      has_frame0 = true;
+      if (embedding.dimension == 2 &&
+          embedding.vector.size() == 2 &&
+          std::fabs(embedding.vector[0] - 0.1F) < 1e-6F &&
+          std::fabs(embedding.vector[1] - 0.2F) < 1e-6F) {
+        has_expected_value = true;
+      }
+    } else if (embedding.frame_id == frame_ids[1]) {
+      has_frame1 = true;
+    } else if (embedding.frame_id == frame_ids[2]) {
+      has_frame2 = true;
+    }
+  }
+  Require(has_frame0 && has_frame1 && has_frame2, "pending embedding snapshot missing expected frame ids");
+  Require(has_expected_value, "pending embedding snapshot missing expected vector payload for first frame");
 
   const auto filtered = store.PendingEmbeddingMutations(snapshot.latest_sequence);
   Require(filtered.embeddings.empty(), "since=latest_sequence should return empty pending embedding set");
@@ -235,9 +260,12 @@ void RunScenarioPendingEmbeddingSnapshot(const std::filesystem::path& path) {
 
 void RunScenarioPendingEmbeddingSnapshotReopenRecovery(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: pending embedding snapshot survives reopen recovery");
+  std::uint64_t persisted_frame_id = 0;
   {
     auto store = waxcpp::WaxStore::Create(path);
-    store.PutEmbedding(200, {1.25F, 2.5F});
+    persisted_frame_id = store.Put({std::byte{0xE2}});
+    store.Commit();
+    store.PutEmbedding(persisted_frame_id, {1.25F, 2.5F});
     // Simulate crash: no explicit Close()/Commit().
   }
 
@@ -245,13 +273,13 @@ void RunScenarioPendingEmbeddingSnapshotReopenRecovery(const std::filesystem::pa
   {
     auto reopened = waxcpp::WaxStore::Open(path);
     const auto stats = reopened.Stats();
-    Require(stats.frame_count == 0, "embedding-only pending should not affect committed frame_count on reopen");
+    Require(stats.frame_count == 1, "reopen should preserve previously committed frame_count");
     Require(stats.pending_frames == 0, "embedding-only pending should not affect pending_frames counter");
 
     const auto snapshot = reopened.PendingEmbeddingMutations();
     Require(snapshot.embeddings.size() == 1, "expected one recovered pending embedding");
     Require(snapshot.latest_sequence.has_value(), "expected latest sequence for recovered pending embedding");
-    Require(snapshot.embeddings[0].frame_id == 200, "unexpected recovered pending embedding frame_id");
+    Require(snapshot.embeddings[0].frame_id == persisted_frame_id, "unexpected recovered pending embedding frame_id");
     Require(snapshot.embeddings[0].vector.size() == 2, "unexpected recovered embedding vector size");
     first_latest = snapshot.latest_sequence;
 
@@ -269,6 +297,27 @@ void RunScenarioPendingEmbeddingSnapshotReopenRecovery(const std::filesystem::pa
     Require(after_commit.embeddings.empty(), "commit should clear recovered pending embedding");
     reopened_again.Close();
   }
+}
+
+void RunScenarioPutEmbeddingUnknownFrameRejected(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: putEmbedding unknown frame rejected at commit");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    store.PutEmbedding(999, {0.9F, 1.1F});
+    bool threw = false;
+    try {
+      store.Commit();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "commit must reject putEmbedding targeting unknown frame_id");
+    // Simulate abrupt stop; avoid Close() auto-commit retry path.
+  }
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  const auto stats = reopened.Stats();
+  Require(stats.frame_count == 0, "rejected putEmbedding commit must not change frame_count");
+  reopened.Close();
 }
 
 void RunScenarioPendingRecoveryCommit(const std::filesystem::path& path) {
@@ -715,6 +764,7 @@ int main() {
     RunScenarioPutEmbeddingContracts(path);
     RunScenarioPendingEmbeddingSnapshot(path);
     RunScenarioPendingEmbeddingSnapshotReopenRecovery(path);
+    RunScenarioPutEmbeddingUnknownFrameRejected(path);
     RunScenarioPendingRecoveryCommit(path);
     RunScenarioPendingRecoverySkipsUndecodableTail(path);
     RunScenarioDeleteAndSupersedePersist(path);
