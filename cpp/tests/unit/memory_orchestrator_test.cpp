@@ -319,6 +319,29 @@ void ScenarioRememberRespectsIngestBatchSize(const std::filesystem::path& path) 
   }
 }
 
+void ScenarioTextOnlyRecallSkipsVectorEmbedding(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: text-only recall skips vector embedding");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+  config.embedding_cache_capacity = 0;  // ensure recall would need embedder if mode gating were broken.
+
+  auto embedder = std::make_shared<CountingEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("apple story", {});
+    orchestrator.Remember("banana story", {});
+    orchestrator.Flush();
+
+    embedder->ResetCalls();
+    const auto context = orchestrator.Recall("apple");
+    Require(!context.items.empty(), "text-only recall should still return text results");
+    Require(embedder->calls() == 0, "text-only recall must not call embedder");
+    orchestrator.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -334,6 +357,7 @@ int main() {
     const auto path7 = UniquePath();
     const auto path8 = UniquePath();
     const auto path9 = UniquePath();
+    const auto path10 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioRememberFlushPersistsFrame(path1);
@@ -345,6 +369,7 @@ int main() {
     ScenarioRememberChunking(path7);
     ScenarioBatchProviderUsedForRemember(path8);
     ScenarioRememberRespectsIngestBatchSize(path9);
+    ScenarioTextOnlyRecallSkipsVectorEmbedding(path10);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -367,6 +392,8 @@ int main() {
     std::filesystem::remove(path8.string() + ".writer.lock", ec);
     std::filesystem::remove(path9, ec);
     std::filesystem::remove(path9.string() + ".writer.lock", ec);
+    std::filesystem::remove(path10, ec);
+    std::filesystem::remove(path10.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

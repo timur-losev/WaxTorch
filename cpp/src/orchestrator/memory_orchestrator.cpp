@@ -171,12 +171,16 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
   if (!request.query.has_value() || request.query->empty() || request.top_k <= 0) {
     return channels;
   }
+  const bool text_mode_enabled = request.mode.kind != SearchModeKind::kVectorOnly;
+  const bool vector_mode_enabled = request.mode.kind != SearchModeKind::kTextOnly;
+  const bool text_channel_enabled = enable_text_search && text_mode_enabled;
 
   std::optional<std::vector<float>> query_embedding = request.embedding;
-  if (!query_embedding.has_value() && enable_vector_search && embedder != nullptr) {
+  if (!query_embedding.has_value() && enable_vector_search && vector_mode_enabled && embedder != nullptr) {
     query_embedding = embedder->Embed(*request.query);
   }
-  const bool vector_channel_enabled = enable_vector_search && embedder != nullptr && query_embedding.has_value();
+  const bool vector_channel_enabled =
+      enable_vector_search && vector_mode_enabled && embedder != nullptr && query_embedding.has_value();
 
   const auto metas = store.FrameMetas();
   std::vector<DocCandidate> docs{};
@@ -191,7 +195,7 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
     const auto text = BytesToString(payload);
     docs.push_back(DocCandidate{meta.id, text});
 
-    if (enable_text_search) {
+    if (text_channel_enabled) {
       const auto text_score = TextOverlapScore(*request.query, text);
       if (text_score > 0.0F) {
         SearchResult text_result{};
