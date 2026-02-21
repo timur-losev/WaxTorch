@@ -168,6 +168,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add WAL recovery regression: undecodable tail record after valid pending putFrame does not block reopen/commit of earlier decodable mutation
 - [x] Add crash-window regression for failpoint step 4 (after header B write): reopen must observe new committed state with no pending WAL
 - [x] Wire `WaxWALStats.auto_commit_count` to real runtime state and add close-path regressions (increments only for local pending auto-commit)
+- [x] Add `PutBatch` write-path regressions (dense id allocation, pending/frame-count persistence, metadata-size contract validation)
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -334,6 +335,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added crash-window regression for commit failpoint step 4 (`header B` published): reopen verifies footer/header publication durability and zero pending WAL | Codex |
 | `cpp/src/core/wax_store.cpp` | Wired `WalStats().auto_commit_count` and increment-on-`Close` auto-commit semantics for local pending mutations only | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added `auto_commit_count` assertions for local pending close auto-commit vs recovered-pending close no-op behavior | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added `PutBatch` regressions for id sequencing, commit persistence, and metadata-size mismatch rejection | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

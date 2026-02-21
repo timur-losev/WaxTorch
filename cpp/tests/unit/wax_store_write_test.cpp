@@ -117,6 +117,41 @@ void RunScenarioPutCommitReopen(const std::filesystem::path& path) {
   reopened.Close();
 }
 
+void RunScenarioPutBatchContracts(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: putBatch contracts");
+  auto store = waxcpp::WaxStore::Create(path);
+
+  const std::vector<std::vector<std::byte>> payloads = {
+      {std::byte{0x11}},
+      {std::byte{0x12}, std::byte{0x13}},
+      {std::byte{0x14}, std::byte{0x15}, std::byte{0x16}},
+  };
+
+  const auto ids = store.PutBatch(payloads, {});
+  Require(ids.size() == payloads.size(), "PutBatch must return id for each payload");
+  Require(ids[0] == 0 && ids[1] == 1 && ids[2] == 2, "PutBatch must allocate dense monotonic frame ids");
+  Require(store.Stats().pending_frames == payloads.size(), "PutBatch must stage all mutations as pending");
+  store.Commit();
+  store.Close();
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  Require(reopened.Stats().frame_count == payloads.size(), "PutBatch commit must persist all frames");
+  reopened.Close();
+
+  bool threw = false;
+  try {
+    auto mismatch_store = waxcpp::WaxStore::Open(path);
+    const std::vector<waxcpp::Metadata> mismatched_metadata = {
+        {{"k", "v"}},
+    };
+    (void)mismatch_store.PutBatch(payloads, mismatched_metadata);
+    mismatch_store.Close();
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  Require(threw, "PutBatch must reject metadata size mismatch");
+}
+
 void RunScenarioPendingRecoveryCommit(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: pending WAL recovery then commit");
   {
@@ -526,6 +561,7 @@ int main() {
     waxcpp::tests::LogKV("wax_store_write_test_path", path.string());
 
     RunScenarioPutCommitReopen(path);
+    RunScenarioPutBatchContracts(path);
     RunScenarioPendingRecoveryCommit(path);
     RunScenarioPendingRecoverySkipsUndecodableTail(path);
     RunScenarioDeleteAndSupersedePersist(path);
