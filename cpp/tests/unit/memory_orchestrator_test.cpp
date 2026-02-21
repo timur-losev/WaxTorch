@@ -873,6 +873,40 @@ void ScenarioStructuredFactStagedOrderBeforeFlush(const std::filesystem::path& p
   }
 }
 
+void ScenarioStructuredFactCloseWithoutFlushPersistsViaStoreClose(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: structured fact close without flush persists via store close");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:noflush", "city", "berlin");
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto facts = reopened.RecallFactsByEntityPrefix("user:noflush", 10);
+    Require(facts.size() == 1, "Close() should persist structured fact without explicit Flush");
+    Require(facts[0].value == "berlin", "persisted structured fact value mismatch");
+
+    const auto context = reopened.Recall("berlin");
+    bool has_structured = false;
+    for (const auto& item : context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          has_structured = true;
+          break;
+        }
+      }
+    }
+    Require(has_structured, "reopened orchestrator should rebuild structured-text index from persisted fact");
+    reopened.Close();
+  }
+}
+
 void ScenarioStructuredMemoryRemovePersists(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: structured memory remove persists");
   waxcpp::OrchestratorConfig config{};
@@ -946,6 +980,7 @@ int main() {
     const auto path25 = UniquePath();
     const auto path26 = UniquePath();
     const auto path27 = UniquePath();
+    const auto path28 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -975,6 +1010,7 @@ int main() {
     ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(path25);
     ScenarioUseAfterCloseThrows(path26);
     ScenarioStructuredFactStagedOrderBeforeFlush(path27);
+    ScenarioStructuredFactCloseWithoutFlushPersistsViaStoreClose(path28);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -1033,6 +1069,8 @@ int main() {
     std::filesystem::remove(path26.string() + ".writer.lock", ec);
     std::filesystem::remove(path27, ec);
     std::filesystem::remove(path27.string() + ".writer.lock", ec);
+    std::filesystem::remove(path28, ec);
+    std::filesystem::remove(path28.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

@@ -160,6 +160,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add lifecycle regressions for vector and structured-memory channels: flush failure + close + reopen recovers visibility via committed-state rebuild
 - [x] Enforce post-close lifecycle contract in orchestrator (operations throw after `Close`, `Close` is idempotent)
 - [x] Add staged structured-memory ordering regression (`upsert -> upsert -> remove` before flush results in deterministic remove outcome after flush/reopen)
+- [x] Add structured-memory no-flush close regression (`RememberFact` + `Close` persists via store auto-commit and is rebuilt on reopen)
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -317,6 +318,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Added guardrails so `remember/recall/flush/fact` APIs throw after `Close`; `Close` made idempotent | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added use-after-close regression scenario and extended flush-failure close/reopen coverage across text/vector/structured channels | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added staged structured-fact ordering regression to lock final-mutation-wins semantics across flush/reopen | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added no-flush structured-fact close/reopen regression to verify store auto-commit + structured index rebuild path | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
