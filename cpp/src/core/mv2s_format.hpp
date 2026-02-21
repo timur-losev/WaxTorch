@@ -109,6 +109,9 @@ struct FrameSummary {
   std::uint8_t canonical_encoding = 0;
   std::optional<std::uint64_t> canonical_length;
   std::optional<std::array<std::byte, 32>> stored_checksum;
+  std::uint8_t status = 0;
+  std::optional<std::uint64_t> supersedes;
+  std::optional<std::uint64_t> superseded_by;
 };
 
 struct SegmentSummary {

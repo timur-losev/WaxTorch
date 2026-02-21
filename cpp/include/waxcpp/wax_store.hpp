@@ -55,14 +55,21 @@ class WaxStore {
 
   std::filesystem::path path_;
   std::uint64_t file_generation_ = 0;
+  std::uint64_t header_page_generation_ = 0;
+  std::uint64_t wal_offset_ = 0;
   std::uint64_t wal_size_ = 0;
   std::uint64_t wal_committed_seq_ = 0;
   std::uint64_t wal_write_pos_ = 0;
   std::uint64_t wal_checkpoint_pos_ = 0;
   std::uint64_t wal_pending_bytes_ = 0;
   std::uint64_t wal_last_sequence_ = 0;
+  std::uint64_t wal_wrap_count_ = 0;
+  std::uint64_t wal_checkpoint_count_ = 0;
+  std::uint64_t wal_sentinel_write_count_ = 0;
+  std::uint64_t wal_write_call_count_ = 0;
   std::uint64_t wal_replay_snapshot_hit_count_ = 0;
   std::uint64_t footer_offset_ = 0;
+  std::uint64_t next_frame_id_ = 0;
   bool dirty_ = false;
   bool is_open_ = false;
   WaxStats stats_{};

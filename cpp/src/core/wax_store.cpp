@@ -3,13 +3,17 @@
 #include "mv2s_format.hpp"
 #include "sha256.hpp"
 #include "wal_ring.hpp"
+#include "wax_store_test_hooks.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstring>
 #include <fstream>
 #include <limits>
 #include <optional>
-#include <vector>
 #include <stdexcept>
+#include <vector>
 
 namespace waxcpp {
 namespace {
@@ -17,9 +21,20 @@ namespace {
 using core::mv2s::Footer;
 using core::mv2s::FooterSlice;
 using core::mv2s::HeaderPage;
+std::atomic<std::uint32_t> g_test_commit_fail_step{0};
 
 std::runtime_error StoreError(const std::string& message) {
   return std::runtime_error("wax_store: " + message);
+}
+
+void MaybeInjectCommitCrash(std::uint32_t step) {
+  const auto requested_step = g_test_commit_fail_step.load(std::memory_order_relaxed);
+  if (requested_step == 0) {
+    return;
+  }
+  if (requested_step == step) {
+    throw StoreError("injected crash-window failure at commit step " + std::to_string(step));
+  }
 }
 
 std::uint64_t FileSize(const std::filesystem::path& path) {
@@ -60,6 +75,118 @@ void WriteAt(std::ofstream& out, std::uint64_t offset, std::span<const std::byte
   if (!out) {
     throw StoreError("failed to write bytes");
   }
+}
+
+void WriteBytesAt(const std::filesystem::path& path, std::uint64_t offset, std::span<const std::byte> bytes) {
+  if (bytes.empty()) {
+    return;
+  }
+  std::fstream out(path, std::ios::binary | std::ios::in | std::ios::out);
+  if (!out) {
+    std::ofstream create(path, std::ios::binary | std::ios::trunc);
+    if (!create) {
+      throw StoreError("failed to create file for write: " + path.string());
+    }
+    create.close();
+    out.open(path, std::ios::binary | std::ios::in | std::ios::out);
+  }
+  if (!out) {
+    throw StoreError("failed to open file for write: " + path.string());
+  }
+  out.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
+  if (!out) {
+    throw StoreError("failed to seek for write");
+  }
+  out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  if (!out) {
+    throw StoreError("failed to write bytes");
+  }
+}
+
+void ResizeFile(const std::filesystem::path& path, std::uint64_t size) {
+  std::error_code ec;
+  std::filesystem::resize_file(path, size, ec);
+  if (ec) {
+    throw StoreError("failed to resize file: " + ec.message());
+  }
+}
+
+void AppendU8(std::vector<std::byte>& out, std::uint8_t value) {
+  out.push_back(static_cast<std::byte>(value));
+}
+
+void AppendLE32(std::vector<std::byte>& out, std::uint32_t value) {
+  for (std::size_t i = 0; i < 4; ++i) {
+    out.push_back(static_cast<std::byte>((value >> (8U * i)) & 0xFFU));
+  }
+}
+
+void AppendLE64(std::vector<std::byte>& out, std::uint64_t value) {
+  for (std::size_t i = 0; i < 8; ++i) {
+    out.push_back(static_cast<std::byte>((value >> (8U * i)) & 0xFFU));
+  }
+}
+
+void AppendFixed(std::vector<std::byte>& out, std::span<const std::byte> bytes) {
+  out.insert(out.end(), bytes.begin(), bytes.end());
+}
+
+std::vector<std::byte> BuildWalPutFramePayload(std::uint64_t frame_id,
+                                               std::uint64_t payload_offset,
+                                               std::uint64_t payload_length,
+                                               std::uint8_t canonical_encoding,
+                                               std::uint64_t canonical_length,
+                                               std::span<const std::byte, 32> canonical_checksum,
+                                               std::span<const std::byte, 32> stored_checksum) {
+  std::vector<std::byte> payload{};
+  payload.reserve(256);
+  AppendU8(payload, 0x01);  // putFrame
+  AppendLE64(payload, frame_id);
+  AppendLE64(payload, 0);   // timestampMs
+
+  // FrameMetaSubset optional fields (none set yet in C++ port).
+  AppendU8(payload, 0);   // uri?
+  AppendU8(payload, 0);   // title?
+  AppendU8(payload, 0);   // kind?
+  AppendU8(payload, 0);   // track?
+  AppendLE32(payload, 0); // tags.count
+  AppendLE32(payload, 0); // labels.count
+  AppendLE32(payload, 0); // contentDates.count
+  AppendU8(payload, 0);   // role?
+  AppendU8(payload, 0);   // parentId?
+  AppendU8(payload, 0);   // chunkIndex?
+  AppendU8(payload, 0);   // chunkCount?
+  AppendU8(payload, 0);   // chunkManifest?
+  AppendU8(payload, 0);   // status?
+  AppendU8(payload, 0);   // supersedes?
+  AppendU8(payload, 0);   // supersededBy?
+  AppendU8(payload, 0);   // searchText?
+  AppendU8(payload, 0);   // metadata?
+
+  AppendLE64(payload, payload_offset);
+  AppendLE64(payload, payload_length);
+  AppendU8(payload, canonical_encoding);
+  AppendLE64(payload, canonical_length);
+  AppendFixed(payload, canonical_checksum);
+  AppendFixed(payload, stored_checksum);
+  return payload;
+}
+
+std::vector<std::byte> BuildWalDeletePayload(std::uint64_t frame_id) {
+  std::vector<std::byte> payload{};
+  payload.reserve(1 + 8);
+  AppendU8(payload, 0x02);  // deleteFrame
+  AppendLE64(payload, frame_id);
+  return payload;
+}
+
+std::vector<std::byte> BuildWalSupersedePayload(std::uint64_t superseded_id, std::uint64_t superseding_id) {
+  std::vector<std::byte> payload{};
+  payload.reserve(1 + 8 + 8);
+  AppendU8(payload, 0x03);  // supersedeFrame
+  AppendLE64(payload, superseded_id);
+  AppendLE64(payload, superseding_id);
+  return payload;
 }
 
 std::optional<HeaderPage> TryDecodeHeader(const std::filesystem::path& path, std::uint64_t offset) {
@@ -295,6 +422,18 @@ void ValidateDataRanges(const std::vector<core::mv2s::FrameSummary>& frames,
 
 }  // namespace
 
+namespace core::testing {
+
+void SetCommitFailStep(std::uint32_t step) {
+  g_test_commit_fail_step.store(step, std::memory_order_relaxed);
+}
+
+void ClearCommitFailStep() {
+  g_test_commit_fail_step.store(0, std::memory_order_relaxed);
+}
+
+}  // namespace core::testing
+
 WaxStore WaxStore::Create(const std::filesystem::path& path) {
   if (path.has_parent_path()) {
     std::error_code ec;
@@ -365,25 +504,311 @@ void WaxStore::Verify(bool deep) {
   LoadState(deep, false);
 }
 
-std::uint64_t WaxStore::Put(const std::vector<std::byte>& /*content*/, const Metadata& /*metadata*/) {
-  throw std::runtime_error("WaxStore::Put not implemented");
+std::uint64_t WaxStore::Put(const std::vector<std::byte>& content, const Metadata& /*metadata*/) {
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
+
+  const auto frame_id = next_frame_id_;
+  const auto payload_offset = FileSize(path_);
+  const auto payload_length = static_cast<std::uint64_t>(content.size());
+  const auto stored_checksum = core::Sha256Digest(content);
+  const auto canonical_checksum = stored_checksum;
+  const std::uint8_t canonical_encoding = 0;  // plain
+  const auto canonical_length = payload_length;
+
+  if (!content.empty()) {
+    WriteBytesAt(path_, payload_offset, content);
+  }
+
+  core::wal::WalRingWriter writer(path_,
+                                  wal_offset_,
+                                  wal_size_,
+                                  wal_write_pos_,
+                                  wal_checkpoint_pos_,
+                                  wal_pending_bytes_,
+                                  wal_last_sequence_,
+                                  wal_wrap_count_,
+                                  wal_checkpoint_count_,
+                                  wal_sentinel_write_count_,
+                                  wal_write_call_count_);
+  const auto wal_payload = BuildWalPutFramePayload(frame_id,
+                                                   payload_offset,
+                                                   payload_length,
+                                                   canonical_encoding,
+                                                   canonical_length,
+                                                   canonical_checksum,
+                                                   stored_checksum);
+  (void)writer.Append(wal_payload);
+
+  wal_write_pos_ = writer.write_pos();
+  wal_checkpoint_pos_ = writer.checkpoint_pos();
+  wal_pending_bytes_ = writer.pending_bytes();
+  wal_last_sequence_ = writer.last_sequence();
+  wal_wrap_count_ = writer.wrap_count();
+  wal_checkpoint_count_ = writer.checkpoint_count();
+  wal_sentinel_write_count_ = writer.sentinel_write_count();
+  wal_write_call_count_ = writer.write_call_count();
+
+  stats_.pending_frames += 1;
+  next_frame_id_ = frame_id + 1;
+  dirty_ = true;
+  return frame_id;
 }
 
-std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std::byte>>& /*contents*/,
-                                              const std::vector<Metadata>& /*metadatas*/) {
-  throw std::runtime_error("WaxStore::PutBatch not implemented");
+std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std::byte>>& contents,
+                                              const std::vector<Metadata>& metadatas) {
+  if (!metadatas.empty() && metadatas.size() != contents.size()) {
+    throw StoreError("PutBatch metadatas size must be zero or match contents size");
+  }
+  std::vector<std::uint64_t> ids{};
+  ids.reserve(contents.size());
+  for (std::size_t i = 0; i < contents.size(); ++i) {
+    const Metadata* metadata = metadatas.empty() ? nullptr : &metadatas[i];
+    ids.push_back(Put(contents[i], metadata ? *metadata : Metadata{}));
+  }
+  return ids;
 }
 
-void WaxStore::Delete(std::uint64_t /*frame_id*/) {
-  throw std::runtime_error("WaxStore::Delete not implemented");
+void WaxStore::Delete(std::uint64_t frame_id) {
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
+  if (frame_id >= next_frame_id_) {
+    throw StoreError("delete frame_id out of range");
+  }
+
+  core::wal::WalRingWriter writer(path_,
+                                  wal_offset_,
+                                  wal_size_,
+                                  wal_write_pos_,
+                                  wal_checkpoint_pos_,
+                                  wal_pending_bytes_,
+                                  wal_last_sequence_,
+                                  wal_wrap_count_,
+                                  wal_checkpoint_count_,
+                                  wal_sentinel_write_count_,
+                                  wal_write_call_count_);
+  const auto wal_payload = BuildWalDeletePayload(frame_id);
+  (void)writer.Append(wal_payload);
+
+  wal_write_pos_ = writer.write_pos();
+  wal_checkpoint_pos_ = writer.checkpoint_pos();
+  wal_pending_bytes_ = writer.pending_bytes();
+  wal_last_sequence_ = writer.last_sequence();
+  wal_wrap_count_ = writer.wrap_count();
+  wal_checkpoint_count_ = writer.checkpoint_count();
+  wal_sentinel_write_count_ = writer.sentinel_write_count();
+  wal_write_call_count_ = writer.write_call_count();
+  dirty_ = true;
 }
 
-void WaxStore::Supersede(std::uint64_t /*superseded_id*/, std::uint64_t /*superseding_id*/) {
-  throw std::runtime_error("WaxStore::Supersede not implemented");
+void WaxStore::Supersede(std::uint64_t superseded_id, std::uint64_t superseding_id) {
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
+  if (superseded_id == superseding_id) {
+    throw StoreError("supersede self-reference is not allowed");
+  }
+  if (superseded_id >= next_frame_id_ || superseding_id >= next_frame_id_) {
+    throw StoreError("supersede frame_id out of range");
+  }
+
+  core::wal::WalRingWriter writer(path_,
+                                  wal_offset_,
+                                  wal_size_,
+                                  wal_write_pos_,
+                                  wal_checkpoint_pos_,
+                                  wal_pending_bytes_,
+                                  wal_last_sequence_,
+                                  wal_wrap_count_,
+                                  wal_checkpoint_count_,
+                                  wal_sentinel_write_count_,
+                                  wal_write_call_count_);
+  const auto wal_payload = BuildWalSupersedePayload(superseded_id, superseding_id);
+  (void)writer.Append(wal_payload);
+
+  wal_write_pos_ = writer.write_pos();
+  wal_checkpoint_pos_ = writer.checkpoint_pos();
+  wal_pending_bytes_ = writer.pending_bytes();
+  wal_last_sequence_ = writer.last_sequence();
+  wal_wrap_count_ = writer.wrap_count();
+  wal_checkpoint_count_ = writer.checkpoint_count();
+  wal_sentinel_write_count_ = writer.sentinel_write_count();
+  wal_write_call_count_ = writer.write_call_count();
+  dirty_ = true;
 }
 
 void WaxStore::Commit() {
-  throw std::runtime_error("WaxStore::Commit not implemented");
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
+  if (!dirty_) {
+    return;
+  }
+
+  const auto file_size = FileSize(path_);
+  const auto footer_slice = TryReadFooterAt(path_, file_size, footer_offset_);
+  if (!footer_slice.has_value()) {
+    throw StoreError("current footer is missing or invalid");
+  }
+  auto toc_summary = core::mv2s::DecodeToc(footer_slice->toc_bytes);
+  auto frames = toc_summary.frames;
+
+  auto pending_scan = core::wal::ScanPendingMutationsWithState(path_,
+                                                                wal_offset_,
+                                                                wal_size_,
+                                                                wal_checkpoint_pos_,
+                                                                wal_committed_seq_);
+  for (const auto& mutation : pending_scan.pending_mutations) {
+    switch (mutation.kind) {
+      case core::wal::WalMutationKind::kPutFrame: {
+        if (!mutation.put_frame.has_value()) {
+          throw StoreError("wal putFrame mutation missing payload");
+        }
+        const auto& put = *mutation.put_frame;
+        if (put.frame_id != frames.size()) {
+          throw StoreError("wal putFrame frame_id is not dense");
+        }
+        core::mv2s::FrameSummary frame{};
+        frame.id = put.frame_id;
+        frame.payload_offset = put.payload_offset;
+        frame.payload_length = put.payload_length;
+        frame.payload_checksum = put.canonical_checksum;
+        frame.canonical_encoding = put.canonical_encoding;
+        if (put.canonical_encoding != 0) {
+          frame.canonical_length = put.canonical_length;
+        }
+        if (put.payload_length > 0) {
+          frame.stored_checksum = put.stored_checksum;
+        }
+        frame.status = 0;
+        frames.push_back(frame);
+        break;
+      }
+      case core::wal::WalMutationKind::kDeleteFrame: {
+        if (!mutation.delete_frame.has_value()) {
+          throw StoreError("wal delete mutation missing payload");
+        }
+        const auto frame_id = mutation.delete_frame->frame_id;
+        if (frame_id >= frames.size()) {
+          throw StoreError("wal delete references unknown frame_id");
+        }
+        frames[static_cast<std::size_t>(frame_id)].status = 1;
+        break;
+      }
+      case core::wal::WalMutationKind::kSupersedeFrame: {
+        if (!mutation.supersede_frame.has_value()) {
+          throw StoreError("wal supersede mutation missing payload");
+        }
+        const auto superseded_id = mutation.supersede_frame->superseded_id;
+        const auto superseding_id = mutation.supersede_frame->superseding_id;
+        if (superseded_id >= frames.size() || superseding_id >= frames.size()) {
+          throw StoreError("wal supersede references unknown frame_id");
+        }
+        if (superseded_id == superseding_id) {
+          throw StoreError("wal supersede self-reference");
+        }
+        frames[static_cast<std::size_t>(superseded_id)].superseded_by = superseding_id;
+        frames[static_cast<std::size_t>(superseding_id)].supersedes = superseded_id;
+        break;
+      }
+      case core::wal::WalMutationKind::kPutEmbedding:
+        // M3/M4 scope: embedding WAL mutation is accepted in scan state, apply path is deferred.
+        break;
+    }
+  }
+
+  const auto toc_bytes = core::mv2s::EncodeTocV1(frames);
+  std::uint64_t data_end = wal_offset_ + wal_size_;
+  for (const auto& frame : frames) {
+    if (frame.payload_length == 0) {
+      continue;
+    }
+    if (frame.payload_offset > std::numeric_limits<std::uint64_t>::max() - frame.payload_length) {
+      throw StoreError("frame payload range overflow during commit");
+    }
+    const auto frame_end = frame.payload_offset + frame.payload_length;
+    if (frame_end > data_end) {
+      data_end = frame_end;
+    }
+  }
+
+  const auto toc_offset = data_end;
+  const auto footer_offset = toc_offset + toc_bytes.size();
+  Footer footer{};
+  footer.toc_len = toc_bytes.size();
+  std::copy(toc_bytes.end() - 32, toc_bytes.end(), footer.toc_hash.begin());
+  footer.generation = file_generation_ + 1;
+  footer.wal_committed_seq = pending_scan.state.last_sequence;
+  const auto footer_bytes = core::mv2s::EncodeFooter(footer);
+
+  WriteBytesAt(path_, toc_offset, toc_bytes);
+  MaybeInjectCommitCrash(1);
+  WriteBytesAt(path_, footer_offset, footer_bytes);
+  ResizeFile(path_, footer_offset + core::mv2s::kFooterSize);
+  MaybeInjectCommitCrash(2);
+
+  core::wal::WalRingWriter writer(path_,
+                                  wal_offset_,
+                                  wal_size_,
+                                  pending_scan.state.write_pos,
+                                  wal_checkpoint_pos_,
+                                  pending_scan.state.pending_bytes,
+                                  pending_scan.state.last_sequence,
+                                  wal_wrap_count_,
+                                  wal_checkpoint_count_,
+                                  wal_sentinel_write_count_,
+                                  wal_write_call_count_);
+  writer.RecordCheckpoint();
+
+  HeaderPage page_a{};
+  page_a.header_page_generation = header_page_generation_ + 1;
+  page_a.file_generation = footer.generation;
+  page_a.footer_offset = footer_offset;
+  page_a.wal_offset = wal_offset_;
+  page_a.wal_size = wal_size_;
+  page_a.wal_write_pos = writer.write_pos();
+  page_a.wal_checkpoint_pos = writer.checkpoint_pos();
+  page_a.wal_committed_seq = footer.wal_committed_seq;
+  page_a.toc_checksum = footer.toc_hash;
+  page_a.replay_snapshot = core::mv2s::ReplaySnapshot{
+      .file_generation = footer.generation,
+      .wal_committed_seq = footer.wal_committed_seq,
+      .footer_offset = footer_offset,
+      .wal_write_pos = writer.write_pos(),
+      .wal_checkpoint_pos = writer.checkpoint_pos(),
+      .wal_pending_bytes = writer.pending_bytes(),
+      .wal_last_sequence = writer.last_sequence(),
+  };
+
+  auto page_b = page_a;
+  page_b.header_page_generation = header_page_generation_;
+  const auto page_a_bytes = core::mv2s::EncodeHeaderPage(page_a);
+  const auto page_b_bytes = core::mv2s::EncodeHeaderPage(page_b);
+  WriteBytesAt(path_, 0, page_a_bytes);
+  MaybeInjectCommitCrash(3);
+  WriteBytesAt(path_, core::mv2s::kHeaderPageSize, page_b_bytes);
+  MaybeInjectCommitCrash(4);
+
+  file_generation_ = footer.generation;
+  header_page_generation_ = page_a.header_page_generation;
+  wal_committed_seq_ = footer.wal_committed_seq;
+  wal_write_pos_ = writer.write_pos();
+  wal_checkpoint_pos_ = writer.checkpoint_pos();
+  wal_pending_bytes_ = writer.pending_bytes();
+  wal_last_sequence_ = writer.last_sequence();
+  wal_wrap_count_ = writer.wrap_count();
+  wal_checkpoint_count_ = writer.checkpoint_count();
+  wal_sentinel_write_count_ = writer.sentinel_write_count();
+  wal_write_call_count_ = writer.write_call_count();
+  footer_offset_ = footer_offset;
+  dirty_ = false;
+
+  stats_.generation = file_generation_;
+  stats_.frame_count = frames.size();
+  stats_.pending_frames = 0;
+  next_frame_id_ = frames.size();
 }
 
 void WaxStore::Close() {
@@ -402,6 +827,10 @@ WaxWALStats WaxStore::WalStats() const {
   stats.pending_bytes = wal_pending_bytes_;
   stats.committed_seq = wal_committed_seq_;
   stats.last_seq = wal_last_sequence_;
+  stats.wrap_count = wal_wrap_count_;
+  stats.checkpoint_count = wal_checkpoint_count_;
+  stats.sentinel_write_count = wal_sentinel_write_count_;
+  stats.write_call_count = wal_write_call_count_;
   stats.replay_snapshot_hit_count = wal_replay_snapshot_hit_count_;
   return stats;
 }
@@ -511,12 +940,20 @@ void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
 
   std::uint64_t required_end = footer_slice->footer_offset + core::mv2s::kFooterSize;
   std::uint64_t pending_put_frames = 0;
+  std::uint64_t pending_max_frame_id_plus_one = toc_summary.frames.size();
   for (const auto& mutation : pending_mutations) {
     if (!mutation.put_frame.has_value()) {
       continue;
     }
     ++pending_put_frames;
     const auto& put = *mutation.put_frame;
+    if (put.frame_id == std::numeric_limits<std::uint64_t>::max()) {
+      throw StoreError("pending WAL putFrame frame_id overflow");
+    }
+    const auto put_next = put.frame_id + 1;
+    if (put_next > pending_max_frame_id_plus_one) {
+      pending_max_frame_id_plus_one = put_next;
+    }
     if (put.payload_offset > std::numeric_limits<std::uint64_t>::max() - put.payload_length) {
       throw StoreError("pending WAL putFrame payload range overflow");
     }
@@ -538,15 +975,22 @@ void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
   }
 
   file_generation_ = footer_slice->footer.generation;
+  header_page_generation_ = selected.header_page_generation;
+  wal_offset_ = selected.wal_offset;
   wal_size_ = selected.wal_size;
   wal_committed_seq_ = committed_seq;
   wal_write_pos_ = wal_scan_state.write_pos;
   wal_checkpoint_pos_ = effective_checkpoint_pos;
   wal_pending_bytes_ = effective_pending_bytes;
   wal_last_sequence_ = last_sequence;
+  wal_wrap_count_ = 0;
+  wal_checkpoint_count_ = 0;
+  wal_sentinel_write_count_ = 0;
+  wal_write_call_count_ = 0;
   wal_replay_snapshot_hit_count_ = used_replay_snapshot ? 1U : 0U;
   footer_offset_ = footer_slice->footer_offset;
-  dirty_ = !pending_mutations.empty();
+  next_frame_id_ = pending_max_frame_id_plus_one;
+  dirty_ = wal_scan_state.last_sequence > committed_seq;
   is_open_ = true;
   (void)file_size;
   (void)used_replay_snapshot;

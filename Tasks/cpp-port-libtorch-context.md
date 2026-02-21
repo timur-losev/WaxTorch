@@ -2,7 +2,7 @@
 
 **Created**: 2026-02-18
 **Last Updated**: 2026-02-21
-**Current Phase**: M3 incremental implementation (WAL pending scan + open-state parity)
+**Current Phase**: M3 incremental implementation (WAL read/write primitives + open-state parity)
 **Next Agent**: wax-rag-specialist
 
 ## Task Summary
@@ -79,6 +79,15 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add clean-WAL cursor normalization regression test (`scanState.lastSequence <= committed` path aligns write/checkpoint)
 - [x] Add `WaxStore::Open(path, repair)` overload to mirror Swift open/repair control
 - [x] Extend WAL pending mutation decode model with delete/supersede/putEmbedding payload fields
+- [x] Add C++ WAL write-side primitive (`WalRingWriter`) with Swift-like append/capacity/padding-wrap/sentinel semantics
+- [x] Add checkpoint primitive (`RecordCheckpoint`) and writer instrumentation counters for WAL state parity
+- [x] Add dedicated writer-side WAL unit coverage (`inline sentinel`, `padding wrap`, `capacity guard`, `separate sentinel write`)
+- [x] Wire basic `WaxStore` write-path to WAL writer (`Put`, `PutBatch`, `Delete`, `Supersede`)
+- [x] Implement baseline `WaxStore::Commit` apply path for decoded pending WAL mutations (`putFrame/delete/supersede`)
+- [x] Persist frame lifecycle fields in TOC codec (`status`, `supersedes`, `superseded_by`) for commit/reopen continuity
+- [x] Add write-path integration unit coverage (`put/commit/reopen`, pending recovery commit, delete+supersede TOC persistence)
+- [x] Add deterministic crash-window failpoints for C++ commit pipeline (after TOC/footer/headerA/headerB steps)
+- [x] Add crash-window recovery tests (reopen outcomes for pre-footer, post-footer, and single-header-published failures)
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -124,6 +133,21 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/core/wal_ring.hpp` | Added WAL record header model, pending mutation scan types, and reader interfaces (`IsTerminalMarker`, `ScanWalState`, `ScanPendingMutationsWithState`) | Codex |
 | `cpp/src/core/wal_ring.cpp` | Added WAL state scanner, terminal marker detection, and pending mutation payload decode for `putFrame/delete/supersede/putEmbedding` with decoded payload metadata | Codex |
 | `cpp/tests/unit/wal_ring_test.cpp` | Added focused WAL ring test coverage for sentinel detection, decode-stop semantics, wrap/padding handling, and scan-state consistency | Codex |
+| `cpp/src/core/wal_ring.hpp` | Added `WalRingWriter` interface (append/canAppend/checkpoint + writer counters/state accessors) | Codex |
+| `cpp/src/core/wal_ring.cpp` | Added `WalRingWriter` implementation with padding wrap handling, inline/separate sentinel writes, and capacity guards | Codex |
+| `cpp/tests/unit/wal_ring_writer_test.cpp` | Added writer-side WAL tests for append semantics, wrap padding parity, checkpoint reset, and capacity overflow behavior | Codex |
+| `cpp/CMakeLists.txt` | Added `waxcpp_wal_ring_writer_test` target to C++ test matrix | Codex |
+| `cpp/src/core/mv2s_format.hpp` | Extended frame summary model with lifecycle fields (`status`, `supersedes`, `superseded_by`) | Codex |
+| `cpp/src/core/mv2s_format.cpp` | Wired TOC encode/decode for frame lifecycle fields to preserve delete/supersede semantics across commit/reopen | Codex |
+| `cpp/src/core/wal_ring.hpp` | Extended decoded WAL putFrame payload model with canonical/stored checksum + canonical metadata fields | Codex |
+| `cpp/src/core/wal_ring.cpp` | Decodes WAL putFrame canonical/stored checksums for commit-time apply after recovery | Codex |
+| `cpp/src/core/wax_store.cpp` | Implemented WAL-backed write operations (`Put/PutBatch/Delete/Supersede`), commit apply path, header/footer rewrite on commit, and WAL stats counter plumbing | Codex |
+| `cpp/include/waxcpp/wax_store.hpp` | Added internal header/WAL runtime fields needed by write-path + commit sequencing | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added write-path scenarios covering commit persistence and pending WAL recovery behavior | Codex |
+| `cpp/CMakeLists.txt` | Added `waxcpp_wax_store_write_test` target to C++ test matrix | Codex |
+| `cpp/src/core/wax_store_test_hooks.hpp` | Added test-only commit failpoint hooks for deterministic crash-window simulation | Codex |
+| `cpp/src/core/wax_store.cpp` | Added step-based commit failpoint injection and wired crash-window hooks | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added crash-window tests for failures after TOC, after footer, and after header A publication | Codex |
 | `cpp/src/core/wax_store.cpp` | Replaced pending-WAL fail gate with Swift-like pending scan integration, `requiredEnd` protection, open-time trailing-byte repair, non-mutating verify path, `Open(path, repair)` control, internal WAL state capture, and `WalStats()` reporting | Codex |
 | `cpp/include/waxcpp/wax_store.hpp` | Added internal WAL runtime state fields plus public `WaxWALStats`/`WalStats()` API and `Open(path, repair)` overload | Codex |
 | `cpp/tests/unit/wax_store_verify_test.cpp` | Extended WAL parity scenarios with tail-repair checks, explicit WAL-state assertions, non-mutating verify regression, clean-WAL cursor normalization coverage, and `open(repair=false)` regression | Codex |
@@ -143,7 +167,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - **Invariants in play**: 1, 2, 4, 6, 7, 8, 9 explicitly tracked; M2 work directly advances deterministic retrieval and two-phase safety foundations.
 
 ## Handoff Notes
-M1 and M2 are complete. M3 has advanced from read-side guards to pending scan + repair parity behavior: C++ now parses WAL headers, detects terminal markers for replay snapshot/header cursor fast paths, scans pending mutations with Swift-compatible decode-stop semantics, validates pending putFrame payload ranges, truncates trailing bytes on open while preserving bytes referenced by pending putFrame, and stores effective WAL open-state internally. Full mutation apply/replay into committed state is still pending.
+M1 and M2 are complete. M3 now includes both read-side and write-side WAL primitives plus baseline store write integration: C++ parses WAL headers, detects terminal markers for replay snapshot/header cursor fast paths, scans pending mutations with Swift-compatible decode-stop semantics, validates pending putFrame payload ranges, truncates trailing bytes on open while preserving bytes referenced by pending putFrame, stores effective WAL open-state internally, supports WAL append/capacity/padding-wrap/sentinel/checkpoint behavior via `WalRingWriter`, and wires that into `WaxStore::Put/PutBatch/Delete/Supersede/Commit`. `Commit` applies decoded pending WAL mutations into TOC, writes new footer/header generations, and checkpoints WAL cursor state. Crash-window behavior is now covered by deterministic failpoint tests for post-TOC/pre-footer, post-footer/pre-header, and single-header-published windows. Remaining gap is full parity hardening for advanced mutation semantics/index coupling and replay edge equivalence beyond current scope.
 
 ## Open Questions
 1. Final remote for `cpp/third_party/libtorch-dist` should be replaced with dedicated artifact mirror before release.

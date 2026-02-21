@@ -500,9 +500,24 @@ std::vector<std::byte> EncodeTocV1(std::span<const FrameSummary> frames) {
     builder.AppendU8(0);  // chunk_count absent
     builder.AppendU8(0);  // chunk_manifest absent
 
-    builder.AppendU8(0);  // status
-    builder.AppendU8(0);  // supersedes absent
-    builder.AppendU8(0);  // superseded_by absent
+    if (frame.status > 1) {
+      throw FormatError("invalid frame status in frame summary");
+    }
+    builder.AppendU8(frame.status);
+
+    if (frame.supersedes.has_value()) {
+      builder.AppendU8(1);
+      builder.AppendU64(*frame.supersedes);
+    } else {
+      builder.AppendU8(0);
+    }
+
+    if (frame.superseded_by.has_value()) {
+      builder.AppendU8(1);
+      builder.AppendU64(*frame.superseded_by);
+    } else {
+      builder.AppendU8(0);
+    }
   }
 
   builder.AppendU8(0);  // indexes.lex optional absent
@@ -667,12 +682,12 @@ TocSummary DecodeToc(std::span<const std::byte> toc_bytes) {
     ReadOptional(cursor, [&]() { (void)cursor.ReadU32(); }, "chunk_count");
     ReadOptional(cursor, [&]() { (void)cursor.ReadBytesLen32(kMaxBlobBytes, "chunk_manifest"); }, "chunk_manifest");
 
-    const auto status = cursor.ReadU8();
-    if (status > 1) {
+    frame.status = cursor.ReadU8();
+    if (frame.status > 1) {
       throw FormatError("invalid frame status");
     }
-    ReadOptional(cursor, [&]() { (void)cursor.ReadU64(); }, "supersedes");
-    ReadOptional(cursor, [&]() { (void)cursor.ReadU64(); }, "superseded_by");
+    ReadOptional(cursor, [&]() { frame.supersedes = cursor.ReadU64(); }, "supersedes");
+    ReadOptional(cursor, [&]() { frame.superseded_by = cursor.ReadU64(); }, "superseded_by");
 
     if (frame.canonical_encoding != 0 && !has_canonical_length) {
       throw FormatError("missing canonical_length for compressed frame");

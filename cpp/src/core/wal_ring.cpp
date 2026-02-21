@@ -4,6 +4,7 @@
 #include "sha256.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -62,6 +63,62 @@ std::array<std::byte, 32> EmptyPayloadChecksum() {
   return checksum;
 }
 
+void WriteLE64(std::span<std::byte> out, std::size_t offset, std::uint64_t value) {
+  if (offset + sizeof(std::uint64_t) > out.size()) {
+    throw WalError("WriteLE64 out of range");
+  }
+  for (std::size_t i = 0; i < sizeof(std::uint64_t); ++i) {
+    out[offset + i] = static_cast<std::byte>((value >> (8U * i)) & 0xFFU);
+  }
+}
+
+void WriteLE32(std::span<std::byte> out, std::size_t offset, std::uint32_t value) {
+  if (offset + sizeof(std::uint32_t) > out.size()) {
+    throw WalError("WriteLE32 out of range");
+  }
+  for (std::size_t i = 0; i < sizeof(std::uint32_t); ++i) {
+    out[offset + i] = static_cast<std::byte>((value >> (8U * i)) & 0xFFU);
+  }
+}
+
+std::array<std::byte, kRecordHeaderSize> BuildWalRecordHeader(std::uint64_t sequence,
+                                                              std::uint32_t length,
+                                                              std::uint32_t flags,
+                                                              const std::array<std::byte, 32>& checksum) {
+  std::array<std::byte, kRecordHeaderSize> header{};
+  WriteLE64(header, 0, sequence);
+  WriteLE32(header, 8, length);
+  WriteLE32(header, 12, flags);
+  std::copy(checksum.begin(), checksum.end(), header.begin() + 16);
+  return header;
+}
+
+std::vector<std::byte> BuildWalDataRecord(std::uint64_t sequence,
+                                          std::uint32_t flags,
+                                          std::span<const std::byte> payload) {
+  if (payload.empty()) {
+    throw WalError("wal payload must be non-empty");
+  }
+  if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
+    throw WalError("wal payload exceeds UInt32.max");
+  }
+  const auto checksum = Sha256Digest(payload);
+  const auto header = BuildWalRecordHeader(sequence,
+                                           static_cast<std::uint32_t>(payload.size()),
+                                           flags,
+                                           checksum);
+  std::vector<std::byte> out{};
+  out.reserve(static_cast<std::size_t>(kRecordHeaderSize) + payload.size());
+  out.insert(out.end(), header.begin(), header.end());
+  out.insert(out.end(), payload.begin(), payload.end());
+  return out;
+}
+
+std::array<std::byte, kRecordHeaderSize> BuildWalPaddingRecord(std::uint64_t sequence,
+                                                               std::uint32_t skip_bytes) {
+  return BuildWalRecordHeader(sequence, skip_bytes, kFlagIsPadding, EmptyPayloadChecksum());
+}
+
 class PayloadCursor {
  public:
   explicit PayloadCursor(std::span<const std::byte> bytes) : bytes_(bytes) {}
@@ -92,6 +149,14 @@ class PayloadCursor {
     std::int64_t out = 0;
     static_assert(sizeof(out) == sizeof(raw));
     std::memcpy(&out, &raw, sizeof(out));
+    return out;
+  }
+
+  std::vector<std::byte> ReadFixed(std::size_t count, const char* context) {
+    EnsureAvailable(count, context);
+    std::vector<std::byte> out(count);
+    std::copy_n(bytes_.begin() + static_cast<std::ptrdiff_t>(cursor_), count, out.begin());
+    cursor_ += count;
     return out;
   }
 
@@ -253,13 +318,19 @@ WalPendingMutationInfo DecodeWalMutationPayload(std::uint64_t sequence, std::spa
       SkipFrameMetaSubset(cursor);
       put.payload_offset = cursor.ReadU64();
       put.payload_length = cursor.ReadU64();
-      const auto canonical_encoding = cursor.ReadU8();
-      if (canonical_encoding > 3) {
+      put.canonical_encoding = cursor.ReadU8();
+      if (put.canonical_encoding > 3) {
         throw WalError("invalid canonical encoding in WAL putFrame");
       }
-      (void)cursor.ReadU64();              // canonicalLength
-      cursor.Skip(32, "canonicalChecksum");
-      cursor.Skip(32, "storedChecksum");
+      put.canonical_length = cursor.ReadU64();
+      {
+        const auto canonical_checksum = cursor.ReadFixed(32, "canonicalChecksum");
+        std::copy(canonical_checksum.begin(), canonical_checksum.end(), put.canonical_checksum.begin());
+      }
+      {
+        const auto stored_checksum = cursor.ReadFixed(32, "storedChecksum");
+        std::copy(stored_checksum.begin(), stored_checksum.end(), put.stored_checksum.begin());
+      }
       mutation.put_frame = put;
       break;
     }
@@ -303,6 +374,250 @@ WalPendingMutationInfo DecodeWalMutationPayload(std::uint64_t sequence, std::spa
 }
 
 }  // namespace
+
+WalRingWriter::WalRingWriter(std::filesystem::path path,
+                             std::uint64_t wal_offset,
+                             std::uint64_t wal_size,
+                             std::uint64_t write_pos,
+                             std::uint64_t checkpoint_pos,
+                             std::uint64_t pending_bytes,
+                             std::uint64_t last_sequence,
+                             std::uint64_t wrap_count,
+                             std::uint64_t checkpoint_count,
+                             std::uint64_t sentinel_write_count,
+                             std::uint64_t write_call_count)
+    : path_(std::move(path)),
+      wal_offset_(wal_offset),
+      wal_size_(wal_size),
+      pending_bytes_(pending_bytes),
+      last_sequence_(last_sequence),
+      wrap_count_(wrap_count),
+      checkpoint_count_(checkpoint_count),
+      sentinel_write_count_(sentinel_write_count),
+      write_call_count_(write_call_count) {
+  if (wal_size_ == 0) {
+    write_pos_ = 0;
+    checkpoint_pos_ = 0;
+    return;
+  }
+  write_pos_ = write_pos % wal_size_;
+  checkpoint_pos_ = checkpoint_pos % wal_size_;
+}
+
+bool WalRingWriter::CanAppend(std::size_t payload_size) const {
+  if (payload_size == 0) {
+    return false;
+  }
+  if (wal_size_ == 0) {
+    return false;
+  }
+  if (payload_size > std::numeric_limits<std::uint32_t>::max()) {
+    return false;
+  }
+
+  const auto header_size = kRecordHeaderSize;
+  const auto entry_size = header_size + static_cast<std::uint64_t>(payload_size);
+  if (entry_size > wal_size_) {
+    return false;
+  }
+
+  std::uint64_t extra_padding = 0;
+  std::uint64_t probe_write_pos = write_pos_;
+  std::uint64_t remaining = wal_size_ - probe_write_pos;
+
+  if (remaining < header_size) {
+    extra_padding += remaining;
+    probe_write_pos = 0;
+    remaining = wal_size_;
+  }
+  if (remaining < entry_size) {
+    extra_padding += remaining;
+    probe_write_pos = 0;
+    remaining = wal_size_;
+  }
+
+  const auto predicted_write_pos = probe_write_pos + entry_size;
+  if (wal_size_ - predicted_write_pos < header_size) {
+    extra_padding += wal_size_ - predicted_write_pos;
+  }
+
+  if (entry_size > std::numeric_limits<std::uint64_t>::max() - extra_padding) {
+    return false;
+  }
+  const auto total_needed = entry_size + extra_padding;
+  if (total_needed > wal_size_) {
+    return false;
+  }
+  return pending_bytes_ <= wal_size_ - total_needed;
+}
+
+std::uint64_t WalRingWriter::Append(std::span<const std::byte> payload, std::uint32_t flags) {
+  if (payload.empty()) {
+    throw WalError("wal payload must be non-empty");
+  }
+  if (wal_size_ == 0) {
+    throw WalError("wal_size is zero");
+  }
+  if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
+    throw WalError("wal payload exceeds UInt32.max");
+  }
+
+  const auto header_size = kRecordHeaderSize;
+  const auto entry_size = header_size + static_cast<std::uint64_t>(payload.size());
+  if (entry_size > wal_size_) {
+    throw WalError("entry size exceeds wal_size");
+  }
+
+  std::uint64_t extra_padding = 0;
+  std::uint64_t probe_write_pos = write_pos_;
+  std::uint64_t remaining = wal_size_ - probe_write_pos;
+  if (remaining < header_size) {
+    extra_padding += remaining;
+    probe_write_pos = 0;
+    remaining = wal_size_;
+  }
+  if (remaining < entry_size) {
+    extra_padding += remaining;
+    probe_write_pos = 0;
+    remaining = wal_size_;
+  }
+  const auto predicted_write_pos = probe_write_pos + entry_size;
+  if (wal_size_ - predicted_write_pos < header_size) {
+    extra_padding += wal_size_ - predicted_write_pos;
+  }
+
+  if (entry_size > std::numeric_limits<std::uint64_t>::max() - extra_padding) {
+    throw WalError("entry size overflow");
+  }
+  const auto total_needed = entry_size + extra_padding;
+  if (total_needed > wal_size_ || pending_bytes_ > wal_size_ - total_needed) {
+    throw WalError("wal capacity exceeded");
+  }
+
+  remaining = wal_size_ - write_pos_;
+  if (remaining < header_size) {
+    if (remaining > 0) {
+      std::vector<std::byte> zero_tail(static_cast<std::size_t>(remaining), std::byte{0});
+      WriteAll(zero_tail, wal_offset_ + write_pos_);
+      pending_bytes_ += remaining;
+    }
+    if (write_pos_ != 0) {
+      wrap_count_ += 1;
+    }
+    write_pos_ = 0;
+    remaining = wal_size_;
+  }
+
+  if (remaining < entry_size && remaining >= header_size) {
+    const auto skip_bytes_64 = remaining - header_size;
+    if (skip_bytes_64 > std::numeric_limits<std::uint32_t>::max()) {
+      throw WalError("padding skip bytes exceeds UInt32.max");
+    }
+    const auto padding_sequence = last_sequence_ + 1;
+    const auto padding_header = BuildWalPaddingRecord(padding_sequence,
+                                                      static_cast<std::uint32_t>(skip_bytes_64));
+    WriteAll(padding_header, wal_offset_ + write_pos_);
+    last_sequence_ = padding_sequence;
+    pending_bytes_ += remaining;
+    if (write_pos_ != 0) {
+      wrap_count_ += 1;
+    }
+    write_pos_ = 0;
+  }
+
+  const auto sequence = last_sequence_ + 1;
+  const auto record_data = BuildWalDataRecord(sequence, flags, payload);
+  const auto record_start = write_pos_;
+  const auto record_end = record_start + entry_size;
+  const bool can_inline_sentinel =
+      record_end < wal_size_ &&
+      (wal_size_ - record_end) >= header_size &&
+      (pending_bytes_ + entry_size) < wal_size_;
+
+  if (can_inline_sentinel) {
+    std::vector<std::byte> combined{};
+    combined.reserve(record_data.size() + static_cast<std::size_t>(header_size));
+    combined.insert(combined.end(), record_data.begin(), record_data.end());
+    combined.insert(combined.end(), static_cast<std::size_t>(header_size), std::byte{0});
+    WriteAll(combined, wal_offset_ + record_start);
+    sentinel_write_count_ += 1;
+  } else {
+    WriteAll(record_data, wal_offset_ + record_start);
+  }
+
+  last_sequence_ = sequence;
+  pending_bytes_ += entry_size;
+  write_pos_ = (record_end == wal_size_) ? 0 : record_end;
+
+  if (!can_inline_sentinel) {
+    WriteSentinel();
+  }
+  return sequence;
+}
+
+void WalRingWriter::RecordCheckpoint() {
+  checkpoint_pos_ = write_pos_;
+  pending_bytes_ = 0;
+  checkpoint_count_ += 1;
+}
+
+void WalRingWriter::WriteSentinel() {
+  const auto header_size = kRecordHeaderSize;
+  if (wal_size_ < header_size) {
+    return;
+  }
+
+  auto remaining = wal_size_ - write_pos_;
+  if (remaining < header_size) {
+    if (remaining > 0) {
+      std::vector<std::byte> zero_tail(static_cast<std::size_t>(remaining), std::byte{0});
+      WriteAll(zero_tail, wal_offset_ + write_pos_);
+      pending_bytes_ += remaining;
+    }
+    if (write_pos_ != 0) {
+      wrap_count_ += 1;
+    }
+    write_pos_ = 0;
+    remaining = wal_size_;
+  }
+  (void)remaining;
+
+  if (pending_bytes_ >= wal_size_) {
+    return;
+  }
+  std::array<std::byte, kRecordHeaderSize> sentinel{};
+  WriteAll(sentinel, wal_offset_ + write_pos_);
+  sentinel_write_count_ += 1;
+}
+
+void WalRingWriter::WriteAll(std::span<const std::byte> data, std::uint64_t file_offset) {
+  if (data.empty()) {
+    return;
+  }
+
+  std::fstream out(path_, std::ios::binary | std::ios::in | std::ios::out);
+  if (!out) {
+    std::ofstream create(path_, std::ios::binary | std::ios::trunc);
+    if (!create) {
+      throw WalError("failed to create file for write: " + path_.string());
+    }
+    create.close();
+    out.open(path_, std::ios::binary | std::ios::in | std::ios::out);
+  }
+  if (!out) {
+    throw WalError("failed to open file for write: " + path_.string());
+  }
+
+  out.seekp(static_cast<std::streamoff>(file_offset), std::ios::beg);
+  if (!out) {
+    throw WalError("failed to seek file for write");
+  }
+  out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+  if (!out) {
+    throw WalError("failed to write WAL bytes");
+  }
+  write_call_count_ += 1;
+}
 
 bool WalRecordHeader::IsSentinel() const {
   return sequence == 0 && length == 0 && flags == 0 &&
