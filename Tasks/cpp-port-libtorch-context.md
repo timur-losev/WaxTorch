@@ -153,6 +153,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add orchestrator close-without-flush vector coverage (store close auto-commit + vector rebuild on reopen)
 - [x] Allow vector-only recall with explicit embedding and empty query string
 - [x] Add flush-failure regression coverage: failed store commit must not expose staged text index mutations
+- [x] Add flush-failure regression coverage for vector channel: failed store commit must not expose staged vector index mutations
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -301,6 +302,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Relaxed recall preconditions so vector-only path can run with explicit embedding even when query is empty | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added regression scenario for `Recall(\"\", embedding)` in vector-only mode | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added failpoint-driven flush failure scenario ensuring staged text remains hidden until successful retry commit | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added failpoint-driven flush failure scenario ensuring staged vector results remain hidden until successful retry commit | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

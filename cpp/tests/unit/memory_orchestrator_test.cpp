@@ -587,6 +587,40 @@ void ScenarioFlushFailureDoesNotExposeStagedText(const std::filesystem::path& pa
   }
 }
 
+void ScenarioFlushFailureDoesNotExposeStagedVector(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: flush failure does not expose staged vector");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("failing flush vector apple", {});
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(1);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw when store commit failpoint is set");
+
+    const auto before_successful_flush = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(before_successful_flush.items.empty(),
+            "failed flush must not expose staged vector index mutations");
+
+    orchestrator.Flush();
+    const auto after_successful_flush = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!after_successful_flush.items.empty(),
+            "successful retry flush should expose committed vector mutation");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioStructuredMemoryRemovePersists(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: structured memory remove persists");
   waxcpp::OrchestratorConfig config{};
@@ -653,6 +687,7 @@ int main() {
     const auto path18 = UniquePath();
     const auto path19 = UniquePath();
     const auto path20 = UniquePath();
+    const auto path21 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioRememberFlushPersistsFrame(path1);
@@ -675,6 +710,7 @@ int main() {
     ScenarioVectorCloseWithoutFlushPersistsViaStoreClose(path18);
     ScenarioVectorRecallSupportsExplicitEmbeddingWithoutQuery(path19);
     ScenarioFlushFailureDoesNotExposeStagedText(path20);
+    ScenarioFlushFailureDoesNotExposeStagedVector(path21);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -719,6 +755,8 @@ int main() {
     std::filesystem::remove(path19.string() + ".writer.lock", ec);
     std::filesystem::remove(path20, ec);
     std::filesystem::remove(path20.string() + ".writer.lock", ec);
+    std::filesystem::remove(path21, ec);
+    std::filesystem::remove(path21.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
