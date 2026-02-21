@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace waxcpp {
@@ -16,6 +17,9 @@ class FTS5SearchEngine {
   void IndexBatch(const std::vector<std::uint64_t>& frame_ids, const std::vector<std::string>& texts);
   void Remove(std::uint64_t frame_id);
   std::vector<SearchResult> Search(const std::string& query, int top_k);
+
+ private:
+  std::unordered_map<std::uint64_t, std::string> docs_;
 };
 
 }  // namespace waxcpp
