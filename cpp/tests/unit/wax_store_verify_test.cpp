@@ -13,6 +13,7 @@
 #include <functional>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -185,6 +186,112 @@ void ExpectThrow(const std::string& name, const std::function<void()>& fn) {
   throw std::runtime_error("expected throw: " + name);
 }
 
+void ExpectThrowContains(const std::string& name,
+                         const std::function<void()>& fn,
+                         const std::string& expected_substring) {
+  try {
+    fn();
+  } catch (const std::exception& ex) {
+    const std::string message = ex.what();
+    waxcpp::tests::Log("expected exception in " + name + ": " + message);
+    if (message.find(expected_substring) == std::string::npos) {
+      throw std::runtime_error("unexpected error for " + name + ": " + message);
+    }
+    return;
+  }
+  throw std::runtime_error("expected throw: " + name);
+}
+
+void WriteLE64(std::vector<std::byte>& bytes, std::size_t offset, std::uint64_t value) {
+  if (offset + 8 > bytes.size()) {
+    throw std::runtime_error("WriteLE64 out of range");
+  }
+  for (std::size_t i = 0; i < 8; ++i) {
+    bytes[offset + i] = static_cast<std::byte>((value >> (8U * i)) & 0xFFU);
+  }
+}
+
+void WriteLE32(std::vector<std::byte>& bytes, std::size_t offset, std::uint32_t value) {
+  if (offset + 4 > bytes.size()) {
+    throw std::runtime_error("WriteLE32 out of range");
+  }
+  for (std::size_t i = 0; i < 4; ++i) {
+    bytes[offset + i] = static_cast<std::byte>((value >> (8U * i)) & 0xFFU);
+  }
+}
+
+std::vector<std::byte> BuildWalDataRecord(std::uint64_t sequence, const std::vector<std::byte>& payload) {
+  constexpr std::size_t kWalRecordHeaderSize = 48;
+  if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
+    throw std::runtime_error("payload too large for WAL record");
+  }
+  std::vector<std::byte> out(kWalRecordHeaderSize + payload.size(), std::byte{0});
+  WriteLE64(out, 0, sequence);
+  WriteLE32(out, 8, static_cast<std::uint32_t>(payload.size()));
+  WriteLE32(out, 12, 0);  // flags
+  const auto checksum = waxcpp::core::Sha256Digest(payload);
+  std::copy(checksum.begin(), checksum.end(), out.begin() + 16);
+  std::copy(payload.begin(), payload.end(), out.begin() + static_cast<std::ptrdiff_t>(kWalRecordHeaderSize));
+  return out;
+}
+
+void AppendU8(std::vector<std::byte>& out, std::uint8_t value) {
+  out.push_back(static_cast<std::byte>(value));
+}
+
+void AppendLE32(std::vector<std::byte>& out, std::uint32_t value) {
+  for (std::size_t i = 0; i < 4; ++i) {
+    out.push_back(static_cast<std::byte>((value >> (8U * i)) & 0xFFU));
+  }
+}
+
+void AppendLE64(std::vector<std::byte>& out, std::uint64_t value) {
+  for (std::size_t i = 0; i < 8; ++i) {
+    out.push_back(static_cast<std::byte>((value >> (8U * i)) & 0xFFU));
+  }
+}
+
+void AppendZeros(std::vector<std::byte>& out, std::size_t count) {
+  out.insert(out.end(), count, std::byte{0});
+}
+
+std::vector<std::byte> BuildWalPutFramePayload(std::uint64_t frame_id,
+                                               std::uint64_t payload_offset,
+                                               std::uint64_t payload_length) {
+  std::vector<std::byte> payload{};
+  payload.reserve(256);
+  AppendU8(payload, 0x01);  // WALEntryCodec.OpCode.putFrame
+  AppendLE64(payload, frame_id);
+  AppendLE64(payload, 0);   // timestampMs (Int64 LE bits)
+
+  // FrameMetaSubset with all optional fields = nil and arrays = [].
+  AppendU8(payload, 0);     // uri?
+  AppendU8(payload, 0);     // title?
+  AppendU8(payload, 0);     // kind?
+  AppendU8(payload, 0);     // track?
+  AppendLE32(payload, 0);   // tags.count
+  AppendLE32(payload, 0);   // labels.count
+  AppendLE32(payload, 0);   // contentDates.count
+  AppendU8(payload, 0);     // role?
+  AppendU8(payload, 0);     // parentId?
+  AppendU8(payload, 0);     // chunkIndex?
+  AppendU8(payload, 0);     // chunkCount?
+  AppendU8(payload, 0);     // chunkManifest?
+  AppendU8(payload, 0);     // status?
+  AppendU8(payload, 0);     // supersedes?
+  AppendU8(payload, 0);     // supersededBy?
+  AppendU8(payload, 0);     // searchText?
+  AppendU8(payload, 0);     // metadata?
+
+  AppendLE64(payload, payload_offset);
+  AppendLE64(payload, payload_length);
+  AppendU8(payload, 0);     // canonicalEncoding = plain
+  AppendLE64(payload, payload_length);
+  AppendZeros(payload, 32); // canonicalChecksum
+  AppendZeros(payload, 32); // storedChecksum
+  return payload;
+}
+
 }  // namespace
 
 int main() {
@@ -198,10 +305,24 @@ int main() {
       auto store = waxcpp::WaxStore::Create(path);
       store.Verify(false);
       const auto stats = store.Stats();
+      const auto wal_stats = store.WalStats();
       waxcpp::tests::LogKV("create_stats_frame_count", stats.frame_count);
       waxcpp::tests::LogKV("create_stats_generation", stats.generation);
+      waxcpp::tests::LogKV("create_wal_size", wal_stats.wal_size);
+      waxcpp::tests::LogKV("create_wal_write_pos", wal_stats.write_pos);
+      waxcpp::tests::LogKV("create_wal_checkpoint_pos", wal_stats.checkpoint_pos);
+      waxcpp::tests::LogKV("create_wal_pending_bytes", wal_stats.pending_bytes);
+      waxcpp::tests::LogKV("create_wal_last_seq", wal_stats.last_seq);
       if (stats.frame_count != 0) {
         throw std::runtime_error("expected empty frame_count after create");
+      }
+      if (wal_stats.wal_size != waxcpp::core::mv2s::kDefaultWalSize) {
+        throw std::runtime_error("unexpected wal_size for newly created store");
+      }
+      if (wal_stats.write_pos != 0 || wal_stats.checkpoint_pos != 0 ||
+          wal_stats.pending_bytes != 0 || wal_stats.last_seq != 0 ||
+          wal_stats.committed_seq != 0) {
+        throw std::runtime_error("expected zeroed WAL state after create");
       }
       store.Close();
     }
@@ -211,6 +332,63 @@ int main() {
       auto reopened = waxcpp::WaxStore::Open(path);
       reopened.Verify(false);
       reopened.Close();
+    }
+
+    // Verify should not mutate file size (no trailing-byte repair in verify path).
+    {
+      waxcpp::tests::Log("scenario: verify does not repair trailing bytes");
+      auto store = waxcpp::WaxStore::Open(path);
+      const auto before_extend = std::filesystem::file_size(path);
+      ExtendFileSparse(path, 4096);
+      const auto after_extend = std::filesystem::file_size(path);
+      if (after_extend <= before_extend) {
+        throw std::runtime_error("failed to extend file for verify non-repair scenario");
+      }
+
+      store.Verify(false);
+      const auto after_verify = std::filesystem::file_size(path);
+      waxcpp::tests::LogKV("verify_no_repair_before_extend", before_extend);
+      waxcpp::tests::LogKV("verify_no_repair_after_extend", after_extend);
+      waxcpp::tests::LogKV("verify_no_repair_after_verify", after_verify);
+      if (after_verify != after_extend) {
+        throw std::runtime_error("verify should not truncate trailing bytes");
+      }
+      store.Close();
+    }
+
+    // Open(repair=false) should not mutate file size.
+    {
+      waxcpp::tests::Log("scenario: open(repair=false) does not truncate trailing bytes");
+      auto recreated = waxcpp::WaxStore::Create(path);
+      recreated.Verify(false);
+      recreated.Close();
+
+      const auto before_extend = std::filesystem::file_size(path);
+      ExtendFileSparse(path, 4096);
+      const auto after_extend = std::filesystem::file_size(path);
+      if (after_extend <= before_extend) {
+        throw std::runtime_error("failed to extend file for open(repair=false) scenario");
+      }
+
+      auto opened_no_repair = waxcpp::WaxStore::Open(path, false);
+      opened_no_repair.Verify(false);
+      opened_no_repair.Close();
+
+      const auto after_open_no_repair = std::filesystem::file_size(path);
+      waxcpp::tests::LogKV("open_no_repair_before_extend", before_extend);
+      waxcpp::tests::LogKV("open_no_repair_after_extend", after_extend);
+      waxcpp::tests::LogKV("open_no_repair_after_open", after_open_no_repair);
+      if (after_open_no_repair != after_extend) {
+        throw std::runtime_error("open(repair=false) should not truncate trailing bytes");
+      }
+    }
+
+    // Recreate clean file before corruption scenarios.
+    {
+      waxcpp::tests::Log("scenario: recreate clean store after verify non-repair");
+      auto recreated = waxcpp::WaxStore::Create(path);
+      recreated.Verify(false);
+      recreated.Close();
     }
 
     // Corrupt TOC checksum and ensure verify/open fail.
@@ -402,7 +580,306 @@ int main() {
     {
       auto reopened = waxcpp::WaxStore::Open(path);
       reopened.Verify(false);
+      const auto wal_stats = reopened.WalStats();
+      waxcpp::tests::LogKV("snapshot_replay_hit_count", wal_stats.replay_snapshot_hit_count);
+      if (wal_stats.replay_snapshot_hit_count != 1) {
+        throw std::runtime_error("expected replay snapshot fast-path to be used");
+      }
+      if (wal_stats.pending_bytes != 0 || wal_stats.write_pos != wal_stats.checkpoint_pos) {
+        throw std::runtime_error("expected clean WAL state after replay snapshot recovery");
+      }
       reopened.Close();
+    }
+    {
+      const auto repaired_size = std::filesystem::file_size(path);
+      const auto expected_size = committed_footer_offset + waxcpp::core::mv2s::kFooterSize;
+      waxcpp::tests::LogKV("snapshot_repaired_file_size", repaired_size);
+      waxcpp::tests::LogKV("snapshot_expected_file_size", expected_size);
+      if (repaired_size != expected_size) {
+        throw std::runtime_error("expected open() to truncate trailing bytes to committed footer end");
+      }
+    }
+
+    // Recreate clean file for pending WAL scan scenarios.
+    {
+      waxcpp::tests::Log("scenario: pending WAL data with undecodable payload does not block open");
+      auto recreated = waxcpp::WaxStore::Create(path);
+      recreated.Verify(false);
+      recreated.Close();
+    }
+
+    // Recreate clean file for clean-scan WAL cursor normalization scenario.
+    {
+      waxcpp::tests::Log("scenario: clean WAL scan normalizes checkpoint to write cursor");
+      auto recreated = waxcpp::WaxStore::Create(path);
+      recreated.Verify(false);
+      recreated.Close();
+    }
+
+    {
+      const auto clean_scan_header_page_a = ReadBytesAt(path,
+                                                        0,
+                                                        static_cast<std::size_t>(waxcpp::core::mv2s::kHeaderPageSize));
+      auto header_a = waxcpp::core::mv2s::DecodeHeaderPage(clean_scan_header_page_a);
+      auto header_b = header_a;
+      header_b.header_page_generation = header_a.header_page_generation > 0 ? header_a.header_page_generation - 1 : 0;
+
+      const std::uint64_t checkpoint_pos = 123;
+      header_a.wal_checkpoint_pos = checkpoint_pos;
+      header_a.wal_write_pos = 77;  // force scan path (no fast terminal path)
+      header_b.wal_checkpoint_pos = checkpoint_pos;
+      header_b.wal_write_pos = 77;
+
+      WriteBytesAt(path, 0, waxcpp::core::mv2s::EncodeHeaderPage(header_a));
+      WriteBytesAt(path, waxcpp::core::mv2s::kHeaderPageSize, waxcpp::core::mv2s::EncodeHeaderPage(header_b));
+
+      auto reopened = waxcpp::WaxStore::Open(path);
+      reopened.Verify(false);
+      const auto wal_stats = reopened.WalStats();
+      reopened.Close();
+
+      waxcpp::tests::LogKV("clean_scan_write_pos", wal_stats.write_pos);
+      waxcpp::tests::LogKV("clean_scan_checkpoint_pos", wal_stats.checkpoint_pos);
+      waxcpp::tests::LogKV("clean_scan_pending_bytes", wal_stats.pending_bytes);
+      if (wal_stats.write_pos != checkpoint_pos || wal_stats.checkpoint_pos != checkpoint_pos) {
+        throw std::runtime_error("expected clean scan to align write/checkpoint to scanned cursor");
+      }
+      if (wal_stats.pending_bytes != 0 || wal_stats.last_seq != 0 || wal_stats.committed_seq != 0) {
+        throw std::runtime_error("expected zero pending WAL state after clean scan normalization");
+      }
+    }
+
+    {
+      const auto pending_header_page_a = ReadBytesAt(path,
+                                                     0,
+                                                     static_cast<std::size_t>(waxcpp::core::mv2s::kHeaderPageSize));
+      auto header_a = waxcpp::core::mv2s::DecodeHeaderPage(pending_header_page_a);
+      auto header_b = header_a;
+      header_b.header_page_generation = header_a.header_page_generation > 0 ? header_a.header_page_generation - 1 : 0;
+
+      const std::vector<std::byte> wal_payload = {std::byte{0x11}, std::byte{0x22}, std::byte{0x33}};
+      const auto wal_record = BuildWalDataRecord(1, wal_payload);
+      WriteBytesAt(path, header_a.wal_offset, wal_record);
+
+      header_a.wal_checkpoint_pos = 0;
+      header_a.wal_write_pos = 0;
+      header_b.wal_checkpoint_pos = 0;
+      header_b.wal_write_pos = 0;
+
+      WriteBytesAt(path, 0, waxcpp::core::mv2s::EncodeHeaderPage(header_a));
+      WriteBytesAt(path, waxcpp::core::mv2s::kHeaderPageSize, waxcpp::core::mv2s::EncodeHeaderPage(header_b));
+
+      auto reopened = waxcpp::WaxStore::Open(path);
+      reopened.Verify(false);
+      const auto stats = reopened.Stats();
+      const auto wal_stats = reopened.WalStats();
+      waxcpp::tests::LogKV("pending_undecodable_pending_frames", stats.pending_frames);
+      waxcpp::tests::LogKV("pending_undecodable_wal_write_pos", wal_stats.write_pos);
+      waxcpp::tests::LogKV("pending_undecodable_wal_checkpoint_pos", wal_stats.checkpoint_pos);
+      waxcpp::tests::LogKV("pending_undecodable_wal_pending_bytes", wal_stats.pending_bytes);
+      waxcpp::tests::LogKV("pending_undecodable_wal_last_seq", wal_stats.last_seq);
+      if (stats.pending_frames != 0) {
+        throw std::runtime_error("expected no decoded pending putFrame mutations");
+      }
+      if (wal_stats.last_seq != 1) {
+        throw std::runtime_error("expected last WAL sequence to reflect scanned undecodable record");
+      }
+      if (wal_stats.pending_bytes != wal_record.size() || wal_stats.write_pos != wal_record.size()) {
+        throw std::runtime_error("unexpected WAL scan state for undecodable pending payload");
+      }
+      if (wal_stats.checkpoint_pos != 0) {
+        throw std::runtime_error("expected checkpoint to remain at committed cursor when pending WAL exists");
+      }
+      reopened.Close();
+    }
+
+    // Recreate clean file for decodable pending putFrame.
+    {
+      waxcpp::tests::Log("scenario: pending WAL putFrame is decoded and counted");
+      auto recreated = waxcpp::WaxStore::Create(path);
+      recreated.Verify(false);
+      recreated.Close();
+    }
+
+    {
+      const auto pending_header_page_a = ReadBytesAt(path,
+                                                     0,
+                                                     static_cast<std::size_t>(waxcpp::core::mv2s::kHeaderPageSize));
+      auto header_a = waxcpp::core::mv2s::DecodeHeaderPage(pending_header_page_a);
+      auto header_b = header_a;
+      header_b.header_page_generation = header_a.header_page_generation > 0 ? header_a.header_page_generation - 1 : 0;
+
+      const auto wal_data_start = header_a.wal_offset + header_a.wal_size;
+      const auto wal_payload = BuildWalPutFramePayload(42, wal_data_start, 8);
+      const auto wal_record = BuildWalDataRecord(1, wal_payload);
+      WriteBytesAt(path, header_a.wal_offset, wal_record);
+
+      header_a.wal_checkpoint_pos = 0;
+      header_a.wal_write_pos = 0;
+      header_b.wal_checkpoint_pos = 0;
+      header_b.wal_write_pos = 0;
+
+      WriteBytesAt(path, 0, waxcpp::core::mv2s::EncodeHeaderPage(header_a));
+      WriteBytesAt(path, waxcpp::core::mv2s::kHeaderPageSize, waxcpp::core::mv2s::EncodeHeaderPage(header_b));
+
+      auto reopened = waxcpp::WaxStore::Open(path);
+      reopened.Verify(false);
+      const auto stats = reopened.Stats();
+      const auto wal_stats = reopened.WalStats();
+      waxcpp::tests::LogKV("pending_putframe_pending_frames", stats.pending_frames);
+      waxcpp::tests::LogKV("pending_putframe_wal_pending_bytes", wal_stats.pending_bytes);
+      waxcpp::tests::LogKV("pending_putframe_wal_last_seq", wal_stats.last_seq);
+      if (stats.pending_frames != 1) {
+        throw std::runtime_error("expected exactly one pending putFrame mutation");
+      }
+      if (wal_stats.last_seq != 1 || wal_stats.checkpoint_pos != 0) {
+        throw std::runtime_error("unexpected WAL sequencing state for pending putFrame");
+      }
+      if (wal_stats.pending_bytes != wal_record.size() || wal_stats.write_pos != wal_record.size()) {
+        throw std::runtime_error("unexpected WAL cursor state for pending putFrame");
+      }
+      reopened.Close();
+    }
+
+    // Recreate clean file for pending putFrame out-of-file range validation.
+    {
+      waxcpp::tests::Log("scenario: pending WAL putFrame range beyond file size fails open");
+      auto recreated = waxcpp::WaxStore::Create(path);
+      recreated.Verify(false);
+      recreated.Close();
+    }
+
+    {
+      const auto pending_header_page_a = ReadBytesAt(path,
+                                                     0,
+                                                     static_cast<std::size_t>(waxcpp::core::mv2s::kHeaderPageSize));
+      auto header_a = waxcpp::core::mv2s::DecodeHeaderPage(pending_header_page_a);
+      auto header_b = header_a;
+      header_b.header_page_generation = header_a.header_page_generation > 0 ? header_a.header_page_generation - 1 : 0;
+
+      const auto file_size = std::filesystem::file_size(path);
+      const auto wal_payload = BuildWalPutFramePayload(7, file_size - 4, 64);
+      const auto wal_record = BuildWalDataRecord(1, wal_payload);
+      WriteBytesAt(path, header_a.wal_offset, wal_record);
+
+      header_a.wal_checkpoint_pos = 0;
+      header_a.wal_write_pos = 0;
+      header_b.wal_checkpoint_pos = 0;
+      header_b.wal_write_pos = 0;
+
+      WriteBytesAt(path, 0, waxcpp::core::mv2s::EncodeHeaderPage(header_a));
+      WriteBytesAt(path, waxcpp::core::mv2s::kHeaderPageSize, waxcpp::core::mv2s::EncodeHeaderPage(header_b));
+
+      ExpectThrowContains("open_detects_pending_wal_payload_beyond_file_size", [&]() {
+        auto reopened = waxcpp::WaxStore::Open(path);
+        reopened.Verify(false);
+      }, "pending WAL references bytes beyond file size");
+    }
+
+    // Recreate clean file for pending putFrame trailing-byte preservation.
+    {
+      waxcpp::tests::Log("scenario: pending WAL putFrame preserves referenced trailing bytes");
+      auto recreated = waxcpp::WaxStore::Create(path);
+      recreated.Verify(false);
+      recreated.Close();
+    }
+
+    {
+      const auto pending_header_page_a = ReadBytesAt(path,
+                                                     0,
+                                                     static_cast<std::size_t>(waxcpp::core::mv2s::kHeaderPageSize));
+      auto header_a = waxcpp::core::mv2s::DecodeHeaderPage(pending_header_page_a);
+      auto header_b = header_a;
+      header_b.header_page_generation = header_a.header_page_generation > 0 ? header_a.header_page_generation - 1 : 0;
+
+      const auto trailing_committed_footer_offset = ReadLE64At(path, 24);
+      const auto committed_end = trailing_committed_footer_offset + waxcpp::core::mv2s::kFooterSize;
+      ExtendFileSparse(path, 4096);
+
+      std::vector<std::byte> trailing_payload = {
+          std::byte{0xFA}, std::byte{0xCE}, std::byte{0xB0}, std::byte{0x0C},
+          std::byte{0xAA}, std::byte{0xBB}, std::byte{0xCC}, std::byte{0xDD},
+      };
+      const auto payload_offset = committed_end + 512;
+      WriteBytesAt(path, payload_offset, trailing_payload);
+      const auto wal_payload = BuildWalPutFramePayload(77, payload_offset, trailing_payload.size());
+      const auto wal_record = BuildWalDataRecord(1, wal_payload);
+      WriteBytesAt(path, header_a.wal_offset, wal_record);
+
+      header_a.wal_checkpoint_pos = 0;
+      header_a.wal_write_pos = 0;
+      header_b.wal_checkpoint_pos = 0;
+      header_b.wal_write_pos = 0;
+
+      WriteBytesAt(path, 0, waxcpp::core::mv2s::EncodeHeaderPage(header_a));
+      WriteBytesAt(path, waxcpp::core::mv2s::kHeaderPageSize, waxcpp::core::mv2s::EncodeHeaderPage(header_b));
+
+      auto reopened = waxcpp::WaxStore::Open(path);
+      reopened.Verify(false);
+      const auto stats = reopened.Stats();
+      reopened.Close();
+      if (stats.pending_frames != 1) {
+        throw std::runtime_error("expected one pending putFrame in trailing-byte preservation scenario");
+      }
+
+      const auto expected_end = payload_offset + trailing_payload.size();
+      const auto repaired_size = std::filesystem::file_size(path);
+      waxcpp::tests::LogKV("pending_trailing_expected_end", expected_end);
+      waxcpp::tests::LogKV("pending_trailing_repaired_size", repaired_size);
+      if (repaired_size != expected_end) {
+        throw std::runtime_error("expected open() to preserve bytes referenced by pending putFrame");
+      }
+    }
+
+    // Recreate clean file for checkpoint preservation with pending WAL.
+    {
+      waxcpp::tests::Log("scenario: pending WAL keeps checkpoint cursor from header");
+      auto recreated = waxcpp::WaxStore::Create(path);
+      recreated.Verify(false);
+      recreated.Close();
+    }
+
+    {
+      const auto pending_header_page_a = ReadBytesAt(path,
+                                                     0,
+                                                     static_cast<std::size_t>(waxcpp::core::mv2s::kHeaderPageSize));
+      auto header_a = waxcpp::core::mv2s::DecodeHeaderPage(pending_header_page_a);
+      auto header_b = header_a;
+      header_b.header_page_generation = header_a.header_page_generation > 0 ? header_a.header_page_generation - 1 : 0;
+
+      const std::uint64_t checkpoint_pos = 128;
+      const auto wal_payload = BuildWalPutFramePayload(300, header_a.wal_offset + header_a.wal_size, 8);
+      const auto wal_record = BuildWalDataRecord(1, wal_payload);
+      WriteBytesAt(path, header_a.wal_offset + checkpoint_pos, wal_record);
+
+      header_a.wal_checkpoint_pos = checkpoint_pos;
+      header_a.wal_write_pos = checkpoint_pos + 1;  // avoid terminal fast-path branch
+      header_b.wal_checkpoint_pos = checkpoint_pos;
+      header_b.wal_write_pos = checkpoint_pos + 1;
+
+      WriteBytesAt(path, 0, waxcpp::core::mv2s::EncodeHeaderPage(header_a));
+      WriteBytesAt(path, waxcpp::core::mv2s::kHeaderPageSize, waxcpp::core::mv2s::EncodeHeaderPage(header_b));
+
+      auto reopened = waxcpp::WaxStore::Open(path);
+      reopened.Verify(false);
+      const auto stats = reopened.Stats();
+      const auto wal_stats = reopened.WalStats();
+      reopened.Close();
+
+      waxcpp::tests::LogKV("checkpoint_pending_frames", stats.pending_frames);
+      waxcpp::tests::LogKV("checkpoint_write_pos", wal_stats.write_pos);
+      waxcpp::tests::LogKV("checkpoint_checkpoint_pos", wal_stats.checkpoint_pos);
+      waxcpp::tests::LogKV("checkpoint_pending_bytes", wal_stats.pending_bytes);
+      if (stats.pending_frames != 1) {
+        throw std::runtime_error("expected one pending putFrame for checkpoint preservation scenario");
+      }
+      if (wal_stats.checkpoint_pos != checkpoint_pos) {
+        throw std::runtime_error("expected checkpoint cursor to remain at header checkpoint while pending WAL exists");
+      }
+      const auto expected_write_pos = checkpoint_pos + wal_record.size();
+      if (wal_stats.write_pos != expected_write_pos || wal_stats.pending_bytes != wal_record.size()) {
+        throw std::runtime_error("unexpected WAL write/pending state for checkpoint preservation scenario");
+      }
     }
 
     // Corrupt both header pages; open must fail.

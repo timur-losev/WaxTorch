@@ -23,6 +23,7 @@ set(WAXCPP_PUBLIC_HEADERS
 add_library(waxcpp STATIC
   src/core/mv2s_format.cpp
   src/core/sha256.cpp
+  src/core/wal_ring.cpp
   src/core/wax_store.cpp
   src/text/fts5_search_engine.cpp
   src/vector/usearch_vector_engine.cpp
@@ -86,6 +87,16 @@ if (WAXCPP_BUILD_TESTS)
   endif()
   target_precompile_headers(waxcpp_mv2s_format_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_mv2s_format_test COMMAND waxcpp_mv2s_format_test)
+
+  add_executable(waxcpp_wal_ring_test tests/unit/wal_ring_test.cpp)
+  target_link_libraries(waxcpp_wal_ring_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_wal_ring_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_wal_ring_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_wal_ring_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_wal_ring_test COMMAND waxcpp_wal_ring_test)
 
   add_executable(waxcpp_mv2s_parity_test tests/parity/mv2s_fixture_parity_test.cpp)
   target_link_libraries(waxcpp_mv2s_parity_test PRIVATE waxcpp)

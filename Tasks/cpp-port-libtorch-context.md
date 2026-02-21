@@ -1,8 +1,8 @@
 # Context: C++ Core RAG Port (LibTorch)
 
 **Created**: 2026-02-18
-**Last Updated**: 2026-02-20
-**Current Phase**: M2 advanced implementation (binary format + read/verify + TOC decode + deep payload verify + parity harness + synthetic fixtures)
+**Last Updated**: 2026-02-21
+**Current Phase**: M3 incremental implementation (WAL pending scan + open-state parity)
 **Next Agent**: wax-rag-specialist
 
 ## Task Summary
@@ -58,6 +58,27 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add GitHub Actions macOS workflow (`Swift Parity Fixtures`) to generate Swift fixtures when local macOS is unavailable
 - [x] Complete M2 parity against external Swift-generated fixtures (cross-language artifacts)
 - [x] Enable strict Swift fixture gate in default C++ CI configure step
+- [x] Add C++ WAL ring read primitives (`terminal marker` + `scan state`) aligned with Swift WAL header semantics
+- [x] Implement `scanPendingMutationsWithState` parity behavior in C++ WAL reader (state scan continues after decode errors, pending decode stops)
+- [x] Wire WAL pending scan into `WaxStore::Open` with Swift-like `lastSequence = max(committedSeq, scanLastSeq)` handling
+- [x] Add pending putFrame data-range guard (`requiredEnd`) against file size
+- [x] Add open-time trailing-byte repair parity: truncate to `requiredEnd` while preserving pending `putFrame` referenced payload tail
+- [x] Persist internal WAL open-state (`writePos/checkpointPos/pendingBytes/lastSequence/dirty`) for upcoming replay/apply path
+- [x] Add unit scenarios for WAL open behavior:
+  - undecodable pending payload does not block open
+  - decodable pending putFrame is counted in `pending_frames`
+  - pending putFrame payload beyond file size fails open
+  - replay-snapshot fallback path truncates trailing bytes to committed footer end
+  - pending putFrame tail reference keeps file truncated to referenced payload end (not footer end)
+- [x] Add dedicated WAL ring unit test suite (`terminal marker`, `decode-stop with continued state scan`, `wrap+padding`, `ScanWalState parity`)
+- [x] Add public `WaxStore::WalStats()` surface (parity-aligned WAL runtime introspection baseline)
+- [x] Extend `wax_store_verify_test` with WAL state assertions (`write/checkpoint/pending/last_seq/replay_snapshot_hit_count`)
+- [x] Add checkpoint-preservation regression test for pending WAL recovery path (`checkpoint` stays on committed cursor while pending exists)
+- [x] Split open repair behavior from verify path: `Open` repairs trailing bytes, `Verify` remains non-mutating
+- [x] Add regression test to enforce non-repair `Verify` behavior with trailing bytes
+- [x] Add clean-WAL cursor normalization regression test (`scanState.lastSequence <= committed` path aligns write/checkpoint)
+- [x] Add `WaxStore::Open(path, repair)` overload to mirror Swift open/repair control
+- [x] Extend WAL pending mutation decode model with delete/supersede/putEmbedding payload fields
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -100,6 +121,13 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `Package.swift` | Added `WaxParityFixtureGenerator` executable target | Codex |
 | `Sources/WaxParityFixtureGenerator/main.swift` | Added Swift fixture generator for pass/open_fail/verify_fail parity artifacts; switched to compact WAL (`64 KiB`) to avoid oversized fixture files | Codex |
 | `.github/workflows/swift-parity-fixtures.yml` | Added manual macOS workflow to generate/upload Swift parity fixture artifacts; pinned setup step to Swift 6.2 | Codex |
+| `cpp/src/core/wal_ring.hpp` | Added WAL record header model, pending mutation scan types, and reader interfaces (`IsTerminalMarker`, `ScanWalState`, `ScanPendingMutationsWithState`) | Codex |
+| `cpp/src/core/wal_ring.cpp` | Added WAL state scanner, terminal marker detection, and pending mutation payload decode for `putFrame/delete/supersede/putEmbedding` with decoded payload metadata | Codex |
+| `cpp/tests/unit/wal_ring_test.cpp` | Added focused WAL ring test coverage for sentinel detection, decode-stop semantics, wrap/padding handling, and scan-state consistency | Codex |
+| `cpp/src/core/wax_store.cpp` | Replaced pending-WAL fail gate with Swift-like pending scan integration, `requiredEnd` protection, open-time trailing-byte repair, non-mutating verify path, `Open(path, repair)` control, internal WAL state capture, and `WalStats()` reporting | Codex |
+| `cpp/include/waxcpp/wax_store.hpp` | Added internal WAL runtime state fields plus public `WaxWALStats`/`WalStats()` API and `Open(path, repair)` overload | Codex |
+| `cpp/tests/unit/wax_store_verify_test.cpp` | Extended WAL parity scenarios with tail-repair checks, explicit WAL-state assertions, non-mutating verify regression, clean-WAL cursor normalization coverage, and `open(repair=false)` regression | Codex |
+| `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
 | `cpp/tests/**` | Added smoke + placeholders | Codex |
@@ -115,11 +143,11 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - **Invariants in play**: 1, 2, 4, 6, 7, 8, 9 explicitly tracked; M2 work directly advances deterministic retrieval and two-phase safety foundations.
 
 ## Handoff Notes
-M1 baseline is complete. M2 now includes header/footer + TOC decode + read/verify path + deep verify + fixture-driven parity harness + synthetic fixture baseline. Strict gate support for external Swift fixtures is implemented (`WAXCPP_REQUIRE_SWIFT_FIXTURES`) and Swift-generated fixtures are now present under `fixtures/parity/swift/`. Strict parity verification was validated via `ctest` in a dedicated strict build directory.
+M1 and M2 are complete. M3 has advanced from read-side guards to pending scan + repair parity behavior: C++ now parses WAL headers, detects terminal markers for replay snapshot/header cursor fast paths, scans pending mutations with Swift-compatible decode-stop semantics, validates pending putFrame payload ranges, truncates trailing bytes on open while preserving bytes referenced by pending putFrame, and stores effective WAL open-state internally. Full mutation apply/replay into committed state is still pending.
 
 ## Open Questions
 1. Final remote for `cpp/third_party/libtorch-dist` should be replaced with dedicated artifact mirror before release.
 2. Pin commits in `cpp/submodules.lock` are placeholders and must be resolved in dependency PR.
-3. Decide when to enforce failure on `<PIN_REQUIRED>` in CI (currently warning only).
-4. Decide when to enforce failure on `<PIN_REQUIRED>` in dependency lock checks (currently warning-only policy path).
+3. Decide when to enforce failure on `<PIN_REQUIRED>` in dependency lock checks (currently warning-only policy path).
+4. Implement full WAL replay apply path (materialize decoded pending mutations into store/index state and commit/checkpoint transitions).
 

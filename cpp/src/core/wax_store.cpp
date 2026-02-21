@@ -2,6 +2,7 @@
 
 #include "mv2s_format.hpp"
 #include "sha256.hpp"
+#include "wal_ring.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -347,17 +348,21 @@ WaxStore WaxStore::Create(const std::filesystem::path& path) {
     throw StoreError("flush failed");
   }
 
-  return Open(path);
+  return Open(path, true);
 }
 
 WaxStore WaxStore::Open(const std::filesystem::path& path) {
+  return Open(path, true);
+}
+
+WaxStore WaxStore::Open(const std::filesystem::path& path, bool repair) {
   WaxStore store(path);
-  store.LoadState(false);
+  store.LoadState(false, repair);
   return store;
 }
 
 void WaxStore::Verify(bool deep) {
-  LoadState(deep);
+  LoadState(deep, false);
 }
 
 std::uint64_t WaxStore::Put(const std::vector<std::byte>& /*content*/, const Metadata& /*metadata*/) {
@@ -389,13 +394,25 @@ WaxStats WaxStore::Stats() const {
   return stats_;
 }
 
+WaxWALStats WaxStore::WalStats() const {
+  WaxWALStats stats{};
+  stats.wal_size = wal_size_;
+  stats.write_pos = wal_write_pos_;
+  stats.checkpoint_pos = wal_checkpoint_pos_;
+  stats.pending_bytes = wal_pending_bytes_;
+  stats.committed_seq = wal_committed_seq_;
+  stats.last_seq = wal_last_sequence_;
+  stats.replay_snapshot_hit_count = wal_replay_snapshot_hit_count_;
+  return stats;
+}
+
 WaxStore::WaxStore(std::filesystem::path path) : path_(std::move(path)) {}
 
-void WaxStore::LoadState(bool deep_verify) {
+void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
   if (!std::filesystem::exists(path_)) {
     throw StoreError("store file does not exist: " + path_.string());
   }
-  const auto file_size = FileSize(path_);
+  auto file_size = FileSize(path_);
   if (file_size < core::mv2s::kHeaderRegionSize + core::mv2s::kFooterSize) {
     throw StoreError("file is too small to be a valid mv2s store");
   }
@@ -436,14 +453,107 @@ void WaxStore::LoadState(bool deep_verify) {
     DeepVerifySegments(path_, toc_summary.segments);
   }
 
+  const auto committed_seq = footer_slice->footer.wal_committed_seq;
+  const auto selected_header_was_stale = selected.file_generation != footer_slice->footer.generation;
+  bool used_replay_snapshot = false;
+  std::vector<core::wal::WalPendingMutationInfo> pending_mutations{};
+  core::wal::WalScanState wal_scan_state{};
+
+  try {
+    const auto replay_snapshot_matches_footer = selected.replay_snapshot.has_value() &&
+                                                selected.replay_snapshot->file_generation == footer_slice->footer.generation &&
+                                                selected.replay_snapshot->wal_committed_seq == committed_seq &&
+                                                selected.replay_snapshot->footer_offset == footer_slice->footer_offset;
+
+    if (replay_snapshot_matches_footer &&
+        selected.replay_snapshot->wal_checkpoint_pos == selected.replay_snapshot->wal_write_pos &&
+        core::wal::IsTerminalMarker(path_,
+                                    selected.wal_offset,
+                                    selected.wal_size,
+                                    selected.replay_snapshot->wal_write_pos)) {
+      used_replay_snapshot = true;
+      wal_scan_state.last_sequence = std::max(committed_seq, selected.replay_snapshot->wal_last_sequence);
+      wal_scan_state.write_pos = selected.replay_snapshot->wal_write_pos % selected.wal_size;
+      wal_scan_state.pending_bytes = 0;
+    } else if (!selected_header_was_stale &&
+               selected.wal_checkpoint_pos == selected.wal_write_pos &&
+               core::wal::IsTerminalMarker(path_,
+                                           selected.wal_offset,
+                                           selected.wal_size,
+                                           selected.wal_write_pos)) {
+      used_replay_snapshot = true;
+      wal_scan_state.last_sequence = committed_seq;
+      wal_scan_state.write_pos = selected.wal_write_pos % selected.wal_size;
+      wal_scan_state.pending_bytes = 0;
+    } else {
+      auto pending_scan = core::wal::ScanPendingMutationsWithState(path_,
+                                                                   selected.wal_offset,
+                                                                   selected.wal_size,
+                                                                   selected.wal_checkpoint_pos,
+                                                                   committed_seq);
+      wal_scan_state = pending_scan.state;
+      pending_mutations = std::move(pending_scan.pending_mutations);
+    }
+  } catch (const std::exception& ex) {
+    throw StoreError(std::string("wal scan failed: ") + ex.what());
+  }
+
+  const auto last_sequence = std::max(committed_seq, wal_scan_state.last_sequence);
+  std::uint64_t effective_checkpoint_pos = 0;
+  std::uint64_t effective_pending_bytes = 0;
+  if (wal_scan_state.last_sequence <= committed_seq) {
+    effective_checkpoint_pos = wal_scan_state.write_pos;
+    effective_pending_bytes = 0;
+  } else {
+    effective_checkpoint_pos = selected.wal_checkpoint_pos % selected.wal_size;
+    effective_pending_bytes = wal_scan_state.pending_bytes;
+  }
+
+  std::uint64_t required_end = footer_slice->footer_offset + core::mv2s::kFooterSize;
+  std::uint64_t pending_put_frames = 0;
+  for (const auto& mutation : pending_mutations) {
+    if (!mutation.put_frame.has_value()) {
+      continue;
+    }
+    ++pending_put_frames;
+    const auto& put = *mutation.put_frame;
+    if (put.payload_offset > std::numeric_limits<std::uint64_t>::max() - put.payload_length) {
+      throw StoreError("pending WAL putFrame payload range overflow");
+    }
+    const auto end = put.payload_offset + put.payload_length;
+    if (end > required_end) {
+      required_end = end;
+    }
+  }
+  if (required_end > file_size) {
+    throw StoreError("pending WAL references bytes beyond file size");
+  }
+  if (repair_trailing_bytes && file_size > required_end) {
+    std::error_code ec;
+    std::filesystem::resize_file(path_, required_end, ec);
+    if (ec) {
+      throw StoreError("failed to truncate trailing bytes: " + ec.message());
+    }
+    file_size = required_end;
+  }
+
   file_generation_ = footer_slice->footer.generation;
-  wal_committed_seq_ = footer_slice->footer.wal_committed_seq;
+  wal_size_ = selected.wal_size;
+  wal_committed_seq_ = committed_seq;
+  wal_write_pos_ = wal_scan_state.write_pos;
+  wal_checkpoint_pos_ = effective_checkpoint_pos;
+  wal_pending_bytes_ = effective_pending_bytes;
+  wal_last_sequence_ = last_sequence;
+  wal_replay_snapshot_hit_count_ = used_replay_snapshot ? 1U : 0U;
   footer_offset_ = footer_slice->footer_offset;
+  dirty_ = !pending_mutations.empty();
   is_open_ = true;
+  (void)file_size;
+  (void)used_replay_snapshot;
 
   stats_.generation = file_generation_;
   stats_.frame_count = toc_summary.frame_count;
-  stats_.pending_frames = 0;
+  stats_.pending_frames = pending_put_frames;
 }
 
 }  // namespace waxcpp
