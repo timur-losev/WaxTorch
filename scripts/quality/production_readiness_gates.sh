@@ -4,6 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT_DIR"
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  if [[ -z "${MACOSX_DEPLOYMENT_TARGET:-}" ]]; then
+    MACOS_MAJOR="$(sw_vers -productVersion | cut -d. -f1)"
+    export MACOSX_DEPLOYMENT_TARGET="${MACOS_MAJOR}.0"
+  fi
+  echo "Using MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET}"
+fi
+
 run_and_capture() {
   local log_file="$1"
   shift

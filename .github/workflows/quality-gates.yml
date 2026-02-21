@@ -24,6 +24,12 @@ jobs:
       - name: Swift version
         run: swift --version
 
+      - name: Set deployment target to runner macOS
+        run: |
+          MACOS_MAJOR="$(sw_vers -productVersion | cut -d. -f1)"
+          echo "MACOSX_DEPLOYMENT_TARGET=${MACOS_MAJOR}.0" >> "$GITHUB_ENV"
+          echo "Using MACOSX_DEPLOYMENT_TARGET=${MACOS_MAJOR}.0"
+
       - name: Run Production Gate
         run: |
           bash scripts/quality/production_readiness_gates.sh ${{ matrix.mode }}
