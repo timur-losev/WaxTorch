@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace waxcpp {
 
@@ -27,6 +29,7 @@ class MemoryOrchestrator {
   OrchestratorConfig config_;
   WaxStore store_;
   std::shared_ptr<EmbeddingProvider> embedder_;
+  std::unordered_map<std::uint64_t, std::vector<float>> embedding_cache_;
 };
 
 }  // namespace waxcpp

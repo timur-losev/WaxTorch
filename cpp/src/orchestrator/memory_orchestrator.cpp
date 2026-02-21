@@ -100,6 +100,8 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
                                        std::shared_ptr<EmbeddingProvider> embedder,
                                        bool enable_text_search,
                                        bool enable_vector_search,
+                                       std::unordered_map<std::uint64_t, std::vector<float>>* embedding_cache,
+                                       int embedding_cache_capacity,
                                        const SearchRequest& request) {
   StoreSearchChannels channels{};
   if (!request.query.has_value() || request.query->empty() || request.top_k <= 0) {
@@ -134,11 +136,36 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
     }
 
     if (enable_vector_search && embedder != nullptr && query_embedding.has_value()) {
-      const auto doc_embedding = embedder->Embed(text);
-      if (doc_embedding.size() != query_embedding->size()) {
+      const std::vector<float>* doc_embedding_ptr = nullptr;
+      std::vector<float> doc_embedding{};
+      if (embedding_cache != nullptr) {
+        const auto cache_it = embedding_cache->find(meta.id);
+        if (cache_it != embedding_cache->end()) {
+          doc_embedding_ptr = &cache_it->second;
+        }
+      }
+      if (doc_embedding_ptr == nullptr) {
+        doc_embedding = embedder->Embed(text);
+        if (embedding_cache != nullptr && embedding_cache_capacity > 0 &&
+            doc_embedding.size() == query_embedding->size()) {
+          if (embedding_cache->size() >= static_cast<std::size_t>(embedding_cache_capacity)) {
+            embedding_cache->clear();
+          }
+          auto [it, inserted] = embedding_cache->emplace(meta.id, doc_embedding);
+          if (!inserted) {
+            it->second = doc_embedding;
+          }
+          doc_embedding_ptr = &it->second;
+        }
+      }
+      if (doc_embedding_ptr == nullptr) {
+        doc_embedding_ptr = &doc_embedding;
+      }
+
+      if (doc_embedding_ptr->size() != query_embedding->size()) {
         continue;
       }
-      const auto vector_score = CosineSimilarity(std::span<const float>(doc_embedding.data(), doc_embedding.size()),
+      const auto vector_score = CosineSimilarity(std::span<const float>(doc_embedding_ptr->data(), doc_embedding_ptr->size()),
                                                  std::span<const float>(query_embedding->data(), query_embedding->size()));
       SearchResult vector_result{};
       vector_result.frame_id = meta.id;
@@ -170,7 +197,17 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
   for (const char ch : content) {
     payload.push_back(static_cast<std::byte>(static_cast<unsigned char>(ch)));
   }
-  (void)store_.Put(payload, metadata);
+  const auto frame_id = store_.Put(payload, metadata);
+
+  if (config_.enable_vector_search && embedder_ != nullptr && config_.embedding_cache_capacity > 0) {
+    auto embedding = embedder_->Embed(content);
+    if (!embedding.empty()) {
+      if (embedding_cache_.size() >= static_cast<std::size_t>(config_.embedding_cache_capacity)) {
+        embedding_cache_.clear();
+      }
+      embedding_cache_[frame_id] = std::move(embedding);
+    }
+  }
 }
 
 RAGContext MemoryOrchestrator::Recall(const std::string& query) {
@@ -181,7 +218,13 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
   req.rrf_k = config_.rag.rrf_k;
   req.preview_max_bytes = config_.rag.preview_max_bytes;
   const auto channels = BuildStoreChannels(
-      store_, embedder_, config_.enable_text_search, config_.enable_vector_search, req);
+      store_,
+      embedder_,
+      config_.enable_text_search,
+      config_.enable_vector_search,
+      &embedding_cache_,
+      config_.embedding_cache_capacity,
+      req);
   const auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
   return BuildFastRAGContext(req, response);
 }
@@ -195,7 +238,13 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
   req.rrf_k = config_.rag.rrf_k;
   req.preview_max_bytes = config_.rag.preview_max_bytes;
   const auto channels = BuildStoreChannels(
-      store_, embedder_, config_.enable_text_search, config_.enable_vector_search, req);
+      store_,
+      embedder_,
+      config_.enable_text_search,
+      config_.enable_vector_search,
+      &embedding_cache_,
+      config_.embedding_cache_capacity,
+      req);
   const auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
   return BuildFastRAGContext(req, response);
 }
