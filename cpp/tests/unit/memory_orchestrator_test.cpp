@@ -833,6 +833,46 @@ void ScenarioUseAfterCloseThrows(const std::filesystem::path& path) {
   Require(fact_threw, "RememberFact should throw after Close");
 }
 
+void ScenarioStructuredFactStagedOrderBeforeFlush(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: structured fact staged order before flush");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:stage", "city", "paris");
+    orchestrator.RememberFact("user:stage", "city", "rome");
+    const bool removed = orchestrator.ForgetFact("user:stage", "city");
+    Require(removed, "ForgetFact should remove staged key");
+
+    const auto before_flush = orchestrator.Recall("rome");
+    Require(before_flush.items.empty(), "staged structured fact mutations should stay hidden before flush");
+
+    orchestrator.Flush();
+    const auto after_flush = orchestrator.Recall("rome");
+    bool has_structured = false;
+    for (const auto& item : after_flush.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          has_structured = true;
+          break;
+        }
+      }
+    }
+    Require(!has_structured, "final staged remove should win within same flush");
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto facts = reopened.RecallFactsByEntityPrefix("user:stage", 10);
+    Require(facts.empty(), "reopen should preserve final remove outcome");
+    reopened.Close();
+  }
+}
+
 void ScenarioStructuredMemoryRemovePersists(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: structured memory remove persists");
   waxcpp::OrchestratorConfig config{};
@@ -905,6 +945,7 @@ int main() {
     const auto path24 = UniquePath();
     const auto path25 = UniquePath();
     const auto path26 = UniquePath();
+    const auto path27 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -933,6 +974,7 @@ int main() {
     ScenarioFlushFailureThenCloseReopenRecoversVector(path24);
     ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(path25);
     ScenarioUseAfterCloseThrows(path26);
+    ScenarioStructuredFactStagedOrderBeforeFlush(path27);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -989,6 +1031,8 @@ int main() {
     std::filesystem::remove(path25.string() + ".writer.lock", ec);
     std::filesystem::remove(path26, ec);
     std::filesystem::remove(path26.string() + ".writer.lock", ec);
+    std::filesystem::remove(path27, ec);
+    std::filesystem::remove(path27.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
