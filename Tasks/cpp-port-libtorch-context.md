@@ -350,6 +350,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/core/wax_store.cpp` | Added `PendingEmbeddingMutations(since)` implementation backed by WAL pending scan and sequence filter semantics | Codex |
 | `cpp/tests/unit/wal_ring_test.cpp` | Extended putEmbedding decode assertions to include decoded vector size | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added pending embedding snapshot regression (`latest_sequence`, `since` filter, commit-clear behavior) | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added recovery regression for pending embedding snapshots across reopen/close cycles (recovered-only pending survives close; commit clears it) | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

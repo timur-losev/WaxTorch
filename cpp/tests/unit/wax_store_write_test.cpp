@@ -233,6 +233,44 @@ void RunScenarioPendingEmbeddingSnapshot(const std::filesystem::path& path) {
   store.Close();
 }
 
+void RunScenarioPendingEmbeddingSnapshotReopenRecovery(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: pending embedding snapshot survives reopen recovery");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    store.PutEmbedding(200, {1.25F, 2.5F});
+    // Simulate crash: no explicit Close()/Commit().
+  }
+
+  std::optional<std::uint64_t> first_latest{};
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto stats = reopened.Stats();
+    Require(stats.frame_count == 0, "embedding-only pending should not affect committed frame_count on reopen");
+    Require(stats.pending_frames == 0, "embedding-only pending should not affect pending_frames counter");
+
+    const auto snapshot = reopened.PendingEmbeddingMutations();
+    Require(snapshot.embeddings.size() == 1, "expected one recovered pending embedding");
+    Require(snapshot.latest_sequence.has_value(), "expected latest sequence for recovered pending embedding");
+    Require(snapshot.embeddings[0].frame_id == 200, "unexpected recovered pending embedding frame_id");
+    Require(snapshot.embeddings[0].vector.size() == 2, "unexpected recovered embedding vector size");
+    first_latest = snapshot.latest_sequence;
+
+    // Recovered-only pending state must not auto-commit on close.
+    reopened.Close();
+  }
+
+  {
+    auto reopened_again = waxcpp::WaxStore::Open(path);
+    const auto snapshot = reopened_again.PendingEmbeddingMutations();
+    Require(snapshot.embeddings.size() == 1, "recovered pending embedding must remain after close");
+    Require(snapshot.latest_sequence == first_latest, "recovered pending embedding sequence must remain stable");
+    reopened_again.Commit();
+    const auto after_commit = reopened_again.PendingEmbeddingMutations();
+    Require(after_commit.embeddings.empty(), "commit should clear recovered pending embedding");
+    reopened_again.Close();
+  }
+}
+
 void RunScenarioPendingRecoveryCommit(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: pending WAL recovery then commit");
   {
@@ -676,6 +714,7 @@ int main() {
     RunScenarioPutBatchContracts(path);
     RunScenarioPutEmbeddingContracts(path);
     RunScenarioPendingEmbeddingSnapshot(path);
+    RunScenarioPendingEmbeddingSnapshotReopenRecovery(path);
     RunScenarioPendingRecoveryCommit(path);
     RunScenarioPendingRecoverySkipsUndecodableTail(path);
     RunScenarioDeleteAndSupersedePersist(path);
