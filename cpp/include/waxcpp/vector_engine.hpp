@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace waxcpp {
@@ -28,6 +29,7 @@ class USearchVectorEngine final : public VectorSearchEngine {
 
  private:
   int dimensions_;
+  std::unordered_map<std::uint64_t, std::vector<float>> vectors_;
 };
 
 }  // namespace waxcpp
