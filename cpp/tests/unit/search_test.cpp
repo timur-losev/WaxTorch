@@ -75,6 +75,47 @@ void ScenarioNaNScoreNormalization() {
   Require(context.items[1].score == 0.0F, "NaN score should be normalized to zero");
 }
 
+void ScenarioUnifiedSearchModesAndHybridRrf() {
+  waxcpp::tests::Log("scenario: unified search modes and hybrid rrf");
+  const std::vector<waxcpp::SearchResult> text_results = {
+      {.frame_id = 10, .score = 4.0F, .preview_text = std::string("t10"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 20, .score = 2.0F, .preview_text = std::string("t20"), .sources = {waxcpp::SearchSource::kText}},
+  };
+  const std::vector<waxcpp::SearchResult> vector_results = {
+      {.frame_id = 20, .score = 3.0F, .preview_text = std::string("v20"), .sources = {waxcpp::SearchSource::kVector}},
+      {.frame_id = 30, .score = 1.0F, .preview_text = std::string("v30"), .sources = {waxcpp::SearchSource::kVector}},
+  };
+
+  {
+    waxcpp::SearchRequest request{};
+    request.mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+    request.top_k = 10;
+    const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, vector_results);
+    Require(response.results.size() == 2, "text-only mode should use text channel only");
+    Require(response.results[0].frame_id == 10, "text-only top result mismatch");
+  }
+
+  {
+    waxcpp::SearchRequest request{};
+    request.mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+    request.top_k = 10;
+    const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, vector_results);
+    Require(response.results.size() == 2, "vector-only mode should use vector channel only");
+    Require(response.results[0].frame_id == 20, "vector-only top result mismatch");
+  }
+
+  {
+    waxcpp::SearchRequest request{};
+    request.mode = {waxcpp::SearchModeKind::kHybrid, 0.5F};
+    request.top_k = 10;
+    request.rrf_k = 60;
+    const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, vector_results);
+    Require(response.results.size() == 3, "hybrid mode should merge both channels");
+    Require(response.results[0].frame_id == 20, "frame present in both channels should win hybrid RRF");
+    Require(response.results[0].sources.size() == 2, "merged frame should carry both sources");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -83,6 +124,7 @@ int main() {
     ScenarioDeterministicOrderingAndTopK();
     ScenarioPreviewClampAndTokenCount();
     ScenarioNaNScoreNormalization();
+    ScenarioUnifiedSearchModesAndHybridRrf();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

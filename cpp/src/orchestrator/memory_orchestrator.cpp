@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <stdexcept>
+#include <span>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -67,43 +69,86 @@ float TextOverlapScore(std::string_view query, std::string_view text) {
   return score;
 }
 
-SearchResponse BuildStoreTextResponse(WaxStore& store, const SearchRequest& request) {
-  SearchResponse response{};
+float Dot(std::span<const float> lhs, std::span<const float> rhs) {
+  float dot = 0.0F;
+  for (std::size_t i = 0; i < lhs.size(); ++i) {
+    dot += lhs[i] * rhs[i];
+  }
+  return dot;
+}
+
+float Norm(std::span<const float> v) {
+  const auto d = Dot(v, v);
+  return std::sqrt(std::max(d, 0.0F));
+}
+
+float CosineSimilarity(std::span<const float> lhs, std::span<const float> rhs) {
+  const auto lhs_norm = Norm(lhs);
+  const auto rhs_norm = Norm(rhs);
+  if (lhs_norm <= 0.0F || rhs_norm <= 0.0F) {
+    return 0.0F;
+  }
+  return Dot(lhs, rhs) / (lhs_norm * rhs_norm);
+}
+
+struct StoreSearchChannels {
+  std::vector<SearchResult> text_results;
+  std::vector<SearchResult> vector_results;
+};
+
+StoreSearchChannels BuildStoreChannels(WaxStore& store,
+                                       std::shared_ptr<EmbeddingProvider> embedder,
+                                       bool enable_text_search,
+                                       bool enable_vector_search,
+                                       const SearchRequest& request) {
+  StoreSearchChannels channels{};
   if (!request.query.has_value() || request.query->empty() || request.top_k <= 0) {
-    return response;
+    return channels;
+  }
+
+  std::optional<std::vector<float>> query_embedding = request.embedding;
+  if (!query_embedding.has_value() && enable_vector_search && embedder != nullptr) {
+    query_embedding = embedder->Embed(*request.query);
   }
 
   const auto metas = store.FrameMetas();
-  response.results.reserve(metas.size());
+  channels.text_results.reserve(metas.size());
+  channels.vector_results.reserve(metas.size());
   for (const auto& meta : metas) {
     if (meta.status != 0) {
       continue;
     }
     const auto payload = store.FrameContent(meta.id);
     const auto text = BytesToString(payload);
-    const auto score = TextOverlapScore(*request.query, text);
-    if (score <= 0.0F) {
-      continue;
+
+    if (enable_text_search) {
+      const auto text_score = TextOverlapScore(*request.query, text);
+      if (text_score > 0.0F) {
+        SearchResult text_result{};
+        text_result.frame_id = meta.id;
+        text_result.score = text_score;
+        text_result.preview_text = text;
+        text_result.sources = {SearchSource::kText};
+        channels.text_results.push_back(std::move(text_result));
+      }
     }
 
-    SearchResult result{};
-    result.frame_id = meta.id;
-    result.score = score;
-    result.preview_text = text;
-    result.sources = {SearchSource::kText};
-    response.results.push_back(std::move(result));
-  }
-
-  std::sort(response.results.begin(), response.results.end(), [](const auto& lhs, const auto& rhs) {
-    if (lhs.score != rhs.score) {
-      return lhs.score > rhs.score;
+    if (enable_vector_search && embedder != nullptr && query_embedding.has_value()) {
+      const auto doc_embedding = embedder->Embed(text);
+      if (doc_embedding.size() != query_embedding->size()) {
+        continue;
+      }
+      const auto vector_score = CosineSimilarity(std::span<const float>(doc_embedding.data(), doc_embedding.size()),
+                                                 std::span<const float>(query_embedding->data(), query_embedding->size()));
+      SearchResult vector_result{};
+      vector_result.frame_id = meta.id;
+      vector_result.score = vector_score;
+      vector_result.preview_text = text;
+      vector_result.sources = {SearchSource::kVector};
+      channels.vector_results.push_back(std::move(vector_result));
     }
-    return lhs.frame_id < rhs.frame_id;
-  });
-  if (response.results.size() > static_cast<std::size_t>(request.top_k)) {
-    response.results.resize(static_cast<std::size_t>(request.top_k));
   }
-  return response;
+  return channels;
 }
 
 }  // namespace
@@ -135,7 +180,9 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
   req.top_k = config_.rag.search_top_k;
   req.rrf_k = config_.rag.rrf_k;
   req.preview_max_bytes = config_.rag.preview_max_bytes;
-  auto response = BuildStoreTextResponse(store_, req);
+  const auto channels = BuildStoreChannels(
+      store_, embedder_, config_.enable_text_search, config_.enable_vector_search, req);
+  const auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
   return BuildFastRAGContext(req, response);
 }
 
@@ -147,7 +194,9 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
   req.top_k = config_.rag.search_top_k;
   req.rrf_k = config_.rag.rrf_k;
   req.preview_max_bytes = config_.rag.preview_max_bytes;
-  auto response = BuildStoreTextResponse(store_, req);
+  const auto channels = BuildStoreChannels(
+      store_, embedder_, config_.enable_text_search, config_.enable_vector_search, req);
+  const auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
   return BuildFastRAGContext(req, response);
 }
 

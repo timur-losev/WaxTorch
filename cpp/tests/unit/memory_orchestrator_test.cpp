@@ -91,6 +91,28 @@ void ScenarioRecallReturnsRankedItems(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioHybridRecallWithEmbedder(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: hybrid recall with embedder");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kHybrid, 0.5F};
+  config.rag.search_top_k = 5;
+
+  auto embedder = std::make_shared<waxcpp::MiniLMEmbedderTorch>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("vector apple context", {});
+    orchestrator.Remember("banana only", {});
+    orchestrator.Flush();
+
+    const auto context = orchestrator.Recall("apple");
+    Require(!context.items.empty(), "hybrid recall should return at least one result");
+    Require(context.items[0].sources.size() >= 1, "hybrid result should include at least one source");
+    orchestrator.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -99,10 +121,12 @@ int main() {
     const auto path0 = UniquePath();
     const auto path1 = UniquePath();
     const auto path2 = UniquePath();
+    const auto path3 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioRememberFlushPersistsFrame(path1);
     ScenarioRecallReturnsRankedItems(path2);
+    ScenarioHybridRecallWithEmbedder(path3);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -111,6 +135,8 @@ int main() {
     std::filesystem::remove(path1.string() + ".writer.lock", ec);
     std::filesystem::remove(path2, ec);
     std::filesystem::remove(path2.string() + ".writer.lock", ec);
+    std::filesystem::remove(path3, ec);
+    std::filesystem::remove(path3.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
