@@ -413,6 +413,18 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
   return BuildFastRAGContext(req, response);
 }
 
+void MemoryOrchestrator::RememberFact(const std::string& entity,
+                                      const std::string& attribute,
+                                      const std::string& value,
+                                      const Metadata& metadata) {
+  (void)structured_memory_.Upsert(entity, attribute, value, metadata);
+}
+
+std::vector<StructuredMemoryEntry> MemoryOrchestrator::RecallFactsByEntityPrefix(const std::string& entity_prefix,
+                                                                                  int limit) {
+  return structured_memory_.QueryByEntityPrefix(entity_prefix, limit);
+}
+
 void MemoryOrchestrator::Flush() {
   store_.Commit();
 }

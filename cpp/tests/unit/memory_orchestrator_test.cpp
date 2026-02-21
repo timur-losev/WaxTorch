@@ -342,6 +342,30 @@ void ScenarioTextOnlyRecallSkipsVectorEmbedding(const std::filesystem::path& pat
   }
 }
 
+void ScenarioStructuredMemoryFacts(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: structured memory facts");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:1", "name", "Alice", {{"src", "profile"}});
+    orchestrator.RememberFact("user:1", "city", "Paris");
+    orchestrator.RememberFact("user:2", "name", "Bob");
+    orchestrator.RememberFact("user:1", "name", "Alice B", {{"src", "edit"}});
+
+    const auto user_facts = orchestrator.RecallFactsByEntityPrefix("user:", 10);
+    Require(user_facts.size() == 3, "structured facts prefix query mismatch");
+    Require(user_facts[0].entity == "user:1" && user_facts[0].attribute == "city", "fact order mismatch [0]");
+    Require(user_facts[1].entity == "user:1" && user_facts[1].attribute == "name", "fact order mismatch [1]");
+    Require(user_facts[1].value == "Alice B", "upserted fact value mismatch");
+    Require(user_facts[1].version == 2, "fact version should increment on upsert");
+    Require(user_facts[1].metadata.at("src") == "edit", "fact metadata mismatch");
+    Require(user_facts[2].entity == "user:2", "fact order mismatch [2]");
+    orchestrator.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -358,6 +382,7 @@ int main() {
     const auto path8 = UniquePath();
     const auto path9 = UniquePath();
     const auto path10 = UniquePath();
+    const auto path11 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioRememberFlushPersistsFrame(path1);
@@ -370,6 +395,7 @@ int main() {
     ScenarioBatchProviderUsedForRemember(path8);
     ScenarioRememberRespectsIngestBatchSize(path9);
     ScenarioTextOnlyRecallSkipsVectorEmbedding(path10);
+    ScenarioStructuredMemoryFacts(path11);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -394,6 +420,8 @@ int main() {
     std::filesystem::remove(path9.string() + ".writer.lock", ec);
     std::filesystem::remove(path10, ec);
     std::filesystem::remove(path10.string() + ".writer.lock", ec);
+    std::filesystem::remove(path11, ec);
+    std::filesystem::remove(path11.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
