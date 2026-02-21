@@ -298,6 +298,27 @@ void ScenarioBatchProviderUsedForRemember(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioRememberRespectsIngestBatchSize(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: remember respects ingest_batch_size");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.embedding_cache_capacity = 64;
+  config.ingest_batch_size = 2;
+  config.chunking.target_tokens = 1;
+  config.chunking.overlap_tokens = 0;
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("a b c d e", {});  // 5 chunks, batch_size=2 -> 3 batch calls
+    Require(embedder->batch_calls() == 3, "remember should split EmbedBatch calls by ingest_batch_size");
+    Require(embedder->embed_calls() == 0, "remember batch mode should avoid per-chunk Embed");
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -312,6 +333,7 @@ int main() {
     const auto path6 = UniquePath();
     const auto path7 = UniquePath();
     const auto path8 = UniquePath();
+    const auto path9 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioRememberFlushPersistsFrame(path1);
@@ -322,6 +344,7 @@ int main() {
     ScenarioMaxSnippetsClamp(path6);
     ScenarioRememberChunking(path7);
     ScenarioBatchProviderUsedForRemember(path8);
+    ScenarioRememberRespectsIngestBatchSize(path9);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -342,6 +365,8 @@ int main() {
     std::filesystem::remove(path7.string() + ".writer.lock", ec);
     std::filesystem::remove(path8, ec);
     std::filesystem::remove(path8.string() + ".writer.lock", ec);
+    std::filesystem::remove(path9, ec);
+    std::filesystem::remove(path9.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

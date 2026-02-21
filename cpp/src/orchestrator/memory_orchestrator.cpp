@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <span>
@@ -312,9 +313,24 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
   if (config_.enable_vector_search && embedder_ != nullptr && config_.embedding_cache_capacity > 0) {
     if (auto* batch_embedder = dynamic_cast<BatchEmbeddingProvider*>(embedder_.get()); batch_embedder != nullptr &&
         chunks.size() > 1) {
-      auto embeddings = batch_embedder->EmbedBatch(chunks);
-      if (embeddings.size() != chunks.size()) {
-        throw std::runtime_error("batch embedding provider returned mismatched chunk embedding count");
+      const std::size_t batch_size =
+          config_.ingest_batch_size > 0 ? static_cast<std::size_t>(config_.ingest_batch_size) : chunks.size();
+      std::vector<std::vector<float>> embeddings{};
+      embeddings.reserve(chunks.size());
+      for (std::size_t start = 0; start < chunks.size(); start += batch_size) {
+        const auto end = std::min(chunks.size(), start + batch_size);
+        std::vector<std::string> slice{};
+        slice.reserve(end - start);
+        for (std::size_t i = start; i < end; ++i) {
+          slice.push_back(chunks[i]);
+        }
+        auto partial = batch_embedder->EmbedBatch(slice);
+        if (partial.size() != slice.size()) {
+          throw std::runtime_error("batch embedding provider returned mismatched chunk embedding count");
+        }
+        embeddings.insert(embeddings.end(),
+                          std::make_move_iterator(partial.begin()),
+                          std::make_move_iterator(partial.end()));
       }
       chunk_embeddings = std::move(embeddings);
     }
