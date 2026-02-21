@@ -476,6 +476,17 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
     : config_(config),
       store_(std::filesystem::exists(path) ? WaxStore::Open(path) : WaxStore::Create(path)),
       embedder_(std::move(embedder)) {
+  if (config_.rag.search_mode.kind == SearchModeKind::kTextOnly && !config_.enable_text_search) {
+    throw std::runtime_error("text-only search mode requires text search to be enabled");
+  }
+  if (config_.rag.search_mode.kind == SearchModeKind::kVectorOnly && !config_.enable_vector_search) {
+    throw std::runtime_error("vector-only search mode requires vector search to be enabled");
+  }
+  if (config_.rag.search_mode.kind == SearchModeKind::kHybrid &&
+      !config_.enable_text_search &&
+      !config_.enable_vector_search) {
+    throw std::runtime_error("hybrid search mode requires at least one enabled search channel");
+  }
   if (config_.enable_vector_search && !embedder_) {
     throw std::runtime_error("vector search enabled requires embedder in current scaffold");
   }

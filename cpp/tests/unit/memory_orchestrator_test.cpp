@@ -123,6 +123,55 @@ void ScenarioVectorPolicyValidation(const std::filesystem::path& path) {
   Require(threw, "vector-enabled config must require embedder");
 }
 
+void ScenarioSearchModePolicyValidation(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: search mode policy validation");
+
+  {
+    waxcpp::OrchestratorConfig config{};
+    config.enable_text_search = false;
+    config.enable_vector_search = false;
+    config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+    bool threw = false;
+    try {
+      waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+      orchestrator.Close();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "text-only mode must require enabled text channel");
+  }
+
+  {
+    waxcpp::OrchestratorConfig config{};
+    config.enable_text_search = true;
+    config.enable_vector_search = false;
+    config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+    bool threw = false;
+    try {
+      waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+      orchestrator.Close();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "vector-only mode must require enabled vector channel");
+  }
+
+  {
+    waxcpp::OrchestratorConfig config{};
+    config.enable_text_search = false;
+    config.enable_vector_search = false;
+    config.rag.search_mode = {waxcpp::SearchModeKind::kHybrid, 0.5F};
+    bool threw = false;
+    try {
+      waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+      orchestrator.Close();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "hybrid mode must require at least one enabled channel");
+  }
+}
+
 void ScenarioRememberFlushPersistsFrame(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: remember/flush persists frame");
   waxcpp::OrchestratorConfig config{};
@@ -688,8 +737,10 @@ int main() {
     const auto path19 = UniquePath();
     const auto path20 = UniquePath();
     const auto path21 = UniquePath();
+    const auto path22 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
+    ScenarioSearchModePolicyValidation(path22);
     ScenarioRememberFlushPersistsFrame(path1);
     ScenarioRecallReturnsRankedItems(path2);
     ScenarioHybridRecallWithEmbedder(path3);
@@ -757,6 +808,8 @@ int main() {
     std::filesystem::remove(path20.string() + ".writer.lock", ec);
     std::filesystem::remove(path21, ec);
     std::filesystem::remove(path21.string() + ".writer.lock", ec);
+    std::filesystem::remove(path22, ec);
+    std::filesystem::remove(path22.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
