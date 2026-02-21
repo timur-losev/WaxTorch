@@ -166,6 +166,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Rebuild vector index on orchestrator startup using persisted embedding records first, with embedder fallback only for missing/dimension-mismatched entries
 - [x] Add orchestrator regressions for persisted-embedding reopen behavior (no re-embed on reopen; embedding journal payload not surfaced in text recall)
 - [x] Add WAL recovery regression: undecodable tail record after valid pending putFrame does not block reopen/commit of earlier decodable mutation
+- [x] Add crash-window regression for failpoint step 4 (after header B write): reopen must observe new committed state with no pending WAL
+- [x] Wire `WaxWALStats.auto_commit_count` to real runtime state and add close-path regressions (increments only for local pending auto-commit)
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -329,6 +331,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Added internal embedding-journal codec (`WAXEM1`), persisted embedding writes on remember, internal payload filtering, and persisted-first vector rebuild on reopen | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added persisted-embedding reopen regressions (no re-embed during reopen rebuild, no embedding-journal leakage into text recall) | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added recovery regression for WAL decode-stop path (`valid pending putFrame + undecodable tail`) to ensure reopen exposes/applys only decodable pending mutations | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added crash-window regression for commit failpoint step 4 (`header B` published): reopen verifies footer/header publication durability and zero pending WAL | Codex |
+| `cpp/src/core/wax_store.cpp` | Wired `WalStats().auto_commit_count` and increment-on-`Close` auto-commit semantics for local pending mutations only | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added `auto_commit_count` assertions for local pending close auto-commit vs recovered-pending close no-op behavior | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

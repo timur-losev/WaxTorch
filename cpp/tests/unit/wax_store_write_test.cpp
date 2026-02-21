@@ -298,6 +298,37 @@ void RunScenarioCrashWindowAfterHeaderA(const std::filesystem::path& path) {
   reopened.Close();
 }
 
+void RunScenarioCrashWindowAfterHeaderB(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: crash-window after header B write");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    const std::vector<std::byte> payload0 = {std::byte{0x53}};
+    const std::vector<std::byte> payload1 = {std::byte{0x54}};
+    (void)store.Put(payload0);
+    store.Commit();
+
+    (void)store.Put(payload1);
+    bool threw = false;
+    {
+      ScopedCommitFailStep fail_step(4);
+      try {
+        store.Commit();
+      } catch (const std::exception&) {
+        threw = true;
+      }
+    }
+    Require(threw, "commit should fail at injected step 4");
+    // Simulate crash: do not call Close().
+  }
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  reopened.Verify(true);
+  const auto stats = reopened.Stats();
+  Require(stats.frame_count == 2, "expected new committed frame_count after header-B crash");
+  Require(stats.pending_frames == 0, "expected no pending put after header-B crash");
+  reopened.Close();
+}
+
 void RunScenarioSupersedeCycleRejected(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: supersede cycle rejected at commit");
   {
@@ -363,6 +394,10 @@ void RunScenarioCloseAutoCommitsPending(const std::filesystem::path& path) {
   Require(stats.frame_count == 1, "close should commit pending put");
   Require(stats.pending_frames == 0, "no pending frames expected after close auto-commit");
   reopened.Close();
+
+  const auto closed_wal_stats = store.WalStats();
+  Require(closed_wal_stats.auto_commit_count == 1,
+          "Close() with local pending mutations must increment wal auto_commit_count");
 }
 
 void RunScenarioFrameReadApis(const std::filesystem::path& path) {
@@ -417,6 +452,10 @@ void RunScenarioCloseDoesNotCommitRecoveredPending(const std::filesystem::path& 
     Require(stats.pending_frames == 1, "recovered pending scenario should expose pending frame");
     // Close must not auto-commit recovery-only pending mutations.
     reopened.Close();
+
+    const auto closed_wal_stats = reopened.WalStats();
+    Require(closed_wal_stats.auto_commit_count == 0,
+            "Close() on recovered pending-only state must not increment wal auto_commit_count");
   }
 
   {
@@ -493,6 +532,7 @@ int main() {
     RunScenarioCrashWindowAfterTocWrite(path);
     RunScenarioCrashWindowAfterFooterWrite(path);
     RunScenarioCrashWindowAfterHeaderA(path);
+    RunScenarioCrashWindowAfterHeaderB(path);
     RunScenarioSupersedeCycleRejected(path);
     RunScenarioSupersedeConflictRejected(path);
     RunScenarioCloseAutoCommitsPending(path);

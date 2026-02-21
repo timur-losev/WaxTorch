@@ -892,8 +892,13 @@ void WaxStore::Commit() {
 }
 
 void WaxStore::Close() {
+  bool performed_auto_commit = false;
   if (is_open_ && dirty_ && has_local_mutations_) {
     Commit();
+    performed_auto_commit = true;
+  }
+  if (performed_auto_commit) {
+    wal_auto_commit_count_ += 1;
   }
   is_open_ = false;
   writer_lease_.reset();
@@ -915,6 +920,7 @@ WaxWALStats WaxStore::WalStats() const {
   stats.checkpoint_count = wal_checkpoint_count_;
   stats.sentinel_write_count = wal_sentinel_write_count_;
   stats.write_call_count = wal_write_call_count_;
+  stats.auto_commit_count = wal_auto_commit_count_;
   stats.replay_snapshot_hit_count = wal_replay_snapshot_hit_count_;
   return stats;
 }
@@ -1118,6 +1124,7 @@ void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
   wal_checkpoint_count_ = 0;
   wal_sentinel_write_count_ = 0;
   wal_write_call_count_ = 0;
+  wal_auto_commit_count_ = 0;
   wal_replay_snapshot_hit_count_ = used_replay_snapshot ? 1U : 0U;
   footer_offset_ = footer_slice->footer_offset;
   next_frame_id_ = pending_max_frame_id_plus_one;

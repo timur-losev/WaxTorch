@@ -89,6 +89,7 @@ class WaxStore {
   std::uint64_t wal_checkpoint_count_ = 0;
   std::uint64_t wal_sentinel_write_count_ = 0;
   std::uint64_t wal_write_call_count_ = 0;
+  std::uint64_t wal_auto_commit_count_ = 0;
   std::uint64_t wal_replay_snapshot_hit_count_ = 0;
   std::uint64_t footer_offset_ = 0;
   std::uint64_t next_frame_id_ = 0;
