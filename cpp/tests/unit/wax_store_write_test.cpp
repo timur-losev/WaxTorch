@@ -412,6 +412,26 @@ void RunScenarioRecoveredPendingPlusLocalMutationsCommit(const std::filesystem::
   }
 }
 
+void RunScenarioWriterLeaseExclusion(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: writer lease excludes concurrent open on same store path");
+  auto primary = waxcpp::WaxStore::Create(path);
+
+  bool threw = false;
+  try {
+    auto competing = waxcpp::WaxStore::Open(path);
+    competing.Close();
+  } catch (const std::exception& ex) {
+    threw = true;
+    waxcpp::tests::Log(std::string("expected competing-open rejection: ") + ex.what());
+  }
+  Require(threw, "competing open must fail while primary writer lease is held");
+
+  primary.Close();
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  reopened.Close();
+}
+
 }  // namespace
 
 int main() {
@@ -432,6 +452,7 @@ int main() {
     RunScenarioFrameReadApis(path);
     RunScenarioCloseDoesNotCommitRecoveredPending(path);
     RunScenarioRecoveredPendingPlusLocalMutationsCommit(path);
+    RunScenarioWriterLeaseExclusion(path);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);

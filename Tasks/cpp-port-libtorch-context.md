@@ -96,6 +96,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add mixed pending scenario coverage (recovered pending + new local mutations commit in one pass)
 - [x] Replace `FTS5SearchEngine` stub with deterministic in-memory text ranking baseline (tokenization + TF-IDF scoring + frame_id tie-break)
 - [x] Add dedicated `fts5_search_engine` unit test suite (ranking, tie-break, remove, batch mismatch, empty-input guards)
+- [x] Add writer-lease baseline for `WaxStore::Open/Create` via lock-directory sentinel (`.writer.lock`) to block concurrent writers on same store path
+- [x] Add integration coverage for writer-lease exclusion and post-close reacquire path
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -172,6 +174,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/text/fts5_search_engine.cpp` | Implemented deterministic tokenized text search baseline (`Index/IndexBatch/Remove/Search`) with TF-IDF scoring and frame-id tie-break | Codex |
 | `cpp/tests/unit/fts5_search_engine_test.cpp` | Added text-engine unit coverage for ranking, deterministic ties, remove behavior, batch validation, and empty-input semantics | Codex |
 | `cpp/CMakeLists.txt` | Added `waxcpp_fts5_search_engine_test` target to C++ test matrix | Codex |
+| `cpp/include/waxcpp/wax_store.hpp` | Marked `WaxStore` non-copyable and added writer-lease ownership state | Codex |
+| `cpp/src/core/wax_store.cpp` | Added writer lease acquire/release lifecycle (`.writer.lock`) in open/close path | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added writer-lease exclusion scenario (competing open fails until primary close) | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
@@ -188,7 +193,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - **Invariants in play**: 1, 2, 4, 6, 7, 8, 9 explicitly tracked; M2 work directly advances deterministic retrieval and two-phase safety foundations.
 
 ## Handoff Notes
-M1 and M2 are complete. M3 baseline is in place: C++ parses WAL headers, detects terminal markers for replay snapshot/header cursor fast paths, scans pending mutations with Swift-compatible decode-stop semantics, validates pending putFrame payload ranges, truncates trailing bytes on open while preserving bytes referenced by pending putFrame, stores effective WAL open-state internally, supports WAL append/capacity/padding-wrap/sentinel/checkpoint behavior via `WalRingWriter`, and wires that into `WaxStore::Put/PutBatch/Delete/Supersede/Commit`. `Commit` applies decoded pending WAL mutations into TOC, writes new footer/header generations, and checkpoints WAL cursor state. Crash-window behavior is covered by deterministic failpoint tests for post-TOC/pre-footer, post-footer/pre-header, and single-header-published windows. Text-search work has started with a deterministic `FTS5SearchEngine` baseline and dedicated unit coverage. Remaining gap is full parity hardening for advanced mutation semantics/index coupling and replay edge equivalence beyond current scope.
+M1 and M2 are complete. M3 baseline is in place: C++ parses WAL headers, detects terminal markers for replay snapshot/header cursor fast paths, scans pending mutations with Swift-compatible decode-stop semantics, validates pending putFrame payload ranges, truncates trailing bytes on open while preserving bytes referenced by pending putFrame, stores effective WAL open-state internally, supports WAL append/capacity/padding-wrap/sentinel/checkpoint behavior via `WalRingWriter`, and wires that into `WaxStore::Put/PutBatch/Delete/Supersede/Commit`. `Commit` applies decoded pending WAL mutations into TOC, writes new footer/header generations, and checkpoints WAL cursor state. Crash-window behavior is covered by deterministic failpoint tests for post-TOC/pre-footer, post-footer/pre-header, and single-header-published windows. Writer-lease exclusion is now enforced in `Open/Create` with `.writer.lock` sentinel semantics and reopen-after-close test coverage. Text-search work has started with a deterministic `FTS5SearchEngine` baseline and dedicated unit coverage. Remaining gap is full parity hardening for advanced mutation semantics/index coupling and replay edge equivalence beyond current scope.
 
 ## Open Questions
 1. Final remote for `cpp/third_party/libtorch-dist` should be replaced with dedicated artifact mirror before release.

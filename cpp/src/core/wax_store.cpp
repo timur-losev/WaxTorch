@@ -27,6 +27,32 @@ std::runtime_error StoreError(const std::string& message) {
   return std::runtime_error("wax_store: " + message);
 }
 
+std::filesystem::path WriterLeasePathForStore(const std::filesystem::path& store_path) {
+  auto lease_path = store_path;
+  lease_path += ".writer.lock";
+  return lease_path;
+}
+
+std::shared_ptr<std::filesystem::path> AcquireWriterLease(const std::filesystem::path& store_path) {
+  const auto lease_path = WriterLeasePathForStore(store_path);
+  std::error_code ec;
+  const auto created = std::filesystem::create_directory(lease_path, ec);
+  if (!created) {
+    if (ec) {
+      throw StoreError("failed to acquire writer lease at " + lease_path.string() + ": " + ec.message());
+    }
+    throw StoreError("writer lease already held: " + lease_path.string());
+  }
+
+  return std::shared_ptr<std::filesystem::path>(
+      new std::filesystem::path(lease_path),
+      [](std::filesystem::path* path) {
+        std::error_code release_ec;
+        std::filesystem::remove_all(*path, release_ec);
+        delete path;
+      });
+}
+
 void MaybeInjectCommitCrash(std::uint32_t step) {
   const auto requested_step = g_test_commit_fail_step.load(std::memory_order_relaxed);
   if (requested_step == 0) {
@@ -533,6 +559,7 @@ WaxStore WaxStore::Open(const std::filesystem::path& path) {
 
 WaxStore WaxStore::Open(const std::filesystem::path& path, bool repair) {
   WaxStore store(path);
+  store.writer_lease_ = AcquireWriterLease(path);
   store.LoadState(false, repair);
   return store;
 }
@@ -869,6 +896,7 @@ void WaxStore::Close() {
     Commit();
   }
   is_open_ = false;
+  writer_lease_.reset();
 }
 
 WaxStats WaxStore::Stats() const {

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -42,6 +43,12 @@ struct WaxFrameMeta {
 
 class WaxStore {
  public:
+  WaxStore(const WaxStore&) = delete;
+  WaxStore& operator=(const WaxStore&) = delete;
+  WaxStore(WaxStore&&) noexcept = default;
+  WaxStore& operator=(WaxStore&&) noexcept = default;
+  ~WaxStore() = default;
+
   static WaxStore Create(const std::filesystem::path& path);
   static WaxStore Open(const std::filesystem::path& path, bool repair);
   static WaxStore Open(const std::filesystem::path& path);
@@ -89,6 +96,7 @@ class WaxStore {
   bool has_local_mutations_ = false;
   bool is_open_ = false;
   std::vector<WaxFrameMeta> committed_frame_metas_{};
+  std::shared_ptr<std::filesystem::path> writer_lease_{};
   WaxStats stats_{};
 };
 
