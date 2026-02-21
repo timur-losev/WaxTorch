@@ -382,6 +382,36 @@ void RunScenarioCloseDoesNotCommitRecoveredPending(const std::filesystem::path& 
   }
 }
 
+void RunScenarioRecoveredPendingPlusLocalMutationsCommit(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: recovered pending plus local mutations commit together");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    (void)store.Put({std::byte{0xC1}});  // pending from crashed process
+    // Simulate crash/no graceful close.
+  }
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    auto before = reopened.Stats();
+    Require(before.frame_count == 0, "expected no committed frames before merged commit");
+    Require(before.pending_frames == 1, "expected one recovered pending frame");
+
+    const auto local_id = reopened.Put({std::byte{0xC2}});
+    Require(local_id == 1, "local frame id should continue after recovered pending frame id");
+    reopened.Commit();
+
+    auto after = reopened.Stats();
+    Require(after.frame_count == 2, "expected two committed frames after merged commit");
+    Require(after.pending_frames == 0, "expected no pending frames after merged commit");
+
+    const auto c0 = reopened.FrameContent(0);
+    const auto c1 = reopened.FrameContent(1);
+    Require(c0 == std::vector<std::byte>{std::byte{0xC1}}, "frame 0 content mismatch after merged commit");
+    Require(c1 == std::vector<std::byte>{std::byte{0xC2}}, "frame 1 content mismatch after merged commit");
+    reopened.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -401,6 +431,7 @@ int main() {
     RunScenarioCloseAutoCommitsPending(path);
     RunScenarioFrameReadApis(path);
     RunScenarioCloseDoesNotCommitRecoveredPending(path);
+    RunScenarioRecoveredPendingPlusLocalMutationsCommit(path);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);
