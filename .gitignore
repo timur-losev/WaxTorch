@@ -17,3 +17,4 @@ DerivedData/
 /cpp/cmake-build-*/
 /cpp/out/
 /cpp/.cache/
+build/
