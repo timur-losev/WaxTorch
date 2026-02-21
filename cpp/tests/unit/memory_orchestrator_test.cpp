@@ -34,6 +34,15 @@ std::vector<std::byte> StringToBytes(const std::string& text) {
   return bytes;
 }
 
+std::string BytesToString(const std::vector<std::byte>& bytes) {
+  std::string text{};
+  text.reserve(bytes.size());
+  for (const auto b : bytes) {
+    text.push_back(static_cast<char>(std::to_integer<unsigned char>(b)));
+  }
+  return text;
+}
+
 class CountingEmbedder final : public waxcpp::EmbeddingProvider {
  public:
   int dimensions() const override { return 4; }
@@ -245,6 +254,30 @@ void ScenarioMaxSnippetsClamp(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioRememberChunking(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: remember chunking");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+  config.chunking.target_tokens = 3;
+  config.chunking.overlap_tokens = 1;
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("a b c d e", {});
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    const auto stats = store.Stats();
+    Require(stats.frame_count == 2, "chunking should split content into two frames");
+    Require(BytesToString(store.FrameContent(0)) == "a b c", "chunk[0] mismatch");
+    Require(BytesToString(store.FrameContent(1)) == "c d e", "chunk[1] mismatch");
+    store.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -257,6 +290,7 @@ int main() {
     const auto path4 = UniquePath();
     const auto path5 = UniquePath();
     const auto path6 = UniquePath();
+    const auto path7 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioRememberFlushPersistsFrame(path1);
@@ -265,6 +299,7 @@ int main() {
     ScenarioEmbeddingMemoizationInRecall(path4);
     ScenarioBatchProviderUsedForVectorRecall(path5);
     ScenarioMaxSnippetsClamp(path6);
+    ScenarioRememberChunking(path7);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
@@ -281,6 +316,8 @@ int main() {
     std::filesystem::remove(path5.string() + ".writer.lock", ec);
     std::filesystem::remove(path6, ec);
     std::filesystem::remove(path6.string() + ".writer.lock", ec);
+    std::filesystem::remove(path7, ec);
+    std::filesystem::remove(path7.string() + ".writer.lock", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

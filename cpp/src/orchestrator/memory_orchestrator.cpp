@@ -43,6 +43,63 @@ std::vector<std::string> TokenizeLower(std::string_view text) {
   return tokens;
 }
 
+std::vector<std::string> TokenizeWhitespace(std::string_view text) {
+  std::vector<std::string> tokens{};
+  std::size_t start = 0;
+  while (start < text.size()) {
+    while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start])) != 0) {
+      ++start;
+    }
+    if (start >= text.size()) {
+      break;
+    }
+    std::size_t end = start;
+    while (end < text.size() && std::isspace(static_cast<unsigned char>(text[end])) == 0) {
+      ++end;
+    }
+    tokens.emplace_back(text.substr(start, end - start));
+    start = end;
+  }
+  return tokens;
+}
+
+std::string JoinTokenRange(const std::vector<std::string>& tokens, std::size_t begin, std::size_t end) {
+  if (begin >= end || begin >= tokens.size()) {
+    return {};
+  }
+  end = std::min(end, tokens.size());
+  std::string out = tokens[begin];
+  for (std::size_t i = begin + 1; i < end; ++i) {
+    out.push_back(' ');
+    out.append(tokens[i]);
+  }
+  return out;
+}
+
+std::vector<std::string> ChunkContent(const std::string& content, int target_tokens, int overlap_tokens) {
+  if (target_tokens <= 0) {
+    return {content};
+  }
+  auto tokens = TokenizeWhitespace(content);
+  if (tokens.empty()) {
+    return {content};
+  }
+  if (tokens.size() <= static_cast<std::size_t>(target_tokens)) {
+    return {JoinTokenRange(tokens, 0, tokens.size())};
+  }
+
+  const int step = std::max(1, target_tokens - std::max(0, overlap_tokens));
+  std::vector<std::string> chunks{};
+  for (std::size_t start = 0; start < tokens.size(); start += static_cast<std::size_t>(step)) {
+    const auto end = std::min(tokens.size(), start + static_cast<std::size_t>(target_tokens));
+    chunks.push_back(JoinTokenRange(tokens, start, end));
+    if (end == tokens.size()) {
+      break;
+    }
+  }
+  return chunks;
+}
+
 float TextOverlapScore(std::string_view query, std::string_view text) {
   const auto query_tokens = TokenizeLower(query);
   if (query_tokens.empty()) {
@@ -248,20 +305,23 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
 }
 
 void MemoryOrchestrator::Remember(const std::string& content, const Metadata& metadata) {
-  std::vector<std::byte> payload{};
-  payload.reserve(content.size());
-  for (const char ch : content) {
-    payload.push_back(static_cast<std::byte>(static_cast<unsigned char>(ch)));
-  }
-  const auto frame_id = store_.Put(payload, metadata);
+  const auto chunks = ChunkContent(content, config_.chunking.target_tokens, config_.chunking.overlap_tokens);
+  for (const auto& chunk : chunks) {
+    std::vector<std::byte> payload{};
+    payload.reserve(chunk.size());
+    for (const char ch : chunk) {
+      payload.push_back(static_cast<std::byte>(static_cast<unsigned char>(ch)));
+    }
+    const auto frame_id = store_.Put(payload, metadata);
 
-  if (config_.enable_vector_search && embedder_ != nullptr && config_.embedding_cache_capacity > 0) {
-    auto embedding = embedder_->Embed(content);
-    if (!embedding.empty()) {
-      if (embedding_cache_.size() >= static_cast<std::size_t>(config_.embedding_cache_capacity)) {
-        embedding_cache_.clear();
+    if (config_.enable_vector_search && embedder_ != nullptr && config_.embedding_cache_capacity > 0) {
+      auto embedding = embedder_->Embed(chunk);
+      if (!embedding.empty()) {
+        if (embedding_cache_.size() >= static_cast<std::size_t>(config_.embedding_cache_capacity)) {
+          embedding_cache_.clear();
+        }
+        embedding_cache_[frame_id] = std::move(embedding);
       }
-      embedding_cache_[frame_id] = std::move(embedding);
     }
   }
 }
