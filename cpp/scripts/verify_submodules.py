@@ -205,10 +205,13 @@ for section in parser.sections():
         continue
     path = parser.get(section, 'path', fallback='').strip()
     url = parser.get(section, 'url', fallback='').strip()
+    branch = parser.get(section, 'branch', fallback='').strip()
     if not path:
         fail(f'{section} missing path')
     if not url:
         fail(f'{section} missing url')
+    if branch:
+        fail(f'{section} uses branch tracking ({branch}); commit-pinned policy requires no branch field')
     paths.add(path)
     remote_by_path[path] = url
 
