@@ -568,12 +568,13 @@ std::vector<std::vector<float>> BuildEmbeddingsForTexts(std::shared_ptr<Embeddin
 
     out.assign(texts.size(), {});
     std::atomic<std::size_t> next_index{0};
+    std::atomic<bool> stop_workers{false};
     std::exception_ptr first_error{};
     std::mutex error_mutex{};
 
     auto worker = [&]() {
       while (true) {
-        if (first_error != nullptr) {
+        if (stop_workers.load(std::memory_order_acquire)) {
           return;
         }
         const auto index = next_index.fetch_add(1);
@@ -587,6 +588,7 @@ std::vector<std::vector<float>> BuildEmbeddingsForTexts(std::shared_ptr<Embeddin
           if (first_error == nullptr) {
             first_error = std::current_exception();
           }
+          stop_workers.store(true, std::memory_order_release);
           return;
         }
       }
