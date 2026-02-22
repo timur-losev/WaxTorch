@@ -169,8 +169,12 @@ SearchResponse BuildHybridRrfResponse(const SearchRequest& request,
     }
   };
 
-  apply_channel(sorted_text, text_weight);
-  apply_channel(sorted_vector, vector_weight);
+  if (text_weight > 0.0F) {
+    apply_channel(sorted_text, text_weight);
+  }
+  if (vector_weight > 0.0F) {
+    apply_channel(sorted_vector, vector_weight);
+  }
 
   SearchResponse out{};
   out.results.reserve(aggregates.size());

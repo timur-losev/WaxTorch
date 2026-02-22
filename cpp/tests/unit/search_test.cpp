@@ -174,6 +174,8 @@ void ScenarioHybridAlphaClamp() {
     const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, vector_results);
     Require(!response.results.empty(), "hybrid alpha<0 should still produce response");
     Require(response.results[0].frame_id == 20, "alpha<0 clamp should prioritize vector channel");
+    Require(response.results.size() == 1,
+            "alpha<0 clamp should exclude zero-weight text-only candidates from fusion output");
   }
 
   {
@@ -184,6 +186,8 @@ void ScenarioHybridAlphaClamp() {
     const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, vector_results);
     Require(!response.results.empty(), "hybrid alpha>1 should still produce response");
     Require(response.results[0].frame_id == 10, "alpha>1 clamp should prioritize text channel");
+    Require(response.results.size() == 1,
+            "alpha>1 clamp should exclude zero-weight vector-only candidates from fusion output");
   }
 
   {

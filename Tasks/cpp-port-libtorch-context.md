@@ -206,6 +206,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Restore Swift-equivalent `max_snippets` semantics in C++ FastRAG path: `search_top_k` controls candidate window, `max_snippets` caps only snippet items (expansion unaffected), with regressions in search/orchestrator suites
 - [x] Fix snippet-cap accounting in C++ FastRAG context builder: surrogate fallback items after the first now consume `max_snippets` budget (deterministic cap parity for snippet-tier outputs)
 - [x] Fix expansion-disabled behavior in C++ FastRAG context builder: when `expansion_max_tokens=0`, context now falls back to snippet-tier outputs (instead of suppressing all items), with search/orchestrator regressions
+- [x] Fix hybrid RRF zero-weight channel handling in C++ unified search: channels with effective weight `0` are now excluded from fusion (no zero-score leak candidates), with alpha clamp regressions asserting output-set parity
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
