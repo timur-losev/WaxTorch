@@ -1017,6 +1017,7 @@ void WaxStore::Commit() {
                                                                 wal_size_,
                                                                 wal_checkpoint_pos_,
                                                                 wal_committed_seq_);
+  const auto committed_seq_after_scan = std::max(wal_committed_seq_, pending_scan.state.last_sequence);
   for (const auto& mutation : pending_scan.pending_mutations) {
     switch (mutation.kind) {
       case core::wal::WalMutationKind::kPutFrame: {
@@ -1118,7 +1119,7 @@ void WaxStore::Commit() {
   footer.toc_len = toc_bytes.size();
   std::copy(toc_bytes.end() - 32, toc_bytes.end(), footer.toc_hash.begin());
   footer.generation = file_generation_ + 1;
-  footer.wal_committed_seq = pending_scan.state.last_sequence;
+  footer.wal_committed_seq = committed_seq_after_scan;
   const auto footer_bytes = core::mv2s::EncodeFooter(footer);
 
   WriteBytesAt(path_, toc_offset, toc_bytes);
@@ -1133,7 +1134,7 @@ void WaxStore::Commit() {
                                   pending_scan.state.write_pos,
                                   wal_checkpoint_pos_,
                                   pending_scan.state.pending_bytes,
-                                  pending_scan.state.last_sequence,
+                                  committed_seq_after_scan,
                                   wal_wrap_count_,
                                   wal_checkpoint_count_,
                                   wal_sentinel_write_count_,

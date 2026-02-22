@@ -995,6 +995,29 @@ void RunScenarioVisibleCommitProbeIgnoresCorruptFooterMagicTail(const std::files
   store.Close();
 }
 
+void RunScenarioCommitDoesNotRegressCommittedSequenceOnCorruptPendingHeader(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: commit keeps committed_seq monotonic when pending WAL header is corrupt");
+  auto store = waxcpp::WaxStore::Create(path);
+  (void)store.Put({std::byte{0x01}});
+  store.Commit();
+  const auto baseline_wal = store.WalStats();
+  Require(baseline_wal.committed_seq > 0, "baseline committed_seq must be positive after first commit");
+
+  (void)store.Put({std::byte{0x02}});
+  const auto staged_wal = store.WalStats();
+  const auto pending_header_offset = waxcpp::core::mv2s::kWalOffset + staged_wal.checkpoint_pos;
+  const std::array<std::byte, 8> zero_sequence = {};
+  WriteBytesAt(path, pending_header_offset, std::span<const std::byte>(zero_sequence.data(), zero_sequence.size()));
+
+  store.Commit();
+  const auto after_commit_wal = store.WalStats();
+  Require(after_commit_wal.committed_seq == baseline_wal.committed_seq,
+          "commit must not regress committed_seq when WAL scan sees terminal/corrupt pending header");
+  Require(after_commit_wal.committed_seq <= after_commit_wal.last_seq,
+          "wal last_seq must stay >= committed_seq after corruption-tolerant commit");
+  store.Close();
+}
+
 void RunScenarioSupersedeCycleRejected(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: supersede cycle rejected at commit");
   {
@@ -1267,6 +1290,7 @@ int main() {
     RunScenarioVisibleCommitProbeClosedStoreThrows(path);
     RunScenarioVisibleCommitProbeRefreshIsIdempotent(path);
     RunScenarioVisibleCommitProbeIgnoresCorruptFooterMagicTail(path);
+    RunScenarioCommitDoesNotRegressCommittedSequenceOnCorruptPendingHeader(path);
     RunScenarioSupersedeCycleRejected(path);
     RunScenarioSupersedeConflictRejected(path);
     RunScenarioCloseAutoCommitsPending(path);
