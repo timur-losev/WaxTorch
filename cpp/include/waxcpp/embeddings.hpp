@@ -19,6 +19,12 @@ struct EmbeddingIdentity {
   std::optional<bool> normalized;
 };
 
+struct MiniLMRuntimeInfo {
+  bool fallback_active = true;
+  bool libtorch_manifest_detected = false;
+  std::optional<std::string> libtorch_manifest_path;
+};
+
 class EmbeddingProvider {
  public:
   virtual ~EmbeddingProvider() = default;
@@ -45,9 +51,11 @@ class MiniLMEmbedderTorch final : public BatchEmbeddingProvider {
   std::vector<float> Embed(const std::string& text) override;
   std::vector<std::vector<float>> EmbedBatch(const std::vector<std::string>& texts) override;
   [[nodiscard]] std::size_t cache_size() const;
+  [[nodiscard]] MiniLMRuntimeInfo runtime_info() const;
 
  private:
   std::size_t memoization_capacity_ = 0;
+  MiniLMRuntimeInfo runtime_info_{};
   std::unordered_map<std::string, std::vector<float>> memoized_embeddings_{};
   std::deque<std::string> memoization_order_{};
   mutable std::mutex memoization_mutex_{};

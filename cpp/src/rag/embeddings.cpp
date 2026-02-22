@@ -1,11 +1,15 @@
 #include "waxcpp/embeddings.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <mutex>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -16,6 +20,81 @@ namespace {
 
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+
+std::string ToAsciiLowerString(std::string_view text) {
+  std::string out{};
+  out.reserve(text.size());
+  for (const char ch : text) {
+    if (ch >= 'A' && ch <= 'Z') {
+      out.push_back(static_cast<char>(ch - 'A' + 'a'));
+    } else {
+      out.push_back(ch);
+    }
+  }
+  return out;
+}
+
+std::optional<std::string> GetEnvValue(const char* name) {
+#ifdef _WIN32
+  char* raw = nullptr;
+  std::size_t len = 0;
+  if (_dupenv_s(&raw, &len, name) != 0 || raw == nullptr) {
+    return std::nullopt;
+  }
+  std::string value(raw);
+  std::free(raw);
+  if (value.empty()) {
+    return std::nullopt;
+  }
+  return value;
+#else
+  const char* raw = std::getenv(name);
+  if (raw == nullptr || *raw == '\0') {
+    return std::nullopt;
+  }
+  return std::string(raw);
+#endif
+}
+
+bool EnvIsTruthy(const char* name) {
+  const auto raw = GetEnvValue(name);
+  if (!raw.has_value()) {
+    return false;
+  }
+  const auto value = ToAsciiLowerString(*raw);
+  return value == "1" || value == "true" || value == "yes" || value == "on";
+}
+
+std::optional<std::filesystem::path> ResolveLibTorchManifestPath(bool* override_was_set = nullptr) {
+  if (override_was_set != nullptr) {
+    *override_was_set = false;
+  }
+
+  if (const auto raw_override = GetEnvValue("WAXCPP_LIBTORCH_MANIFEST"); raw_override.has_value()) {
+    if (override_was_set != nullptr) {
+      *override_was_set = true;
+    }
+    const std::filesystem::path candidate(*raw_override);
+    if (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate)) {
+      return std::filesystem::absolute(candidate);
+    }
+    return std::nullopt;
+  }
+
+  const auto cwd = std::filesystem::current_path();
+  const std::vector<std::filesystem::path> candidates = {
+      cwd / "third_party" / "libtorch-dist" / "manifest" / "libtorch-manifest.json",
+      cwd / ".." / "third_party" / "libtorch-dist" / "manifest" / "libtorch-manifest.json",
+      cwd / ".." / ".." / "third_party" / "libtorch-dist" / "manifest" / "libtorch-manifest.json",
+      cwd / "cpp" / "third_party" / "libtorch-dist" / "manifest" / "libtorch-manifest.json",
+  };
+  for (const auto& candidate : candidates) {
+    if (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate)) {
+      return std::filesystem::absolute(candidate);
+    }
+  }
+  return std::nullopt;
+}
 
 bool IsAsciiAlphaNum(unsigned char ch) {
   return (ch >= static_cast<unsigned char>('0') && ch <= static_cast<unsigned char>('9')) ||
@@ -77,7 +156,20 @@ void NormalizeL2(std::vector<float>& v) {
 }  // namespace
 
 MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
-    : memoization_capacity_(memoization_capacity) {}
+    : memoization_capacity_(memoization_capacity) {
+  bool override_was_set = false;
+  const auto manifest_path = ResolveLibTorchManifestPath(&override_was_set);
+  if (manifest_path.has_value()) {
+    runtime_info_.libtorch_manifest_detected = true;
+    runtime_info_.libtorch_manifest_path = manifest_path->string();
+  }
+  if (EnvIsTruthy("WAXCPP_REQUIRE_LIBTORCH_MANIFEST") && !runtime_info_.libtorch_manifest_detected) {
+    if (override_was_set) {
+      throw std::runtime_error("MiniLMEmbedderTorch required libtorch manifest is missing at WAXCPP_LIBTORCH_MANIFEST");
+    }
+    throw std::runtime_error("MiniLMEmbedderTorch required libtorch manifest was not found");
+  }
+}
 
 int MiniLMEmbedderTorch::dimensions() const {
   return 384;
@@ -150,6 +242,10 @@ std::vector<std::vector<float>> MiniLMEmbedderTorch::EmbedBatch(const std::vecto
 std::size_t MiniLMEmbedderTorch::cache_size() const {
   std::lock_guard<std::mutex> lock(memoization_mutex_);
   return memoized_embeddings_.size();
+}
+
+MiniLMRuntimeInfo MiniLMEmbedderTorch::runtime_info() const {
+  return runtime_info_;
 }
 
 }  // namespace waxcpp

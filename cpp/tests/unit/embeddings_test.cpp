@@ -4,6 +4,9 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -28,6 +31,60 @@ double L2Norm(const std::vector<float>& values) {
 bool ApproxEqual(double lhs, double rhs, double eps) {
   return std::fabs(lhs - rhs) <= eps;
 }
+
+std::optional<std::string> GetEnvValue(const char* name) {
+#ifdef _WIN32
+  char* raw = nullptr;
+  std::size_t len = 0;
+  if (_dupenv_s(&raw, &len, name) != 0 || raw == nullptr) {
+    return std::nullopt;
+  }
+  std::string value(raw);
+  std::free(raw);
+  if (value.empty()) {
+    return std::nullopt;
+  }
+  return value;
+#else
+  const char* raw = std::getenv(name);
+  if (raw == nullptr || *raw == '\0') {
+    return std::nullopt;
+  }
+  return std::string(raw);
+#endif
+}
+
+void SetEnvVar(const char* name, const std::optional<std::string>& value) {
+#ifdef _WIN32
+  if (!value.has_value()) {
+    (void)_putenv_s(name, "");
+    return;
+  }
+  (void)_putenv_s(name, value->c_str());
+#else
+  if (!value.has_value()) {
+    (void)unsetenv(name);
+    return;
+  }
+  (void)setenv(name, value->c_str(), 1);
+#endif
+}
+
+class ScopedEnvVar final {
+ public:
+  ScopedEnvVar(const char* name, std::optional<std::string> value) : name_(name) {
+    original_ = GetEnvValue(name_);
+    SetEnvVar(name_, value);
+  }
+
+  ~ScopedEnvVar() {
+    SetEnvVar(name_, original_);
+  }
+
+ private:
+  const char* name_;
+  std::optional<std::string> original_{};
+};
 
 void ScenarioIdentityAndShape() {
   waxcpp::tests::Log("scenario: identity and shape");
@@ -107,6 +164,57 @@ void ScenarioAsciiTokenizationDeterminism() {
   Require(c == d, "non-ASCII bytes should not perturb ASCII tokenization path");
 }
 
+void ScenarioRuntimeInfoAndManifestPolicy() {
+  waxcpp::tests::Log("scenario: runtime info and manifest policy");
+  const ScopedEnvVar clear_override("WAXCPP_LIBTORCH_MANIFEST", std::nullopt);
+  const ScopedEnvVar clear_require("WAXCPP_REQUIRE_LIBTORCH_MANIFEST", std::nullopt);
+
+  {
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.fallback_active, "fallback backend should remain active in current build");
+    if (info.libtorch_manifest_detected) {
+      Require(info.libtorch_manifest_path.has_value(), "manifest path should be present when detected");
+    }
+  }
+
+  const auto temp_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_runtime_info.json";
+  {
+    std::ofstream out(temp_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create temp manifest file");
+    }
+    out << "{}";
+  }
+
+  {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", temp_manifest.string());
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.libtorch_manifest_detected, "manifest override should be detected");
+    Require(info.libtorch_manifest_path.has_value(), "manifest override path should be preserved");
+    Require(*info.libtorch_manifest_path == std::filesystem::absolute(temp_manifest).string(),
+            "manifest override absolute path mismatch");
+  }
+
+  {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", temp_manifest.string() + ".missing");
+    const ScopedEnvVar require_manifest("WAXCPP_REQUIRE_LIBTORCH_MANIFEST", std::string("1"));
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "required manifest policy should throw when override path is missing");
+  }
+
+  std::error_code ec;
+  std::filesystem::remove(temp_manifest, ec);
+}
+
 void ScenarioConcurrentEmbedThreadSafety() {
   waxcpp::tests::Log("scenario: concurrent embed thread safety");
   waxcpp::MiniLMEmbedderTorch embedder(32);
@@ -148,6 +256,7 @@ int main() {
     ScenarioBatchParity();
     ScenarioMemoizationCapacity();
     ScenarioAsciiTokenizationDeterminism();
+    ScenarioRuntimeInfoAndManifestPolicy();
     ScenarioConcurrentEmbedThreadSafety();
     waxcpp::tests::Log("embeddings_test: finished");
     return EXIT_SUCCESS;
