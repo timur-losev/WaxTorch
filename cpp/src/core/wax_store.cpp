@@ -80,7 +80,7 @@ std::shared_ptr<void> AcquireWriterLease(const std::filesystem::path& store_path
                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                 nullptr,
                                 OPEN_ALWAYS,
-                                FILE_ATTRIBUTE_NORMAL,
+                                FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
                                 nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
     const auto code = static_cast<int>(::GetLastError());
@@ -136,6 +136,10 @@ std::shared_ptr<void> AcquireWriterLease(const std::filesystem::path& store_path
     }
     throw StoreError("failed to acquire writer lease at " + lease_path.string() + ": " + OsErrorMessage(code));
   }
+
+  // Keep the lock on the opened file descriptor while removing the path entry,
+  // so lock artifacts do not remain on disk after graceful or abrupt shutdown.
+  (void)::unlink(lease_path.c_str());
 
   return std::shared_ptr<void>(new int(fd), [](void* raw) {
     auto* fd_ptr = static_cast<int*>(raw);

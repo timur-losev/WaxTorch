@@ -939,6 +939,24 @@ void RunScenarioWriterLeaseArtifactDoesNotBlock(const std::filesystem::path& pat
   reopened.Close();
 }
 
+void RunScenarioWriterLeaseCleansUpArtifactOnClose(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: writer lease artifact cleans up on close");
+  auto lease_path = path;
+  lease_path += ".writer.lease";
+
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    store.Close();
+  }
+  Require(!std::filesystem::exists(lease_path), "writer lease artifact should not remain after close");
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    reopened.Close();
+  }
+  Require(!std::filesystem::exists(lease_path), "writer lease artifact should not remain after reopen close");
+}
+
 }  // namespace
 
 int main() {
@@ -973,6 +991,7 @@ int main() {
     RunScenarioRecoveredPendingPlusLocalMutationsCommit(path);
     RunScenarioWriterLeaseExclusion(path);
     RunScenarioWriterLeaseArtifactDoesNotBlock(path);
+    RunScenarioWriterLeaseCleansUpArtifactOnClose(path);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);
