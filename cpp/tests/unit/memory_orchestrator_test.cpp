@@ -1593,6 +1593,76 @@ void ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOpVector(const std::file
   }
 }
 
+void ScenarioFlushCrashWindowCheckpointPublishRetryFlushIsNoOp(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: flush crash-window after checkpoint publish retry flush is no-op");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("flush step5 retry apple", {});
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(5);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw on injected crash-window step 5");
+
+    const auto after_failure = orchestrator.Recall("apple");
+    Require(!after_failure.items.empty(), "checkpoint-published crash-window should expose committed text");
+
+    orchestrator.Flush();
+    const auto after_retry = orchestrator.Recall("apple");
+    Require(!after_retry.items.empty(),
+            "retry flush after checkpoint-published commit should preserve text visibility");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioFlushCrashWindowCheckpointPublishRetryFlushIsNoOpVector(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector flush crash-window after checkpoint publish retry flush is no-op");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("flush step5 retry vector apple", {});
+    embedder->Reset();
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(5);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw on injected crash-window step 5");
+
+    const auto after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!after_failure.items.empty(), "checkpoint-published crash-window should expose committed vector");
+    Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
+    Require(embedder->embed_calls() == 0, "explicit embedding recall should not trigger Embed");
+
+    orchestrator.Flush();
+    const auto after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!after_retry.items.empty(),
+            "retry flush after checkpoint-published commit should preserve vector visibility");
+    Require(embedder->batch_calls() == 0, "retry path should not trigger EmbedBatch");
+    Require(embedder->embed_calls() == 0, "retry path should not trigger Embed");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: flush failure then close/reopen recovers structured fact");
   waxcpp::OrchestratorConfig config{};
@@ -2182,6 +2252,8 @@ int main() {
     const auto path54 = UniquePath();
     const auto path55 = UniquePath();
     const auto path56 = UniquePath();
+    const auto path57 = UniquePath();
+    const auto path58 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -2231,6 +2303,8 @@ int main() {
     ScenarioFlushCrashWindowCheckpointPublishRebuildsVector(path53);
     ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOp(path55);
     ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOpVector(path56);
+    ScenarioFlushCrashWindowCheckpointPublishRetryFlushIsNoOp(path57);
+    ScenarioFlushCrashWindowCheckpointPublishRetryFlushIsNoOpVector(path58);
     ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(path25);
     ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(path32);
     ScenarioTextIndexCommitFailureRecoversFromCommittedStore(path33);
@@ -2247,7 +2321,7 @@ int main() {
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
         path33, path34, path35, path36, path37, path38, path39, path40, path41, path42, path43,
         path44, path45, path46, path47, path48, path49, path50, path51, path52, path53, path54,
-        path55, path56,
+        path55, path56, path57, path58,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
