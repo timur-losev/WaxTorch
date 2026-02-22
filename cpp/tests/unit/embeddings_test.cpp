@@ -264,6 +264,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_generic_a.json";
   const auto generic_manifest_b =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_generic_b.json";
+  const auto duplicate_path_manifest_a =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_duplicate_path_a.json";
+  const auto duplicate_path_manifest_b =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_duplicate_path_b.json";
   const auto root_array_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_root_array.json";
   {
@@ -376,6 +380,20 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       throw std::runtime_error("failed to create generic manifest B file");
     }
     out << R"({"artifacts":[{"path":"libtorch-a.tar","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},{"path":"libtorch-z.tar","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}]})";
+  }
+  {
+    std::ofstream out(duplicate_path_manifest_a, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create duplicate-path manifest A file");
+    }
+    out << R"({"artifacts":[{"path":"libtorch-cpu.zip","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},{"path":"libtorch-cpu.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]})";
+  }
+  {
+    std::ofstream out(duplicate_path_manifest_b, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create duplicate-path manifest B file");
+    }
+    out << R"({"artifacts":[{"path":"libtorch-cpu.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000"},{"path":"libtorch-cpu.zip","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}]})";
   }
   {
     std::ofstream out(root_array_manifest, std::ios::binary | std::ios::trunc);
@@ -727,6 +745,48 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    std::optional<std::string> selected_a{};
+    std::optional<std::string> selected_b{};
+    std::optional<std::string> selected_sha_a{};
+    std::optional<std::string> selected_sha_b{};
+    {
+      const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", duplicate_path_manifest_a.string());
+      waxcpp::MiniLMEmbedderTorch embedder;
+      const auto info = embedder.runtime_info();
+      Require(info.libtorch_manifest_valid, "duplicate-path manifest A should pass validation");
+      Require(info.libtorch_selected_artifact_path.has_value(),
+              "duplicate-path manifest A should select artifact path");
+      Require(info.libtorch_selected_artifact_sha256.has_value(),
+              "duplicate-path manifest A should select artifact sha256");
+      selected_a = info.libtorch_selected_artifact_path;
+      selected_sha_a = info.libtorch_selected_artifact_sha256;
+    }
+    {
+      const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", duplicate_path_manifest_b.string());
+      waxcpp::MiniLMEmbedderTorch embedder;
+      const auto info = embedder.runtime_info();
+      Require(info.libtorch_manifest_valid, "duplicate-path manifest B should pass validation");
+      Require(info.libtorch_selected_artifact_path.has_value(),
+              "duplicate-path manifest B should select artifact path");
+      Require(info.libtorch_selected_artifact_sha256.has_value(),
+              "duplicate-path manifest B should select artifact sha256");
+      selected_b = info.libtorch_selected_artifact_path;
+      selected_sha_b = info.libtorch_selected_artifact_sha256;
+    }
+    Require(selected_a.has_value() && selected_b.has_value() &&
+                selected_sha_a.has_value() && selected_sha_b.has_value(),
+            "duplicate-path manifests should produce selected artifact path+sha");
+    Require(*selected_a == *selected_b,
+            "duplicate-path selection should be deterministic across entry order");
+    Require(*selected_sha_a == *selected_sha_b,
+            "duplicate-path sha selection should be deterministic across entry order");
+    Require(*selected_a == "libtorch-cpu.zip",
+            "duplicate-path manifest should keep expected artifact path");
+    Require(*selected_sha_a == "0000000000000000000000000000000000000000000000000000000000000000",
+            "duplicate-path manifest should prefer lexicographically minimal sha for equal path");
+  }
+
+  {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", root_array_manifest.string());
     waxcpp::MiniLMEmbedderTorch embedder;
     const auto info = embedder.runtime_info();
@@ -843,6 +903,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(multi_cpu_manifest_b, ec);
   std::filesystem::remove(generic_manifest_a, ec);
   std::filesystem::remove(generic_manifest_b, ec);
+  std::filesystem::remove(duplicate_path_manifest_a, ec);
+  std::filesystem::remove(duplicate_path_manifest_b, ec);
   std::filesystem::remove(root_array_manifest, ec);
 }
 
