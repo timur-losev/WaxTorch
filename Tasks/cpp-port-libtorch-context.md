@@ -183,6 +183,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add `USearchVectorEngine` similarity-aware scoring parity (`cosine|dot|l2`) with deterministic tie-breaks; bind MV2V metal segment similarity to engine config and reject mismatched imports
 - [x] Add actor-like serialization baseline in `MemoryOrchestrator` (public API guarded by mutex) with concurrent `Remember` regression (`threads -> flush -> reopen` payload parity)
 - [x] Implement `OrchestratorConfig.ingest_concurrency` for non-batch embedding paths (`remember` + vector-rebuild) with deterministic output ordering and worker-thread regressions (ingest-time and reopen-rebuild scenarios)
+- [x] Add failure-path regression for parallel embedding ingest: embedder exception propagates from `Remember` and leaves no partial committed/pending store state
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

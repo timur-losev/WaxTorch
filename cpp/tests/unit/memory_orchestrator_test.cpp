@@ -182,6 +182,24 @@ class ThreadTrackingEmbedder final : public waxcpp::EmbeddingProvider {
   bool called_from_caller_thread_ = false;
 };
 
+class FailingEmbedder final : public waxcpp::EmbeddingProvider {
+ public:
+  int dimensions() const override { return 4; }
+  bool normalize() const override { return true; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override { return std::nullopt; }
+
+  std::vector<float> Embed(const std::string& text) override {
+    if (text.find("boom") != std::string::npos) {
+      throw std::runtime_error("failing embedder triggered");
+    }
+    std::vector<float> out(4, 0.0F);
+    for (std::size_t i = 0; i < text.size(); ++i) {
+      out[i % out.size()] += static_cast<float>(static_cast<unsigned char>(text[i])) / 255.0F;
+    }
+    return out;
+  }
+};
+
 void ScenarioVectorPolicyValidation(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: vector policy validation");
   waxcpp::OrchestratorConfig config{};
@@ -1037,6 +1055,40 @@ void ScenarioVectorRebuildUsesConfiguredIngestConcurrency(const std::filesystem:
           "rebuild ingest_concurrency>1 should utilize more than one worker thread");
 }
 
+void ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: remember ingest_concurrency propagates embed errors");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+  config.chunking.target_tokens = 1;
+  config.chunking.overlap_tokens = 0;
+  config.ingest_concurrency = 4;
+
+  auto embedder = std::make_shared<FailingEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    bool threw = false;
+    try {
+      orchestrator.Remember("ok0 ok1 boom ok2 ok3", {});
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "remember should propagate embedder failure under ingest_concurrency");
+    const auto stats = orchestrator.Recall("ok1", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(stats.items.empty(), "failed remember should not leave partial vector-visible content");
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    const auto stats = store.Stats();
+    Require(stats.frame_count == 0, "failed remember should not persist partial frames");
+    Require(stats.pending_frames == 0, "failed remember should not leave pending WAL mutations");
+    store.Close();
+  }
+}
+
 void ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: flush failure does not expose staged structured fact until retry");
   waxcpp::OrchestratorConfig config{};
@@ -1454,6 +1506,7 @@ int main() {
     const auto path36 = UniquePath();
     const auto path37 = UniquePath();
     const auto path38 = UniquePath();
+    const auto path39 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -1469,6 +1522,7 @@ int main() {
     ScenarioRememberRespectsIngestBatchSize(path9);
     ScenarioRememberUsesConfiguredIngestConcurrency(path37);
     ScenarioVectorRebuildUsesConfiguredIngestConcurrency(path38);
+    ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(path39);
     ScenarioTextOnlyRecallSkipsVectorEmbedding(path10);
     ScenarioStructuredMemoryFacts(path11);
     ScenarioRecallIncludesStructuredMemory(path12);
@@ -1499,7 +1553,7 @@ int main() {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
         path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
-        path33, path34, path35, path36, path37, path38,
+        path33, path34, path35, path36, path37, path38, path39,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
