@@ -1,5 +1,7 @@
 #include "waxcpp/embeddings.hpp"
 
+#include "../core/sha256.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -11,6 +13,7 @@
 #include <fstream>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -398,6 +401,75 @@ struct ManifestValidationSummary {
   std::optional<ManifestArtifactSelection> cuda_artifact{};
 };
 
+std::string HexLower(std::span<const std::byte> bytes) {
+  constexpr std::array<char, 16> kHexDigits = {
+      '0', '1', '2', '3', '4', '5', '6', '7',
+      '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+  };
+  std::string out{};
+  out.reserve(bytes.size() * 2U);
+  for (const auto value : bytes) {
+    const auto v = std::to_integer<unsigned char>(value);
+    out.push_back(kHexDigits[(v >> 4U) & 0x0FU]);
+    out.push_back(kHexDigits[v & 0x0FU]);
+  }
+  return out;
+}
+
+std::string ComputeFileSha256Hex(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) {
+    throw std::runtime_error("failed to open selected libtorch artifact for checksum verification");
+  }
+
+  waxcpp::core::Sha256 hasher;
+  std::array<char, 64 * 1024> buffer{};
+  while (input.good()) {
+    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    const auto got = input.gcount();
+    if (got > 0) {
+      hasher.Update(std::span<const std::byte>(
+          reinterpret_cast<const std::byte*>(buffer.data()),
+          static_cast<std::size_t>(got)));
+    }
+  }
+  if (!input.eof()) {
+    throw std::runtime_error("failed to read selected libtorch artifact for checksum verification");
+  }
+
+  const auto digest = hasher.Finalize();
+  return HexLower(std::span<const std::byte>(digest.data(), digest.size()));
+}
+
+std::optional<std::filesystem::path> ResolveSelectedArtifactPath(
+    const std::filesystem::path& manifest_path,
+    std::string_view relative_or_absolute_artifact_path) {
+  const std::filesystem::path artifact_path(relative_or_absolute_artifact_path);
+  if (artifact_path.is_absolute()) {
+    if (std::filesystem::exists(artifact_path) && std::filesystem::is_regular_file(artifact_path)) {
+      return std::filesystem::absolute(artifact_path);
+    }
+    return std::nullopt;
+  }
+
+  std::vector<std::filesystem::path> candidates{};
+  if (const auto dist_root = GetEnvValue("WAXCPP_LIBTORCH_DIST_ROOT"); dist_root.has_value()) {
+    candidates.push_back(std::filesystem::path(*dist_root) / artifact_path);
+  }
+  const auto manifest_dir = manifest_path.parent_path();
+  candidates.push_back(manifest_dir / artifact_path);
+  if (manifest_dir.has_parent_path()) {
+    candidates.push_back(manifest_dir.parent_path() / artifact_path);
+  }
+
+  for (const auto& candidate : candidates) {
+    if (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate)) {
+      return std::filesystem::absolute(candidate);
+    }
+  }
+  return std::nullopt;
+}
+
 bool ArtifactPathLooksCuda(std::string_view path) {
   const auto lower = ToAsciiLowerString(path);
   if (lower.find("cuda") != std::string::npos) {
@@ -574,6 +646,37 @@ ManifestValidationSummary ValidateManifestFile(const std::filesystem::path& mani
   return summary;
 }
 
+void MaybeVerifySelectedArtifactSha256(MiniLMRuntimeInfo& runtime_info,
+                                       const std::filesystem::path& manifest_path) {
+  if (!runtime_info.libtorch_selected_artifact_path.has_value() ||
+      !runtime_info.libtorch_selected_artifact_sha256.has_value()) {
+    return;
+  }
+
+  const auto resolved_path = ResolveSelectedArtifactPath(
+      manifest_path,
+      *runtime_info.libtorch_selected_artifact_path);
+  if (resolved_path.has_value()) {
+    runtime_info.libtorch_selected_artifact_resolved_path = resolved_path->string();
+  }
+
+  if (!EnvIsTruthy("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256")) {
+    return;
+  }
+  if (!resolved_path.has_value()) {
+    throw std::runtime_error(
+        "MiniLMEmbedderTorch selected libtorch artifact was not found for checksum verification");
+  }
+
+  const auto actual_sha256 = ComputeFileSha256Hex(*resolved_path);
+  const auto expected_sha256 = ToAsciiLowerString(*runtime_info.libtorch_selected_artifact_sha256);
+  if (actual_sha256 != expected_sha256) {
+    throw std::runtime_error(
+        "MiniLMEmbedderTorch selected libtorch artifact checksum mismatch");
+  }
+  runtime_info.libtorch_selected_artifact_sha256_verified = true;
+}
+
 bool IsAsciiAlphaNum(unsigned char ch) {
   return (ch >= static_cast<unsigned char>('0') && ch <= static_cast<unsigned char>('9')) ||
          (ch >= static_cast<unsigned char>('A') && ch <= static_cast<unsigned char>('Z')) ||
@@ -699,6 +802,9 @@ MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
         runtime_info_.libtorch_selected_artifact_class = "cpu";
       } else {
         runtime_info_.libtorch_selected_artifact_class = "any";
+      }
+      if (manifest_path.has_value()) {
+        MaybeVerifySelectedArtifactSha256(runtime_info_, *manifest_path);
       }
     }
   }

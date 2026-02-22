@@ -187,6 +187,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
               "selected artifact sha256 should be present when manifest is detected");
       Require(info.libtorch_selected_artifact_class.has_value(),
               "selected artifact class should be present when manifest is detected");
+      Require(!info.libtorch_selected_artifact_sha256_verified,
+              "artifact sha256 should not be verified unless explicit checksum gate is enabled");
     } else {
       Require(!info.libtorch_selected_artifact_path.has_value(),
               "selected artifact path should be empty without detected manifest");
@@ -194,6 +196,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
               "selected artifact sha256 should be empty without detected manifest");
       Require(!info.libtorch_selected_artifact_class.has_value(),
               "selected artifact class should be empty without detected manifest");
+      Require(!info.libtorch_selected_artifact_resolved_path.has_value(),
+              "resolved artifact path should be empty without detected manifest");
+      Require(!info.libtorch_selected_artifact_sha256_verified,
+              "artifact sha256 verification must remain false without manifest");
     }
   }
 
@@ -274,6 +280,13 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_duplicate_path_b.json";
   const auto root_array_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_root_array.json";
+  const auto artifact_root =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_dist_root";
+  const auto artifact_file = artifact_root / "cpu" / "libtorch-cpu.zip";
+  const auto artifact_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_artifact.json";
+  const auto artifact_bad_sha_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_artifact_bad_sha.json";
   {
     std::ofstream out(temp_manifest, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
@@ -405,6 +418,32 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       throw std::runtime_error("failed to create root-array manifest file");
     }
     out << R"([{"path":"libtorch-cpu.zip","sha256":"3333333333333333333333333333333333333333333333333333333333333333"}])";
+  }
+  {
+    std::error_code mkdir_ec;
+    std::filesystem::create_directories(artifact_file.parent_path(), mkdir_ec);
+    if (mkdir_ec) {
+      throw std::runtime_error("failed to create test artifact directory");
+    }
+    std::ofstream artifact_out(artifact_file, std::ios::binary | std::ios::trunc);
+    if (!artifact_out.is_open()) {
+      throw std::runtime_error("failed to create test artifact file");
+    }
+    artifact_out << "abc";
+  }
+  {
+    std::ofstream out(artifact_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create artifact manifest file");
+    }
+    out << R"({"artifacts":[{"path":"cpu/libtorch-cpu.zip","sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}]})";
+  }
+  {
+    std::ofstream out(artifact_bad_sha_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create bad artifact sha manifest file");
+    }
+    out << R"({"artifacts":[{"path":"cpu/libtorch-cpu.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]})";
   }
 
   {
@@ -902,6 +941,60 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(threw, "required manifest policy should throw when override path is missing");
   }
 
+  {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_manifest.string());
+    const ScopedEnvVar set_dist_root("WAXCPP_LIBTORCH_DIST_ROOT", artifact_root.string());
+    const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::string("1"));
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.libtorch_manifest_valid, "artifact manifest should pass validation");
+    Require(info.libtorch_selected_artifact_resolved_path.has_value(),
+            "artifact manifest should resolve selected artifact path");
+    Require(info.libtorch_selected_artifact_sha256_verified,
+            "artifact sha256 must be verified when checksum gate is enabled");
+    Require(*info.libtorch_selected_artifact_resolved_path == std::filesystem::absolute(artifact_file).string(),
+            "resolved artifact path mismatch");
+  }
+
+  {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_manifest.string());
+    const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::string("1"));
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "checksum gate should throw when selected artifact file cannot be resolved");
+  }
+
+  {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_bad_sha_manifest.string());
+    const ScopedEnvVar set_dist_root("WAXCPP_LIBTORCH_DIST_ROOT", artifact_root.string());
+    const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::string("1"));
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "checksum gate should throw on selected artifact sha256 mismatch");
+  }
+
+  {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_manifest.string());
+    const ScopedEnvVar set_dist_root("WAXCPP_LIBTORCH_DIST_ROOT", artifact_root.string());
+    const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::nullopt);
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.libtorch_selected_artifact_resolved_path.has_value(),
+            "resolved artifact path should still be populated without checksum gate");
+    Require(!info.libtorch_selected_artifact_sha256_verified,
+            "artifact sha256 should stay unverified when checksum gate is disabled");
+  }
+
   std::error_code ec;
   std::filesystem::remove(temp_manifest, ec);
   std::filesystem::remove(empty_manifest, ec);
@@ -922,6 +1015,11 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(duplicate_path_manifest_a, ec);
   std::filesystem::remove(duplicate_path_manifest_b, ec);
   std::filesystem::remove(root_array_manifest, ec);
+  std::filesystem::remove(artifact_manifest, ec);
+  std::filesystem::remove(artifact_bad_sha_manifest, ec);
+  std::filesystem::remove(artifact_file, ec);
+  std::filesystem::remove(artifact_file.parent_path(), ec);
+  std::filesystem::remove(artifact_root, ec);
 }
 
 void ScenarioConcurrentEmbedThreadSafety() {
@@ -989,6 +1087,12 @@ void ScenarioRuntimeInfoSnapshotStability() {
   Require(before.libtorch_selected_artifact_class == after_single.libtorch_selected_artifact_class &&
               after_single.libtorch_selected_artifact_class == after_batch.libtorch_selected_artifact_class,
           "selected artifact class should remain stable after embedding calls");
+  Require(before.libtorch_selected_artifact_resolved_path == after_single.libtorch_selected_artifact_resolved_path &&
+              after_single.libtorch_selected_artifact_resolved_path == after_batch.libtorch_selected_artifact_resolved_path,
+          "selected artifact resolved path should remain stable after embedding calls");
+  Require(before.libtorch_selected_artifact_sha256_verified == after_single.libtorch_selected_artifact_sha256_verified &&
+              after_single.libtorch_selected_artifact_sha256_verified == after_batch.libtorch_selected_artifact_sha256_verified,
+          "selected artifact checksum verification flag should remain stable after embedding calls");
 }
 
 }  // namespace

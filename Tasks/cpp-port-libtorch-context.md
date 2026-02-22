@@ -520,6 +520,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/wal_ring_writer_test.cpp` | Added overflow atomicity regression ensuring failed `AppendBatch` preserves WAL cursor/state and does not append partial records | Codex |
 | `cpp/src/core/wal_ring.cpp` | Added WAL sequence-overflow guards (`CanAppend/Append/AppendBatch`) to reject writes when `last_sequence` reaches `UInt64.max` | Codex |
 | `cpp/tests/unit/wal_ring_writer_test.cpp` | Added sequence-overflow regression ensuring append/batch throw and preserve WAL scan/state without side effects | Codex |
+| `cpp/include/waxcpp/embeddings.hpp` | Extended `MiniLMRuntimeInfo` with selected artifact resolved path + checksum-verification flag for explicit runtime diagnostics | Codex |
+| `cpp/src/rag/embeddings.cpp` | Added optional selected-artifact checksum verification gate (`WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256`) with artifact resolution via manifest dir / dist root override | Codex |
+| `cpp/tests/unit/embeddings_test.cpp` | Added checksum-gate regressions (success, missing artifact, mismatched sha) and runtime-info stability assertions for resolved path + verification flag | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
