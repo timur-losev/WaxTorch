@@ -2,6 +2,7 @@
 
 #include "../test_logger.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -516,6 +517,74 @@ void ScenarioRequestClampingParity() {
   }
 }
 
+void ScenarioPermutationInvariance() {
+  waxcpp::tests::Log("scenario: permutation invariance");
+
+  const waxcpp::SearchRequest hybrid_request = [] {
+    waxcpp::SearchRequest request{};
+    request.query = "permute";
+    request.mode = {waxcpp::SearchModeKind::kHybrid, 0.5F};
+    request.top_k = 16;
+    request.rrf_k = 60;
+    request.preview_max_bytes = 256;
+    request.expansion_max_tokens = 16;
+    request.snippet_max_tokens = 16;
+    request.max_context_tokens = 64;
+    return request;
+  }();
+
+  const std::vector<waxcpp::SearchResult> text_base = {
+      {.frame_id = 10, .score = 5.0F, .preview_text = std::string("ten"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 20, .score = 4.0F, .preview_text = std::string("twenty"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 20, .score = 3.0F, .preview_text = std::string("twenty-dup"), .sources = {waxcpp::SearchSource::kStructuredMemory}},
+      {.frame_id = 30, .score = 2.0F, .preview_text = std::string("thirty"), .sources = {waxcpp::SearchSource::kText}},
+  };
+  const std::vector<waxcpp::SearchResult> vector_base = {
+      {.frame_id = 20, .score = 6.0F, .preview_text = std::string("v20"), .sources = {waxcpp::SearchSource::kVector}},
+      {.frame_id = 40, .score = 5.0F, .preview_text = std::string("v40"), .sources = {waxcpp::SearchSource::kVector}},
+      {.frame_id = 40, .score = 1.0F, .preview_text = std::string("v40-dup"), .sources = {waxcpp::SearchSource::kVector}},
+  };
+
+  const auto baseline_response = waxcpp::UnifiedSearchWithCandidates(hybrid_request, text_base, vector_base);
+
+  auto text_reversed = text_base;
+  auto vector_reversed = vector_base;
+  std::reverse(text_reversed.begin(), text_reversed.end());
+  std::reverse(vector_reversed.begin(), vector_reversed.end());
+  const auto reversed_response = waxcpp::UnifiedSearchWithCandidates(hybrid_request, text_reversed, vector_reversed);
+
+  Require(reversed_response.results.size() == baseline_response.results.size(),
+          "permutation invariance: hybrid result size mismatch after reversing inputs");
+  for (std::size_t i = 0; i < baseline_response.results.size(); ++i) {
+    const auto& lhs = baseline_response.results[i];
+    const auto& rhs = reversed_response.results[i];
+    Require(lhs.frame_id == rhs.frame_id, "permutation invariance: frame order changed after reversing inputs");
+    Require(std::fabs(lhs.score - rhs.score) < 1e-6F,
+            "permutation invariance: score changed after reversing inputs");
+    Require(lhs.sources == rhs.sources, "permutation invariance: source set changed after reversing inputs");
+    Require(lhs.preview_text == rhs.preview_text, "permutation invariance: preview text changed after reversing inputs");
+  }
+
+  const auto baseline_context = waxcpp::BuildFastRAGContext(hybrid_request, baseline_response);
+
+  waxcpp::SearchResponse permuted_context_input = baseline_response;
+  std::reverse(permuted_context_input.results.begin(), permuted_context_input.results.end());
+  const auto permuted_context = waxcpp::BuildFastRAGContext(hybrid_request, permuted_context_input);
+  Require(permuted_context.items.size() == baseline_context.items.size(),
+          "context permutation invariance: item count mismatch");
+  Require(permuted_context.total_tokens == baseline_context.total_tokens,
+          "context permutation invariance: total_tokens mismatch");
+  for (std::size_t i = 0; i < baseline_context.items.size(); ++i) {
+    const auto& lhs = baseline_context.items[i];
+    const auto& rhs = permuted_context.items[i];
+    Require(lhs.frame_id == rhs.frame_id, "context permutation invariance: frame ordering changed");
+    Require(lhs.kind == rhs.kind, "context permutation invariance: item kind changed");
+    Require(std::fabs(lhs.score - rhs.score) < 1e-6F, "context permutation invariance: score changed");
+    Require(lhs.sources == rhs.sources, "context permutation invariance: sources changed");
+    Require(lhs.text == rhs.text, "context permutation invariance: text changed");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -538,6 +607,7 @@ int main() {
     ScenarioContextNormalizesSourcesOrdering();
     ScenarioAsciiWhitespaceTokenization();
     ScenarioRequestClampingParity();
+    ScenarioPermutationInvariance();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
