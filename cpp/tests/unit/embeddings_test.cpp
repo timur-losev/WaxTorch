@@ -239,6 +239,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_nested_plus_top_level.json";
   const auto cpu_cuda_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_cpu_cuda.json";
+  const auto alias_fields_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_alias_fields.json";
+  const auto root_array_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_root_array.json";
   {
     std::ofstream out(temp_manifest, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
@@ -294,6 +298,20 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     }
     out << R"({"artifacts":[{"path":"libtorch-cpu.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000"},{"path":"libtorch-cuda121.zip","sha256":"1111111111111111111111111111111111111111111111111111111111111111"}]})";
   }
+  {
+    std::ofstream out(alias_fields_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create alias-fields manifest file");
+    }
+    out << R"({"files":[{"file":"libtorch-cuda124.zip","sha256sum":"2222222222222222222222222222222222222222222222222222222222222222"}]})";
+  }
+  {
+    std::ofstream out(root_array_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create root-array manifest file");
+    }
+    out << R"([{"path":"libtorch-cpu.zip","sha256":"3333333333333333333333333333333333333333333333333333333333333333"}])";
+  }
 
   {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", temp_manifest.string());
@@ -334,6 +352,30 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(info.libtorch_manifest_cuda_artifact_count == 0, "cpu-only manifest should report zero cuda artifacts");
     Require(info.selected_backend == "fallback_cpu",
             "cuda-preferred runtime should fall back to CPU when manifest lacks CUDA artifacts");
+  }
+
+  {
+    const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", alias_fields_manifest.string());
+    const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.libtorch_manifest_valid, "alias-fields manifest should pass validation");
+    Require(info.libtorch_manifest_artifact_count == 1, "alias-fields manifest should report one artifact");
+    Require(info.libtorch_manifest_cpu_artifact_count == 0, "alias-fields manifest should report zero cpu artifacts");
+    Require(info.libtorch_manifest_cuda_artifact_count == 1, "alias-fields manifest should report one cuda artifact");
+    Require(info.selected_backend == "fallback_cuda",
+            "cuda-preferred runtime should accept file/sha256sum alias fields for cuda routing");
+  }
+
+  {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", root_array_manifest.string());
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.libtorch_manifest_valid, "root-array manifest should pass validation");
+    Require(info.libtorch_manifest_artifact_count == 1, "root-array manifest should report one artifact");
+    Require(info.libtorch_manifest_cpu_artifact_count == 1, "root-array manifest should report one cpu artifact");
+    Require(info.libtorch_manifest_cuda_artifact_count == 0, "root-array manifest should report zero cuda artifacts");
   }
 
   {
@@ -426,6 +468,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(nested_fields_manifest, ec);
   std::filesystem::remove(nested_plus_top_level_manifest, ec);
   std::filesystem::remove(cpu_cuda_manifest, ec);
+  std::filesystem::remove(alias_fields_manifest, ec);
+  std::filesystem::remove(root_array_manifest, ec);
 }
 
 void ScenarioConcurrentEmbedThreadSafety() {
