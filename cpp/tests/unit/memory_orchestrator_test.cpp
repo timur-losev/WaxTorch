@@ -1120,6 +1120,29 @@ void ScenarioVectorRecallSupportsExplicitEmbeddingWithoutQuery(const std::filesy
   }
 }
 
+void ScenarioVectorRecallEmptyQueryWithoutEmbeddingReturnsEmpty(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector recall empty query without embedding returns empty");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("vector-only empty query should not auto-embed", {});
+    orchestrator.Flush();
+
+    embedder->Reset();
+    const auto context = orchestrator.Recall("");
+    Require(context.items.empty(), "vector-only recall with empty query and no embedding should return empty context");
+    Require(context.total_tokens == 0, "vector-only recall with empty query should report zero tokens");
+    Require(embedder->embed_calls() == 0, "vector-only empty query recall should not call Embed");
+    Require(embedder->batch_calls() == 0, "vector-only empty query recall should not call EmbedBatch");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioHybridRecallWithExplicitEmbeddingSkipsQueryEmbed(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: hybrid recall with explicit embedding skips query embed");
   waxcpp::OrchestratorConfig config{};
@@ -2687,6 +2710,7 @@ int main() {
     const auto path71 = UniquePath();
     const auto path72 = UniquePath();
     const auto path73 = UniquePath();
+    const auto path74 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -2721,6 +2745,7 @@ int main() {
     ScenarioEmbeddingJournalDoesNotLeakIntoTextRecall(path31);
     ScenarioVectorCloseWithoutFlushPersistsViaStoreClose(path18);
     ScenarioVectorRecallSupportsExplicitEmbeddingWithoutQuery(path19);
+    ScenarioVectorRecallEmptyQueryWithoutEmbeddingReturnsEmpty(path74);
     ScenarioHybridRecallWithExplicitEmbeddingSkipsQueryEmbed(path44);
     ScenarioFlushFailureDoesNotExposeStagedText(path20);
     ScenarioFlushFailureDoesNotExposeStagedVector(path21);
@@ -2770,7 +2795,7 @@ int main() {
         path33, path34, path35, path36, path37, path38, path39, path40, path41, path42, path43,
         path44, path45, path46, path47, path48, path49, path50, path51, path52, path53, path54,
         path55, path56, path57, path58, path59, path60, path61, path62, path63, path64, path65,
-        path66, path67, path68, path69, path70, path71, path72, path73,
+        path66, path67, path68, path69, path70, path71, path72, path73, path74,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

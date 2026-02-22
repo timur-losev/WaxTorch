@@ -542,6 +542,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/rag/embeddings.cpp` | Hardened checksum gate to reject empty selected artifact files before hashing | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added regression ensuring checksum gate rejects empty selected artifact files even with matching SHA of empty payload | Codex |
 | `cpp/scripts/verify_submodules.py` | Hardened dependency verification to reject empty manifest artifact files during checksum validation | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added vector-only recall regression: `Recall(\"\")` without explicit embedding returns empty context and does not invoke embedder (`Embed`/`EmbedBatch`) | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
