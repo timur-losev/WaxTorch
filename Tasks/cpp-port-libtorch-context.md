@@ -534,6 +534,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/rag/embeddings.cpp` | Hardened selected-artifact path resolution against path traversal by enforcing root containment (`WAXCPP_LIBTORCH_DIST_ROOT` / manifest roots) before file resolution | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added regression ensuring checksum gate rejects manifest artifact paths that escape dist root (`..` traversal) even when escaped file exists and hash matches | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added absolute-path regressions: checksum gate rejects absolute artifact paths outside configured dist root, while still allowing verified absolute paths when dist root is unset | Codex |
+| `cpp/tests/unit/libtorch_manifest_gate_test.cpp` | Strengthened gate assertions with runtime-policy/backend consistency checks and explicit resolved-artifact containment under configured dist root | Codex |
 | `.github/workflows/dependency-integrity.yml` | Added focused dependency workflow for submodule/manifest checksum integrity + `waxcpp_libtorch_manifest_gate_test` matrix (`cpu_only`/`cuda_preferred`) | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
