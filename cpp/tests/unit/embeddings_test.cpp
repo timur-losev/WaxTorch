@@ -185,11 +185,15 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
               "selected artifact path should be present when manifest is detected");
       Require(info.libtorch_selected_artifact_sha256.has_value(),
               "selected artifact sha256 should be present when manifest is detected");
+      Require(info.libtorch_selected_artifact_class.has_value(),
+              "selected artifact class should be present when manifest is detected");
     } else {
       Require(!info.libtorch_selected_artifact_path.has_value(),
               "selected artifact path should be empty without detected manifest");
       Require(!info.libtorch_selected_artifact_sha256.has_value(),
               "selected artifact sha256 should be empty without detected manifest");
+      Require(!info.libtorch_selected_artifact_class.has_value(),
+              "selected artifact class should be empty without detected manifest");
     }
   }
 
@@ -424,6 +428,9 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(*info.libtorch_selected_artifact_sha256 ==
                 "0000000000000000000000000000000000000000000000000000000000000000",
             "single cpu manifest selected artifact sha256 mismatch");
+    Require(info.libtorch_selected_artifact_class.has_value() &&
+                *info.libtorch_selected_artifact_class == "cpu",
+            "single cpu manifest selected artifact class mismatch");
   }
 
   {
@@ -448,6 +455,9 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(*info.libtorch_selected_artifact_sha256 ==
                 "1111111111111111111111111111111111111111111111111111111111111111",
             "cpu-cuda manifest selected cuda artifact sha256 mismatch");
+    Require(info.libtorch_selected_artifact_class.has_value() &&
+                *info.libtorch_selected_artifact_class == "cuda",
+            "cpu-cuda manifest selected artifact class mismatch");
   }
 
   {
@@ -711,6 +721,9 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
               "generic manifest A should select fallback any-artifact path");
       Require(info.libtorch_selected_artifact_sha256.has_value(),
               "generic manifest A should select fallback any-artifact sha256");
+      Require(info.libtorch_selected_artifact_class.has_value() &&
+                  *info.libtorch_selected_artifact_class == "any",
+              "generic manifest A selected artifact class mismatch");
       selected_a = info.libtorch_selected_artifact_path;
       selected_sha_a = info.libtorch_selected_artifact_sha256;
     }
@@ -728,6 +741,9 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
               "generic manifest B should select fallback any-artifact path");
       Require(info.libtorch_selected_artifact_sha256.has_value(),
               "generic manifest B should select fallback any-artifact sha256");
+      Require(info.libtorch_selected_artifact_class.has_value() &&
+                  *info.libtorch_selected_artifact_class == "any",
+              "generic manifest B selected artifact class mismatch");
       selected_b = info.libtorch_selected_artifact_path;
       selected_sha_b = info.libtorch_selected_artifact_sha256;
     }
@@ -970,6 +986,9 @@ void ScenarioRuntimeInfoSnapshotStability() {
   Require(before.libtorch_selected_artifact_sha256 == after_single.libtorch_selected_artifact_sha256 &&
               after_single.libtorch_selected_artifact_sha256 == after_batch.libtorch_selected_artifact_sha256,
           "selected artifact sha256 should remain stable after embedding calls");
+  Require(before.libtorch_selected_artifact_class == after_single.libtorch_selected_artifact_class &&
+              after_single.libtorch_selected_artifact_class == after_batch.libtorch_selected_artifact_class,
+          "selected artifact class should remain stable after embedding calls");
 }
 
 }  // namespace

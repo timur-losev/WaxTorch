@@ -691,6 +691,15 @@ MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
     if (selected_artifact.has_value()) {
       runtime_info_.libtorch_selected_artifact_path = selected_artifact->path;
       runtime_info_.libtorch_selected_artifact_sha256 = selected_artifact->sha256;
+      const bool looks_cuda = ArtifactPathLooksCuda(selected_artifact->path);
+      const bool looks_cpu = ArtifactPathLooksCpu(selected_artifact->path);
+      if (looks_cuda && !looks_cpu) {
+        runtime_info_.libtorch_selected_artifact_class = "cuda";
+      } else if (looks_cpu && !looks_cuda) {
+        runtime_info_.libtorch_selected_artifact_class = "cpu";
+      } else {
+        runtime_info_.libtorch_selected_artifact_class = "any";
+      }
     }
   }
 }

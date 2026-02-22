@@ -33,6 +33,7 @@ struct MiniLMRuntimeInfo {
   std::optional<std::string> libtorch_manifest_path;
   std::optional<std::string> libtorch_selected_artifact_path;
   std::optional<std::string> libtorch_selected_artifact_sha256;
+  std::optional<std::string> libtorch_selected_artifact_class;
 };
 
 class EmbeddingProvider {

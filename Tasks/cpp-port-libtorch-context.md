@@ -238,6 +238,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add duplicate-path manifest regression for deterministic `path+sha` tie-break (`same path, different sha`), ensuring stable selected artifact hash across entry-order permutations
 - [x] Expand C++ CI with torch runtime matrix (`cpu_only`, `cuda_preferred` + simulated CUDA availability) to continuously validate runtime-policy diagnostics paths
 - [x] Add manual workflow dispatch release gate job that runs strict dependency verification (`verify_submodules.py --enforce-pin-required`) and can be triggered independently from normal PR/push CI
+- [x] Extend runtime diagnostics with selected artifact class (`cpu|cuda|any`) and add regressions to lock deterministic class assignment + runtime-info stability across embed calls
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -433,8 +434,11 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/rag/embeddings.cpp` | Made manifest artifact-path selection order-independent by tracking lexicographically minimal valid `any/cpu/cuda` path while scanning artifacts | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added multi-entry CPU/CUDA manifest regressions (reversed order variants) asserting identical selected artifact path across ordering permutations | Codex |
 | `cpp/include/waxcpp/embeddings.hpp` | Extended `MiniLMRuntimeInfo` with `libtorch_selected_artifact_sha256` for explicit selected-artifact integrity diagnostics | Codex |
+| `cpp/include/waxcpp/embeddings.hpp` | Extended `MiniLMRuntimeInfo` with `libtorch_selected_artifact_class` (`cpu|cuda|any`) for explicit runtime artifact classification diagnostics | Codex |
 | `cpp/src/rag/embeddings.cpp` | Switched manifest selection internals to deterministic `path+sha` artifact selection and propagated selected `sha256` into runtime info | Codex |
+| `cpp/src/rag/embeddings.cpp` | Added selected artifact class derivation (`cpu|cuda|any`) from resolved manifest artifact path and exported it via runtime info | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added selected-artifact `sha256` regressions across cpu/cuda/alias/cu-tag/root-array/generic and dual-order manifest variants | Codex |
+| `cpp/tests/unit/embeddings_test.cpp` | Added selected artifact class regressions (cpu/cuda/any) and runtime-info class stability assertions | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added CPU-vs-CUDA policy parity regression asserting fallback embedding output invariance while runtime backend/artifact routing changes deterministically | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added duplicate-path manifest regressions (`same path, different sha`) to lock deterministic selected `sha256` tie-break across manifest order permutations | Codex |
 | `cpp/src/rag/search.cpp` | Hardened duplicate-frame preview merge to preserve deterministic fallback previews when higher-score entries lack preview text (promote prior best preview into fallback pool on best-score upgrade) | Codex |
