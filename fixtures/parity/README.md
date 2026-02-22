@@ -16,6 +16,8 @@ Conventions:
   - `wal_pending_bytes`
   - `wal_last_seq`
   - `wal_committed_seq`
+  - `wal_pending_delete_mutations`
+  - `wal_pending_supersede_mutations`
   - `frame_payload_len.<id>`
   - `frame_status.<id>`
   - `frame_payload_utf8.<id>`
