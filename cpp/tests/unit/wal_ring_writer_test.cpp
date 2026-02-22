@@ -156,6 +156,30 @@ void RunScenarioSeparateSentinelWrite(const std::filesystem::path& path) {
   Require(scan.state.pending_bytes == 80, "scan pending_bytes mismatch for end-of-ring append");
 }
 
+void RunScenarioAppendBatch(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: append batch");
+  constexpr std::uint64_t kWalSize = 512;
+  CreateSizedFile(path, static_cast<std::size_t>(kWalSize));
+
+  waxcpp::core::wal::WalRingWriter writer(path, 0, kWalSize);
+  const std::vector<std::vector<std::byte>> payloads = {
+      BuildDeletePayload(5),
+      BuildDeletePayload(6),
+  };
+  const auto sequences = writer.AppendBatch(payloads);
+  Require(sequences.size() == 2, "AppendBatch must return sequence for each payload");
+  Require(sequences[0] == 1 && sequences[1] == 2, "AppendBatch sequences must be monotonic");
+  Require(writer.last_sequence() == 2, "AppendBatch should advance last_sequence");
+  Require(writer.pending_bytes() == 114, "AppendBatch pending bytes mismatch");
+
+  const auto scan = waxcpp::core::wal::ScanPendingMutationsWithState(path, 0, kWalSize, 0, 0);
+  Require(scan.pending_mutations.size() == 2, "expected two decoded mutations after AppendBatch");
+  Require(scan.pending_mutations[0].delete_frame.has_value(), "expected first delete payload");
+  Require(scan.pending_mutations[1].delete_frame.has_value(), "expected second delete payload");
+  Require(scan.pending_mutations[0].delete_frame->frame_id == 5, "unexpected first delete frame id");
+  Require(scan.pending_mutations[1].delete_frame->frame_id == 6, "unexpected second delete frame id");
+}
+
 }  // namespace
 
 int main() {
@@ -168,6 +192,7 @@ int main() {
     RunScenarioWrapPaddingAndCheckpoint(path);
     RunScenarioCapacityGuard(path);
     RunScenarioSeparateSentinelWrite(path);
+    RunScenarioAppendBatch(path);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);

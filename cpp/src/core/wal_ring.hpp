@@ -91,6 +91,8 @@ class WalRingWriter {
 
   [[nodiscard]] bool CanAppend(std::size_t payload_size) const;
   [[nodiscard]] std::uint64_t Append(std::span<const std::byte> payload, std::uint32_t flags = 0);
+  [[nodiscard]] std::vector<std::uint64_t> AppendBatch(const std::vector<std::vector<std::byte>>& payloads,
+                                                       std::uint32_t flags = 0);
   void RecordCheckpoint();
 
   [[nodiscard]] std::uint64_t write_pos() const { return write_pos_; }

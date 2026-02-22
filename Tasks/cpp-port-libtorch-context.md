@@ -361,6 +361,10 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added assertions that `pending_embedding_mutations` tracks pending embedding snapshot size and resets on commit/recovery transitions | Codex |
 | `cpp/src/core/wax_store.cpp` | Refactored `PutBatch` to a single `WalRingWriter` append path (no per-item `Put()` calls) while preserving dense IDs and existing commit semantics | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added regression for `Close()` auto-commit of local embedding-only mutations (pending embedding count clears and no pending snapshot after reopen) | Codex |
+| `cpp/src/core/wal_ring.hpp` | Added `WalRingWriter::AppendBatch` API for batched WAL appends | Codex |
+| `cpp/src/core/wal_ring.cpp` | Implemented `AppendBatch` using sequential append semantics with monotonic sequence return | Codex |
+| `cpp/src/core/wax_store.cpp` | Switched `PutEmbeddingBatch` to batched WAL append path via `WalRingWriter::AppendBatch` | Codex |
+| `cpp/tests/unit/wal_ring_writer_test.cpp` | Added `AppendBatch` writer scenario validating sequence monotonicity and decode parity | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

@@ -566,6 +566,16 @@ std::uint64_t WalRingWriter::Append(std::span<const std::byte> payload, std::uin
   return sequence;
 }
 
+std::vector<std::uint64_t> WalRingWriter::AppendBatch(const std::vector<std::vector<std::byte>>& payloads,
+                                                      std::uint32_t flags) {
+  std::vector<std::uint64_t> sequences{};
+  sequences.reserve(payloads.size());
+  for (const auto& payload : payloads) {
+    sequences.push_back(Append(payload, flags));
+  }
+  return sequences;
+}
+
 void WalRingWriter::RecordCheckpoint() {
   checkpoint_pos_ = write_pos_;
   pending_bytes_ = 0;

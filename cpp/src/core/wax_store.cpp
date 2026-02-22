@@ -743,6 +743,8 @@ void WaxStore::PutEmbeddingBatch(const std::vector<std::uint64_t>& frame_ids,
                                   wal_sentinel_write_count_,
                                   wal_write_call_count_);
 
+  std::vector<std::vector<std::byte>> wal_payloads{};
+  wal_payloads.reserve(frame_ids.size());
   std::optional<std::size_t> expected_dimension{};
   for (std::size_t i = 0; i < frame_ids.size(); ++i) {
     if (vectors[i].empty()) {
@@ -753,9 +755,9 @@ void WaxStore::PutEmbeddingBatch(const std::vector<std::uint64_t>& frame_ids,
     } else if (*expected_dimension != vectors[i].size()) {
       throw StoreError("PutEmbeddingBatch vectors must all have same dimension");
     }
-    const auto wal_payload = BuildWalPutEmbeddingPayload(frame_ids[i], vectors[i]);
-    (void)writer.Append(wal_payload);
+    wal_payloads.push_back(BuildWalPutEmbeddingPayload(frame_ids[i], vectors[i]));
   }
+  (void)writer.AppendBatch(wal_payloads);
 
   wal_write_pos_ = writer.write_pos();
   wal_checkpoint_pos_ = writer.checkpoint_pos();
