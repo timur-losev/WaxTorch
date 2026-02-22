@@ -243,6 +243,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Extend WAL recovery/apply parity regressions for recovered non-put mutations: recovered `delete`/`supersede` + local `put` must auto-commit together on `Close()` and persist expected TOC lifecycle state
 - [x] Add deterministic WAL payload fuzz regression with valid per-record checksums (`256` seeded payloads) to harden mutation-decoder paths while preserving scan-state invariants
 - [x] Introduce shared pending-WAL replay analyzer for `LoadState` + `Commit` paths and add explicit pending lifecycle counters (`delete`/`supersede`) to WAL runtime stats with local+recovered regression coverage
+- [x] Add WAL recovery regression for lifecycle mutations with undecodable tail: valid pending `delete` must survive decode-stop and commit correctly while invalid tail remains non-blocking
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -491,6 +492,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/include/waxcpp/wax_store.hpp` | Extended `WaxWALStats` with pending lifecycle mutation counters (`pending_delete_mutations`, `pending_supersede_mutations`) and added internal runtime fields | Codex |
 | `cpp/src/core/wax_store.cpp` | Added shared pending-WAL replay analyzer used by both `LoadState` (recovery accounting) and `Commit` (strict apply); wired lifecycle pending counters through write/open/commit WAL state | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added lifecycle counter regressions for local and recovered pending `delete`/`supersede` mutations (including close/reopen and commit clear behavior) | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added recovery regression for pending lifecycle mutation with undecodable WAL tail (`delete` + unknown opcode): decode-stop must preserve valid prefix and commit apply semantics | Codex |
 | `cpp/include/waxcpp/wax_store.hpp` | Extended `WaxWALStats` with `pending_embedding_mutations` runtime counter | Codex |
 | `cpp/src/core/wax_store.cpp` | Wired `pending_embedding_mutations` updates in open/write/commit paths and surfaced it via `WalStats()` | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added assertions that `pending_embedding_mutations` tracks pending embedding snapshot size and resets on commit/recovery transitions | Codex |

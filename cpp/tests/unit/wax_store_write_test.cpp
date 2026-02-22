@@ -732,6 +732,53 @@ void RunScenarioPendingRecoveryIgnoresPartialTail(const std::filesystem::path& p
   reopened.Close();
 }
 
+void RunScenarioPendingLifecycleRecoverySkipsUndecodableTail(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: pending lifecycle recovery skips undecodable tail record");
+  waxcpp::WaxWALStats crashed_wal{};
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    (void)store.Put({std::byte{0x81}});
+    (void)store.Put({std::byte{0x82}});
+    store.Commit();
+    store.Delete(0);
+    crashed_wal = store.WalStats();
+    // Simulate crash with one valid pending delete.
+  }
+
+  {
+    waxcpp::core::wal::WalRingWriter writer(path,
+                                            waxcpp::core::mv2s::kWalOffset,
+                                            crashed_wal.wal_size,
+                                            crashed_wal.write_pos,
+                                            crashed_wal.checkpoint_pos,
+                                            crashed_wal.pending_bytes,
+                                            crashed_wal.last_seq);
+    const std::vector<std::byte> unknown_opcode_payload = {std::byte{0xFF}};
+    (void)writer.Append(unknown_opcode_payload);
+    // Do not publish updated header state to simulate torn process after WAL append.
+  }
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  const auto before_stats = reopened.Stats();
+  const auto before_wal = reopened.WalStats();
+  Require(before_stats.frame_count == 2, "undecodable tail should not alter committed frame_count");
+  Require(before_stats.pending_frames == 0, "delete-only pending mutation should not increase pending put counter");
+  Require(before_wal.pending_delete_mutations == 1,
+          "recovered pending delete counter should retain decodable lifecycle mutation");
+  Require(before_wal.pending_supersede_mutations == 0,
+          "recovered pending supersede counter should remain zero");
+  Require(before_wal.last_seq >= crashed_wal.last_seq + 1,
+          "scan state should advance through undecodable lifecycle tail record");
+
+  reopened.Commit();
+  const auto after_wal = reopened.WalStats();
+  const auto toc = ReadCommittedToc(path);
+  Require(toc.frames.size() == 2, "commit should preserve two committed frames");
+  Require(toc.frames[0].status == 1, "commit should apply recovered pending delete despite undecodable tail");
+  Require(after_wal.pending_delete_mutations == 0, "commit should clear pending delete counter");
+  reopened.Close();
+}
+
 void RunScenarioDeleteAndSupersedePersist(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: delete/supersede persist in TOC");
   auto store = waxcpp::WaxStore::Create(path);
@@ -1611,6 +1658,7 @@ int main(int argc, char** argv) {
     RunScenarioPendingRecoveryCommit(path);
     RunScenarioPendingRecoverySkipsUndecodableTail(path);
     RunScenarioPendingRecoveryIgnoresPartialTail(path);
+    RunScenarioPendingLifecycleRecoverySkipsUndecodableTail(path);
     RunScenarioDeleteAndSupersedePersist(path);
     RunScenarioPendingLifecycleMutationCountersLocal(path);
     RunScenarioPendingLifecycleMutationCountersRecovered(path);
