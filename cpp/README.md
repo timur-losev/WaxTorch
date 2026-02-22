@@ -52,6 +52,15 @@ export WAXCPP_LIBTORCH_DIST_ROOT=/abs/path/to/cpp/third_party/libtorch-dist
 export WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256=1
 ```
 
+Libtorch manifest checksum gate test (requires initialized `cpp/third_party/libtorch-dist`):
+```bash
+export WAXCPP_REQUIRE_LIBTORCH_MANIFEST=1
+export WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256=1
+export WAXCPP_LIBTORCH_MANIFEST=/abs/path/to/cpp/third_party/libtorch-dist/manifest/libtorch-manifest.json
+export WAXCPP_LIBTORCH_DIST_ROOT=/abs/path/to/cpp/third_party/libtorch-dist
+ctest --test-dir cpp/build --output-on-failure -R waxcpp_libtorch_manifest_gate_test
+```
+
 SQLite backend (optional, currently disabled by default in favor of WAL-focused track):
 ```bash
 cmake -S cpp -B cpp/build -DWAXCPP_ENABLE_SQLITE_BACKEND=ON

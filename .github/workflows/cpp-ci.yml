@@ -70,6 +70,19 @@ jobs:
           echo "Running C++ tests with WAXCPP_TORCH_RUNTIME=${WAXCPP_TORCH_RUNTIME}, WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE=${WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE}"
           ctest --test-dir cpp/build --output-on-failure
 
+      - name: Test selected libtorch artifact checksum gate
+        env:
+          WAXCPP_TEST_LOG: '1'
+          WAXCPP_REQUIRE_LIBTORCH_MANIFEST: '1'
+          WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256: '1'
+          WAXCPP_LIBTORCH_MANIFEST: ${{ github.workspace }}/cpp/third_party/libtorch-dist/manifest/libtorch-manifest.json
+          WAXCPP_LIBTORCH_DIST_ROOT: ${{ github.workspace }}/cpp/third_party/libtorch-dist
+          WAXCPP_TORCH_RUNTIME: ${{ matrix.torch_runtime }}
+          WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE: ${{ matrix.cuda_available }}
+        run: |
+          echo "Running libtorch checksum gate with manifest ${WAXCPP_LIBTORCH_MANIFEST}"
+          ctest --test-dir cpp/build --output-on-failure -R waxcpp_libtorch_manifest_gate_test
+
   dependency-release-gate:
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_gate == 'true' }}
     runs-on: ubuntu-latest

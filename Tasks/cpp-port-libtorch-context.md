@@ -524,6 +524,10 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/rag/embeddings.cpp` | Added optional selected-artifact checksum verification gate (`WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256`) with artifact resolution via manifest dir / dist root override | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added checksum-gate regressions (success, missing artifact, mismatched sha) and runtime-info stability assertions for resolved path + verification flag | Codex |
 | `cpp/README.md` | Documented new libtorch artifact checksum env controls (`WAXCPP_LIBTORCH_DIST_ROOT`, `WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256`) | Codex |
+| `cpp/tests/unit/libtorch_manifest_gate_test.cpp` | Added dedicated runtime gate test for real `libtorch-dist` manifest/artifact resolution + SHA256 verification under checksum-env policy | Codex |
+| `cpp/CMakeLists.txt` | Registered `waxcpp_libtorch_manifest_gate_test` target/test in default C++ test suite | Codex |
+| `.github/workflows/cpp-ci.yml` | Added dedicated CI step running `waxcpp_libtorch_manifest_gate_test` with strict manifest/artifact checksum env configuration | Codex |
+| `cpp/README.md` | Documented explicit command to run libtorch manifest checksum gate test locally (requires initialized `cpp/third_party/libtorch-dist`) | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
