@@ -94,6 +94,12 @@ bool PreferPreviewText(const std::optional<std::string>& candidate, const std::o
   return *candidate < *current;
 }
 
+void UpdatePreferredPreview(std::optional<std::string>& slot, const std::optional<std::string>& candidate) {
+  if (PreferPreviewText(candidate, slot)) {
+    slot = candidate;
+  }
+}
+
 float ClampAlpha(float alpha) {
   return std::min(1.0F, std::max(0.0F, alpha));
 }
@@ -101,7 +107,8 @@ float ClampAlpha(float alpha) {
 std::vector<SearchResult> MergeDuplicateFrameResults(std::vector<SearchResult> results) {
   struct ChannelAggregate {
     float best_score = 0.0F;
-    std::optional<std::string> preview_text{};
+    std::optional<std::string> best_preview{};
+    std::optional<std::string> fallback_preview{};
     std::unordered_set<SearchSource> sources{};
     bool seen = false;
   };
@@ -112,11 +119,16 @@ std::vector<SearchResult> MergeDuplicateFrameResults(std::vector<SearchResult> r
     auto& agg = by_frame[result.frame_id];
     const float normalized_score = std::isnan(result.score) ? 0.0F : result.score;
     if (!agg.seen || normalized_score > agg.best_score) {
+      if (agg.seen) {
+        UpdatePreferredPreview(agg.fallback_preview, agg.best_preview);
+      }
       agg.best_score = normalized_score;
-      agg.preview_text = result.preview_text;
+      agg.best_preview = result.preview_text;
       agg.seen = true;
-    } else if (normalized_score == agg.best_score && PreferPreviewText(result.preview_text, agg.preview_text)) {
-      agg.preview_text = result.preview_text;
+    } else if (normalized_score == agg.best_score) {
+      UpdatePreferredPreview(agg.best_preview, result.preview_text);
+    } else {
+      UpdatePreferredPreview(agg.fallback_preview, result.preview_text);
     }
     for (const auto source : result.sources) {
       agg.sources.insert(source);
@@ -129,7 +141,8 @@ std::vector<SearchResult> MergeDuplicateFrameResults(std::vector<SearchResult> r
     SearchResult merged{};
     merged.frame_id = frame_id;
     merged.score = agg.best_score;
-    merged.preview_text = std::move(agg.preview_text);
+    merged.preview_text =
+        agg.best_preview.has_value() ? std::move(agg.best_preview) : std::move(agg.fallback_preview);
     merged.sources.assign(agg.sources.begin(), agg.sources.end());
     std::sort(merged.sources.begin(), merged.sources.end(), [](const auto lhs, const auto rhs) {
       return static_cast<int>(lhs) < static_cast<int>(rhs);

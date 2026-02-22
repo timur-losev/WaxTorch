@@ -690,6 +690,40 @@ void ScenarioEqualScoreDuplicateMergesSourcesDeterministically() {
           "merged sources should be normalized in deterministic enum order");
 }
 
+void ScenarioLowerScorePreviewFallbackIsOrderIndependent() {
+  waxcpp::tests::Log("scenario: lower-score preview fallback is order-independent");
+
+  waxcpp::SearchRequest request{};
+  request.mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+  request.top_k = 8;
+  request.preview_max_bytes = 256;
+  request.expansion_max_tokens = 16;
+  request.snippet_max_tokens = 16;
+  request.max_context_tokens = 64;
+
+  const std::vector<waxcpp::SearchResult> forward = {
+      {.frame_id = 123, .score = 5.0F, .preview_text = std::nullopt, .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 123, .score = 3.0F, .preview_text = std::string("zeta"), .sources = {waxcpp::SearchSource::kVector}},
+      {.frame_id = 123, .score = 2.0F, .preview_text = std::string("alpha"), .sources = {waxcpp::SearchSource::kStructuredMemory}},
+  };
+  const std::vector<waxcpp::SearchResult> reversed = {
+      {.frame_id = 123, .score = 2.0F, .preview_text = std::string("alpha"), .sources = {waxcpp::SearchSource::kStructuredMemory}},
+      {.frame_id = 123, .score = 3.0F, .preview_text = std::string("zeta"), .sources = {waxcpp::SearchSource::kVector}},
+      {.frame_id = 123, .score = 5.0F, .preview_text = std::nullopt, .sources = {waxcpp::SearchSource::kText}},
+  };
+
+  const auto response_forward = waxcpp::UnifiedSearchWithCandidates(request, forward, {});
+  const auto response_reversed = waxcpp::UnifiedSearchWithCandidates(request, reversed, {});
+  Require(response_forward.results.size() == 1 && response_reversed.results.size() == 1,
+          "lower-score preview fallback scenario should collapse to one frame");
+  Require(response_forward.results[0].preview_text.has_value() && response_reversed.results[0].preview_text.has_value(),
+          "lower-score preview fallback scenario should keep fallback preview");
+  Require(*response_forward.results[0].preview_text == "alpha",
+          "fallback preview should deterministically use lexicographically smallest available preview");
+  Require(*response_reversed.results[0].preview_text == "alpha",
+          "fallback preview selection must be independent of input order");
+}
+
 }  // namespace
 
 int main() {
@@ -716,6 +750,7 @@ int main() {
     ScenarioEqualScoreDuplicatePreviewTieBreakIsOrderIndependent();
     ScenarioEqualScoreDuplicatePrefersPresentPreviewOverNullopt();
     ScenarioEqualScoreDuplicateMergesSourcesDeterministically();
+    ScenarioLowerScorePreviewFallbackIsOrderIndependent();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

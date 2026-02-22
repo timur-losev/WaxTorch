@@ -423,6 +423,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/search_test.cpp` | Added equal-score duplicate source-union regression for context path, asserting deterministic source dedupe/order after duplicate-frame merge | Codex |
 | `cpp/src/rag/embeddings.cpp` | Made manifest artifact-path selection order-independent by tracking lexicographically minimal valid `any/cpu/cuda` path while scanning artifacts | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added multi-entry CPU/CUDA manifest regressions (reversed order variants) asserting identical selected artifact path across ordering permutations | Codex |
+| `cpp/src/rag/search.cpp` | Hardened duplicate-frame preview merge to preserve deterministic fallback previews when higher-score entries lack preview text (promote prior best preview into fallback pool on best-score upgrade) | Codex |
+| `cpp/tests/unit/search_test.cpp` | Added lower-score preview fallback regression ensuring duplicate merge keeps deterministic preview text even when top-score duplicate has `nullopt` preview | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Added constructor policy validation for `search_mode` vs enabled channels and extra filtering of text index hits against committed store frame state | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added policy-validation scenarios for invalid text-only/vector-only/hybrid configuration combinations | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added regression scenario for `flush fail -> close -> reopen` recovery path, ensuring text index rebuild from committed store state | Codex |
