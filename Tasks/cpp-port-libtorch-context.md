@@ -300,6 +300,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/include/waxcpp/structured_memory.hpp` | Added staged structured-memory mutation API (`StageUpsert`, `StageRemove`, `CommitStaged`, `RollbackStaged`, pending mutation count) | Codex |
 | `cpp/src/text/structured_memory_store.cpp` | Added two-phase staged structured-memory state with commit/rollback visibility gating | Codex |
 | `cpp/tests/unit/structured_memory_store_test.cpp` | Added staged structured-memory regressions for pre-commit invisibility, rollback discard, and staged remove-id semantics | Codex |
+| `cpp/src/text/structured_memory_store.cpp` | Tightened `StageRemove` semantics so missing keys do not create synthetic pending mutations | Codex |
+| `cpp/tests/unit/structured_memory_store_test.cpp` | Added regression ensuring `StageRemove` on missing key returns nullopt and keeps pending mutation count unchanged | Codex |
 | `cpp/CMakeLists.txt` | Added structured-memory sources/header and `waxcpp_structured_memory_store_test` target | Codex |
 | `cpp/include/waxcpp/memory_orchestrator.hpp` | Added orchestrator-level structured-memory API (`RememberFact`, `RecallFactsByEntityPrefix`) and state | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Wired structured-memory store into orchestrator with baseline fact CRUD/query methods | Codex |

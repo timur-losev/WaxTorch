@@ -124,6 +124,11 @@ void ScenarioStagedMutationVisibilityAndRollback() {
   Require(store.Get("user:1", "city").has_value(), "staged remove must stay invisible before commit");
   store.CommitStaged();
   Require(!store.Get("user:1", "city").has_value(), "commit should apply staged remove");
+
+  const auto missing_removed_id = store.StageRemove("user:1", "city");
+  Require(!missing_removed_id.has_value(), "StageRemove should report missing key for absent entry");
+  Require(store.PendingMutationCount() == 0,
+          "StageRemove on missing key must not create synthetic staged mutation");
 }
 
 }  // namespace

@@ -74,14 +74,27 @@ std::uint64_t StructuredMemoryStore::StageUpsert(const std::string& entity,
 
 std::optional<std::uint64_t> StructuredMemoryStore::StageRemove(const std::string& entity,
                                                                 const std::string& attribute) {
-  EnsureStagingState();
-
   const auto key = CompositeKey(entity, attribute);
+  if (pending_mutations_.empty()) {
+    const auto committed_it = entries_.find(key);
+    if (committed_it == entries_.end()) {
+      return std::nullopt;
+    }
+    staged_entries_ = entries_;
+    staged_next_id_ = next_id_;
+  } else if (staged_entries_.empty()) {
+    // Defensive fallback for externally manipulated state.
+    staged_entries_ = entries_;
+    staged_next_id_ = next_id_;
+  }
+
   std::optional<std::uint64_t> removed_id{};
   const auto it = staged_entries_.find(key);
   if (it != staged_entries_.end()) {
     removed_id = it->second.id;
     staged_entries_.erase(it);
+  } else {
+    return std::nullopt;
   }
   pending_mutations_.push_back(PendingMutation{
       PendingMutationType::kRemove,
