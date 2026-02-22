@@ -247,8 +247,9 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
   for (const auto& result : sorted_results) {
     const bool is_first_item = context.items.empty();
     auto item_kind = is_first_item ? RAGItemKind::kExpanded : RAGItemKind::kSnippet;
+    const bool counts_towards_snippet_cap = !is_first_item;
 
-    if (item_kind == RAGItemKind::kSnippet && emitted_snippets >= clamped_max_snippets) {
+    if (counts_towards_snippet_cap && emitted_snippets >= clamped_max_snippets) {
       continue;
     }
 
@@ -290,7 +291,7 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
     item.sources = result.sources;
     item.text = JoinPrefixTokens(tokens, emit_tokens);
     context.total_tokens += static_cast<int>(emit_tokens);
-    if (item_kind == RAGItemKind::kSnippet) {
+    if (counts_towards_snippet_cap) {
       ++emitted_snippets;
     }
     context.items.push_back(std::move(item));

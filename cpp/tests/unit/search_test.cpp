@@ -304,6 +304,33 @@ void ScenarioMaxSnippetsCapsSnippetsOnly() {
   Require(context_zero.items[0].kind == waxcpp::RAGItemKind::kExpanded, "expansion must remain when snippets are disabled");
 }
 
+void ScenarioMaxSnippetsCapsSurrogateFallbackItems() {
+  waxcpp::tests::Log("scenario: max_snippets caps surrogate fallback items");
+  waxcpp::SearchRequest request{};
+  request.query = "surrogate-cap";
+  request.top_k = 10;
+  request.max_snippets = 1;
+  request.preview_max_bytes = 0;  // force surrogate fallback for all items
+  request.expansion_max_tokens = 8;
+  request.snippet_max_tokens = 8;
+  request.max_context_tokens = 64;
+
+  waxcpp::SearchResponse response{};
+  response.results = {
+      {.frame_id = 1, .score = 3.0F, .preview_text = std::string("first"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 2, .score = 2.0F, .preview_text = std::string("second"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 3, .score = 1.0F, .preview_text = std::string("third"), .sources = {waxcpp::SearchSource::kText}},
+  };
+
+  const auto context = waxcpp::BuildFastRAGContext(request, response);
+  Require(context.items.size() == 2,
+          "max_snippets should cap non-first surrogate fallback items the same as snippet items");
+  Require(context.items[0].kind == waxcpp::RAGItemKind::kSurrogate,
+          "first item may become surrogate without consuming snippet cap");
+  Require(context.items[1].kind == waxcpp::RAGItemKind::kSurrogate,
+          "second item surrogate should consume the single snippet slot");
+}
+
 void ScenarioSurrogateFallback() {
   waxcpp::tests::Log("scenario: surrogate fallback");
   waxcpp::SearchRequest request{};
@@ -447,6 +474,7 @@ int main() {
     ScenarioContextTokenBudgetClamp();
     ScenarioRagItemKindPolicy();
     ScenarioMaxSnippetsCapsSnippetsOnly();
+    ScenarioMaxSnippetsCapsSurrogateFallbackItems();
     ScenarioSurrogateFallback();
     ScenarioContextDeduplicatesDuplicateFrames();
     ScenarioAsciiWhitespaceTokenization();
