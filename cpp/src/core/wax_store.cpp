@@ -672,9 +672,9 @@ std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std:
 
   std::vector<std::uint64_t> ids{};
   ids.reserve(contents.size());
+  std::uint64_t payload_offset = FileSize(path_);
   for (std::size_t i = 0; i < contents.size(); ++i) {
     const auto frame_id = next_frame_id_ + static_cast<std::uint64_t>(i);
-    const auto payload_offset = FileSize(path_);
     const auto payload_length = static_cast<std::uint64_t>(contents[i].size());
     const auto stored_checksum = core::Sha256Digest(contents[i]);
     const auto canonical_checksum = stored_checksum;
@@ -693,6 +693,10 @@ std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std:
                                                      stored_checksum);
     (void)writer.Append(wal_payload);
     ids.push_back(frame_id);
+    if (payload_offset > std::numeric_limits<std::uint64_t>::max() - payload_length) {
+      throw StoreError("putBatch payload offset overflow");
+    }
+    payload_offset += payload_length;
   }
 
   wal_write_pos_ = writer.write_pos();
