@@ -44,6 +44,12 @@ std::string BytesToString(const std::vector<std::byte>& bytes) {
   return text;
 }
 
+void CleanupPath(const std::filesystem::path& path) {
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  std::filesystem::remove(path.string() + ".writer.lease", ec);
+}
+
 class CountingEmbedder final : public waxcpp::EmbeddingProvider {
  public:
   int dimensions() const override { return 4; }
@@ -1165,73 +1171,14 @@ int main() {
     ScenarioStructuredFactStagedOrderBeforeFlush(path27);
     ScenarioStructuredFactCloseWithoutFlushPersistsViaStoreClose(path28);
 
-    std::error_code ec;
-    std::filesystem::remove(path0, ec);
-    std::filesystem::remove(path0.string() + ".writer.lease", ec);
-    std::filesystem::remove(path1, ec);
-    std::filesystem::remove(path1.string() + ".writer.lease", ec);
-    std::filesystem::remove(path2, ec);
-    std::filesystem::remove(path2.string() + ".writer.lease", ec);
-    std::filesystem::remove(path3, ec);
-    std::filesystem::remove(path3.string() + ".writer.lease", ec);
-    std::filesystem::remove(path4, ec);
-    std::filesystem::remove(path4.string() + ".writer.lease", ec);
-    std::filesystem::remove(path5, ec);
-    std::filesystem::remove(path5.string() + ".writer.lease", ec);
-    std::filesystem::remove(path6, ec);
-    std::filesystem::remove(path6.string() + ".writer.lease", ec);
-    std::filesystem::remove(path7, ec);
-    std::filesystem::remove(path7.string() + ".writer.lease", ec);
-    std::filesystem::remove(path8, ec);
-    std::filesystem::remove(path8.string() + ".writer.lease", ec);
-    std::filesystem::remove(path9, ec);
-    std::filesystem::remove(path9.string() + ".writer.lease", ec);
-    std::filesystem::remove(path10, ec);
-    std::filesystem::remove(path10.string() + ".writer.lease", ec);
-    std::filesystem::remove(path11, ec);
-    std::filesystem::remove(path11.string() + ".writer.lease", ec);
-    std::filesystem::remove(path12, ec);
-    std::filesystem::remove(path12.string() + ".writer.lease", ec);
-    std::filesystem::remove(path13, ec);
-    std::filesystem::remove(path13.string() + ".writer.lease", ec);
-    std::filesystem::remove(path14, ec);
-    std::filesystem::remove(path14.string() + ".writer.lease", ec);
-    std::filesystem::remove(path15, ec);
-    std::filesystem::remove(path15.string() + ".writer.lease", ec);
-    std::filesystem::remove(path16, ec);
-    std::filesystem::remove(path16.string() + ".writer.lease", ec);
-    std::filesystem::remove(path17, ec);
-    std::filesystem::remove(path17.string() + ".writer.lease", ec);
-    std::filesystem::remove(path18, ec);
-    std::filesystem::remove(path18.string() + ".writer.lease", ec);
-    std::filesystem::remove(path19, ec);
-    std::filesystem::remove(path19.string() + ".writer.lease", ec);
-    std::filesystem::remove(path20, ec);
-    std::filesystem::remove(path20.string() + ".writer.lease", ec);
-    std::filesystem::remove(path21, ec);
-    std::filesystem::remove(path21.string() + ".writer.lease", ec);
-    std::filesystem::remove(path22, ec);
-    std::filesystem::remove(path22.string() + ".writer.lease", ec);
-    std::filesystem::remove(path23, ec);
-    std::filesystem::remove(path23.string() + ".writer.lease", ec);
-    std::filesystem::remove(path24, ec);
-    std::filesystem::remove(path24.string() + ".writer.lease", ec);
-    std::filesystem::remove(path25, ec);
-    std::filesystem::remove(path25.string() + ".writer.lease", ec);
-    std::filesystem::remove(path26, ec);
-    std::filesystem::remove(path26.string() + ".writer.lease", ec);
-    std::filesystem::remove(path27, ec);
-    std::filesystem::remove(path27.string() + ".writer.lease", ec);
-    std::filesystem::remove(path28, ec);
-    std::filesystem::remove(path28.string() + ".writer.lease", ec);
-    std::filesystem::remove(path29, ec);
-    std::filesystem::remove(path29.string() + ".writer.lease", ec);
-    std::filesystem::remove(path30, ec);
-    std::filesystem::remove(path30.string() + ".writer.lease", ec);
-    std::filesystem::remove(path31, ec);
-    std::filesystem::remove(path31.string() + ".writer.lease", ec);
-    std::filesystem::remove(path32, ec);
-    std::filesystem::remove(path32.string() + ".writer.lease", ec);
+    const std::vector<std::filesystem::path> cleanup_paths = {
+        path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
+        path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
+        path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
+    };
+    for (const auto& path : cleanup_paths) {
+      CleanupPath(path);
+    }
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
