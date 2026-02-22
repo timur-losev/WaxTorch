@@ -80,7 +80,19 @@ See:
 - `cpp/submodules.lock`
 - `cpp/scripts/verify_submodules.py`
 
-Strict CI-style dependency check (requires checksum-verified submodules to be present locally):
+Policy test in CTest matrix:
 ```bash
+ctest --test-dir cpp/build --output-on-failure -R waxcpp_verify_submodules_policy_test
+```
+
+Strict CI-style dependency checks:
+```bash
+# Require checksum-verified submodule checkouts for local verification
 python3 cpp/scripts/verify_submodules.py --require-checksum-submodules-present
+
+# Require all required submodule gitlinks (mode 160000) to be present in index
+python3 cpp/scripts/verify_submodules.py --require-gitlinks-present
+
+# Fail on any unresolved <PIN_REQUIRED> entry
+python3 cpp/scripts/verify_submodules.py --enforce-pin-required
 ```

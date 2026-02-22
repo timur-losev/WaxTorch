@@ -264,6 +264,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `Tasks/cpp-port-libtorch-plan.md` | Saved implementation roadmap | Codex |
 | `cpp/CMakeLists.txt` | Added C++ build/test scaffold | Codex |
 | `cpp/README.md` | Added workspace purpose/build docs | Codex |
+| `cpp/README.md` | Documented dependency-policy CTest gate and strict verifier modes (`--require-checksum-submodules-present`, `--require-gitlinks-present`, `--enforce-pin-required`) | Codex |
 | `cpp/submodules.lock` | Added dependency lock policy skeleton | Codex |
 | `cpp/submodules.lock` | Replaced placeholder pins with concrete commit hashes for `usearch/sqlite/googletest`; `libtorch-dist` pin remains pending mirror finalization | Codex |
 | `cpp/scripts/verify_submodules.py` | Added policy consistency verifier; extended with strict placeholder-pin enforcement mode (`--enforce-pin-required`, `WAXCPP_ENFORCE_PIN_REQUIRED`) | Codex |
