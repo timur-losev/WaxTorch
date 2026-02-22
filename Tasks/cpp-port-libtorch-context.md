@@ -216,6 +216,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Fix manifest parser nested-depth edge case: artifact objects with extra nested metadata now remain valid when top-level `path|file` + `sha256|sha256sum` are present; add regression for nested+top-level mixed payload
 - [x] Add env-driven torch runtime policy baseline in `MiniLMEmbedderTorch` (`WAXCPP_TORCH_RUNTIME=cpu_only|cuda_preferred`) with deterministic fallback backend reporting and invalid-policy rejection regressions
 - [x] Extend manifest runtime introspection with CPU/CUDA artifact counters (`libtorch_manifest_cpu_artifact_count`, `libtorch_manifest_cuda_artifact_count`) and mixed-manifest regression under `cuda_preferred` policy
+- [x] Extend torch runtime policy selection with explicit CUDA-runtime signal (`WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE`) and deterministic backend routing (`fallback_cpu|fallback_cuda`) gated by policy + manifest CUDA artifact availability
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

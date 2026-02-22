@@ -169,6 +169,7 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   const ScopedEnvVar clear_override("WAXCPP_LIBTORCH_MANIFEST", std::nullopt);
   const ScopedEnvVar clear_require("WAXCPP_REQUIRE_LIBTORCH_MANIFEST", std::nullopt);
   const ScopedEnvVar clear_runtime("WAXCPP_TORCH_RUNTIME", std::nullopt);
+  const ScopedEnvVar clear_cuda_runtime("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::nullopt);
 
   {
     waxcpp::MiniLMEmbedderTorch embedder;
@@ -190,6 +191,16 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(info.runtime_policy == "cuda_preferred", "runtime policy should reflect cuda_preferred override");
     Require(info.cuda_preferred_requested, "cuda_preferred override should set request flag");
     Require(info.selected_backend == "fallback_cpu", "fallback build should keep fallback_cpu backend");
+  }
+
+  {
+    const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+    const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.cuda_runtime_available, "assumed CUDA runtime should be reflected in runtime info");
+    Require(info.selected_backend == "fallback_cuda",
+            "cuda_preferred with available CUDA runtime should choose fallback_cuda backend");
   }
 
   {
@@ -301,6 +312,7 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   {
     const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", cpu_cuda_manifest.string());
+    const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
     waxcpp::MiniLMEmbedderTorch embedder;
     const auto info = embedder.runtime_info();
     Require(info.libtorch_manifest_valid, "cpu-cuda manifest should pass validation");
@@ -308,8 +320,20 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(info.libtorch_manifest_cpu_artifact_count == 1, "cpu-cuda manifest should report one cpu artifact");
     Require(info.libtorch_manifest_cuda_artifact_count == 1, "cpu-cuda manifest should report one cuda artifact");
     Require(info.cuda_preferred_requested, "cuda-preferred runtime should remain requested with mixed manifest");
+    Require(info.selected_backend == "fallback_cuda",
+            "cuda-preferred runtime with CUDA artifacts and runtime availability should choose fallback_cuda");
+  }
+
+  {
+    const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", temp_manifest.string());
+    const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.libtorch_manifest_valid, "cpu-only manifest should pass validation");
+    Require(info.libtorch_manifest_cuda_artifact_count == 0, "cpu-only manifest should report zero cuda artifacts");
     Require(info.selected_backend == "fallback_cpu",
-            "fallback build should stay on fallback_cpu even when cuda artifacts are present");
+            "cuda-preferred runtime should fall back to CPU when manifest lacks CUDA artifacts");
   }
 
   {

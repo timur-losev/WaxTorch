@@ -79,6 +79,12 @@ std::string ResolveTorchRuntimePolicy() {
   throw std::runtime_error("invalid WAXCPP_TORCH_RUNTIME; expected cpu_only or cuda_preferred");
 }
 
+bool DetectCudaRuntimeAvailable() {
+  // Real CUDA probing will be wired with libtorch runtime integration.
+  // For now, allow explicit opt-in signal for deterministic policy testing.
+  return EnvIsTruthy("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE");
+}
+
 bool IsAsciiHex(char ch) {
   return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
 }
@@ -585,7 +591,7 @@ MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
     : memoization_capacity_(memoization_capacity) {
   runtime_info_.runtime_policy = ResolveTorchRuntimePolicy();
   runtime_info_.cuda_preferred_requested = runtime_info_.runtime_policy == "cuda_preferred";
-  runtime_info_.cuda_runtime_available = false;
+  runtime_info_.cuda_runtime_available = DetectCudaRuntimeAvailable();
   runtime_info_.selected_backend = "fallback_cpu";
 
   bool override_was_set = false;
@@ -612,6 +618,14 @@ MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
     }
     if (!runtime_info_.libtorch_manifest_valid) {
       throw std::runtime_error("MiniLMEmbedderTorch required libtorch manifest is invalid");
+    }
+  }
+
+  if (runtime_info_.cuda_preferred_requested && runtime_info_.cuda_runtime_available) {
+    const bool manifest_allows_cuda =
+        !runtime_info_.libtorch_manifest_detected || runtime_info_.libtorch_manifest_cuda_artifact_count > 0;
+    if (manifest_allows_cuda) {
+      runtime_info_.selected_backend = "fallback_cuda";
     }
   }
 }
