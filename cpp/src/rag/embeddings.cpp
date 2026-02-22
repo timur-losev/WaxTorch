@@ -66,6 +66,10 @@ bool EnvIsTruthy(const char* name) {
   return value == "1" || value == "true" || value == "yes" || value == "on";
 }
 
+bool IsAsciiHex(char ch) {
+  return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
+}
+
 std::optional<std::filesystem::path> ResolveLibTorchManifestPath(bool* override_was_set = nullptr) {
   if (override_was_set != nullptr) {
     *override_was_set = false;
@@ -121,7 +125,100 @@ std::string_view TrimAsciiWhitespace(std::string_view text) {
   return text.substr(begin, end - begin);
 }
 
-void ValidateManifestFile(const std::filesystem::path& manifest_path) {
+std::size_t CountObjectFieldWithNonEmptyStringValue(std::string_view text,
+                                                    std::string_view key_a,
+                                                    std::string_view key_b) {
+  std::size_t count = 0;
+  std::size_t cursor = 0;
+  while (cursor < text.size()) {
+    const auto next_a = text.find(key_a, cursor);
+    const auto next_b = text.find(key_b, cursor);
+
+    std::size_t key_pos = std::string_view::npos;
+    if (next_a != std::string_view::npos && next_b != std::string_view::npos) {
+      key_pos = std::min(next_a, next_b);
+    } else if (next_a != std::string_view::npos) {
+      key_pos = next_a;
+    } else if (next_b != std::string_view::npos) {
+      key_pos = next_b;
+    } else {
+      break;
+    }
+
+    const auto colon = text.find(':', key_pos);
+    if (colon == std::string_view::npos) {
+      break;
+    }
+    const auto open_quote = text.find('"', colon + 1);
+    if (open_quote == std::string_view::npos) {
+      cursor = colon + 1;
+      continue;
+    }
+    const auto close_quote = text.find('"', open_quote + 1);
+    if (close_quote == std::string_view::npos) {
+      cursor = open_quote + 1;
+      continue;
+    }
+    if (close_quote > open_quote + 1) {
+      ++count;
+    }
+    cursor = close_quote + 1;
+  }
+  return count;
+}
+
+std::size_t CountValidSha256Values(std::string_view text) {
+  std::size_t count = 0;
+  std::size_t cursor = 0;
+  while (cursor < text.size()) {
+    const auto next_sha256 = text.find("\"sha256\"", cursor);
+    const auto next_sha256sum = text.find("\"sha256sum\"", cursor);
+
+    std::size_t key_pos = std::string_view::npos;
+    if (next_sha256 != std::string_view::npos && next_sha256sum != std::string_view::npos) {
+      key_pos = std::min(next_sha256, next_sha256sum);
+    } else if (next_sha256 != std::string_view::npos) {
+      key_pos = next_sha256;
+    } else if (next_sha256sum != std::string_view::npos) {
+      key_pos = next_sha256sum;
+    } else {
+      break;
+    }
+
+    const auto colon = text.find(':', key_pos);
+    if (colon == std::string_view::npos) {
+      break;
+    }
+    const auto open_quote = text.find('"', colon + 1);
+    if (open_quote == std::string_view::npos) {
+      cursor = colon + 1;
+      continue;
+    }
+    const auto close_quote = text.find('"', open_quote + 1);
+    if (close_quote == std::string_view::npos) {
+      cursor = open_quote + 1;
+      continue;
+    }
+
+    const auto value = text.substr(open_quote + 1, close_quote - open_quote - 1);
+    if (value.size() == 64) {
+      bool hex_only = true;
+      for (const char ch : value) {
+        if (!IsAsciiHex(ch)) {
+          hex_only = false;
+          break;
+        }
+      }
+      if (hex_only) {
+        ++count;
+      }
+    }
+    cursor = close_quote + 1;
+  }
+  return count;
+}
+
+std::size_t ValidateManifestFile(const std::filesystem::path& manifest_path) {
   constexpr std::uintmax_t kMaxManifestBytes = 8U * 1024U * 1024U;
   std::error_code ec{};
   const auto size = std::filesystem::file_size(manifest_path, ec);
@@ -175,6 +272,18 @@ void ValidateManifestFile(const std::filesystem::path& manifest_path) {
   if (!has_sha_key) {
     throw std::runtime_error("libtorch manifest does not contain sha256 keys");
   }
+
+  const auto path_entries = CountObjectFieldWithNonEmptyStringValue(trimmed, "\"path\"", "\"file\"");
+  if (path_entries == 0) {
+    throw std::runtime_error("libtorch manifest does not contain non-empty artifact paths");
+  }
+
+  const auto valid_sha_entries = CountValidSha256Values(trimmed);
+  if (valid_sha_entries == 0) {
+    throw std::runtime_error("libtorch manifest does not contain valid sha256 values");
+  }
+
+  return std::min(path_entries, valid_sha_entries);
 }
 
 bool IsAsciiAlphaNum(unsigned char ch) {
@@ -244,7 +353,7 @@ MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
     runtime_info_.libtorch_manifest_detected = true;
     runtime_info_.libtorch_manifest_path = manifest_path->string();
     try {
-      ValidateManifestFile(*manifest_path);
+      runtime_info_.libtorch_manifest_artifact_count = ValidateManifestFile(*manifest_path);
       runtime_info_.libtorch_manifest_valid = true;
     } catch (const std::exception& ex) {
       throw std::runtime_error(std::string("MiniLMEmbedderTorch libtorch manifest is invalid: ") + ex.what());

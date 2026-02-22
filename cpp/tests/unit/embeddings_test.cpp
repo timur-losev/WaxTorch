@@ -184,6 +184,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_empty.json";
   const auto malformed_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_malformed.json";
+  const auto bad_sha_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_bad_sha.json";
   {
     std::ofstream out(temp_manifest, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
@@ -204,6 +206,13 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     }
     out << "not-a-json-manifest";
   }
+  {
+    std::ofstream out(bad_sha_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create bad-sha manifest file");
+    }
+    out << R"({"artifacts":[{"path":"libtorch-cpu.zip","sha256":"1234"}]})";
+  }
 
   {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", temp_manifest.string());
@@ -211,6 +220,7 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     const auto info = embedder.runtime_info();
     Require(info.libtorch_manifest_detected, "manifest override should be detected");
     Require(info.libtorch_manifest_valid, "valid manifest override should pass validation");
+    Require(info.libtorch_manifest_artifact_count > 0, "valid manifest should report artifact count");
     Require(info.libtorch_manifest_path.has_value(), "manifest override path should be preserved");
     Require(*info.libtorch_manifest_path == std::filesystem::absolute(temp_manifest).string(),
             "manifest override absolute path mismatch");
@@ -241,6 +251,18 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", bad_sha_manifest.string());
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "manifest with invalid sha256 should be rejected");
+  }
+
+  {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", temp_manifest.string() + ".missing");
     const ScopedEnvVar require_manifest("WAXCPP_REQUIRE_LIBTORCH_MANIFEST", std::string("1"));
     bool threw = false;
@@ -257,6 +279,7 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(temp_manifest, ec);
   std::filesystem::remove(empty_manifest, ec);
   std::filesystem::remove(malformed_manifest, ec);
+  std::filesystem::remove(bad_sha_manifest, ec);
 }
 
 void ScenarioConcurrentEmbedThreadSafety() {
