@@ -2553,6 +2553,61 @@ void ScenarioConcurrentRememberIsSerialized(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioConcurrentRecallIsStable(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: concurrent recall is stable");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  constexpr int kThreadCount = 8;
+  constexpr int kRecallsPerThread = 64;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember("alpha apple signal", {});
+  orchestrator.Remember("beta apple signal", {});
+  orchestrator.Remember("gamma unrelated", {});
+  orchestrator.Flush();
+
+  const auto baseline = orchestrator.Recall("apple");
+  Require(!baseline.items.empty(), "baseline recall must produce non-empty context");
+  const auto baseline_top_id = baseline.items.front().frame_id;
+  const auto baseline_top_text = baseline.items.front().text;
+
+  std::atomic<bool> failed{false};
+  std::vector<std::thread> workers{};
+  workers.reserve(kThreadCount);
+  for (int thread_index = 0; thread_index < kThreadCount; ++thread_index) {
+    workers.emplace_back([&]() {
+      try {
+        for (int i = 0; i < kRecallsPerThread; ++i) {
+          const auto context = orchestrator.Recall("apple");
+          if (context.items.empty()) {
+            failed.store(true, std::memory_order_relaxed);
+            return;
+          }
+          if (context.items.front().frame_id != baseline_top_id) {
+            failed.store(true, std::memory_order_relaxed);
+            return;
+          }
+          if (context.items.front().text != baseline_top_text) {
+            failed.store(true, std::memory_order_relaxed);
+            return;
+          }
+        }
+      } catch (...) {
+        failed.store(true, std::memory_order_relaxed);
+      }
+    });
+  }
+  for (auto& worker : workers) {
+    worker.join();
+  }
+  Require(!failed.load(std::memory_order_relaxed),
+          "concurrent recall should produce stable deterministic top result");
+  orchestrator.Close();
+}
+
 }  // namespace
 
 int main() {
@@ -2631,6 +2686,7 @@ int main() {
     const auto path70 = UniquePath();
     const auto path71 = UniquePath();
     const auto path72 = UniquePath();
+    const auto path73 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -2705,6 +2761,7 @@ int main() {
     ScenarioStructuredFactCloseWithoutFlushPersistsViaStoreClose(path28);
     ScenarioStructuredFactForgetWithoutFlushPersistsViaStoreClose(path35);
     ScenarioConcurrentRememberIsSerialized(path36);
+    ScenarioConcurrentRecallIsStable(path73);
 
     const std::vector<std::filesystem::path> cleanup_paths = {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
@@ -2713,7 +2770,7 @@ int main() {
         path33, path34, path35, path36, path37, path38, path39, path40, path41, path42, path43,
         path44, path45, path46, path47, path48, path49, path50, path51, path52, path53, path54,
         path55, path56, path57, path58, path59, path60, path61, path62, path63, path64, path65,
-        path66, path67, path68, path69, path70, path71, path72,
+        path66, path67, path68, path69, path70, path71, path72, path73,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
