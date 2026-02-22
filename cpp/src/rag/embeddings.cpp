@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -85,6 +86,7 @@ std::optional<EmbeddingIdentity> MiniLMEmbedderTorch::identity() const {
 
 std::vector<float> MiniLMEmbedderTorch::Embed(const std::string& text) {
   if (memoization_capacity_ > 0) {
+    std::lock_guard<std::mutex> lock(memoization_mutex_);
     const auto cached = memoized_embeddings_.find(text);
     if (cached != memoized_embeddings_.end()) {
       return cached->second;
@@ -107,10 +109,15 @@ std::vector<float> MiniLMEmbedderTorch::Embed(const std::string& text) {
   }
 
   if (memoization_capacity_ > 0) {
+    std::lock_guard<std::mutex> lock(memoization_mutex_);
+    const auto cached = memoized_embeddings_.find(text);
+    if (cached != memoized_embeddings_.end()) {
+      return cached->second;
+    }
     while (memoized_embeddings_.size() >= memoization_capacity_ && !memoization_order_.empty()) {
-      const auto& key = memoization_order_.front();
-      memoized_embeddings_.erase(key);
+      const auto evict_key = memoization_order_.front();
       memoization_order_.pop_front();
+      (void)memoized_embeddings_.erase(evict_key);
     }
     memoization_order_.push_back(text);
     memoized_embeddings_[text] = embedding;
@@ -129,6 +136,7 @@ std::vector<std::vector<float>> MiniLMEmbedderTorch::EmbedBatch(const std::vecto
 }
 
 std::size_t MiniLMEmbedderTorch::cache_size() const {
+  std::lock_guard<std::mutex> lock(memoization_mutex_);
   return memoized_embeddings_.size();
 }
 

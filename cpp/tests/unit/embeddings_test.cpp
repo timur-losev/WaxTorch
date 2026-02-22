@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -94,6 +95,36 @@ void ScenarioMemoizationCapacity() {
   Require(uncached_embedder.cache_size() == 0, "zero-capacity embedder should not memoize");
 }
 
+void ScenarioConcurrentEmbedThreadSafety() {
+  waxcpp::tests::Log("scenario: concurrent embed thread safety");
+  waxcpp::MiniLMEmbedderTorch embedder(32);
+  constexpr int kThreads = 8;
+  constexpr int kPerThread = 200;
+  std::vector<std::thread> workers{};
+  workers.reserve(kThreads);
+  for (int thread_id = 0; thread_id < kThreads; ++thread_id) {
+    workers.emplace_back([&embedder, thread_id]() {
+      for (int i = 0; i < kPerThread; ++i) {
+        const std::string text = (i % 3 == 0)
+                                     ? "shared-key"
+                                     : ("t" + std::to_string(thread_id) + "-i" + std::to_string(i % 20));
+        const auto vec = embedder.Embed(text);
+        if (vec.size() != static_cast<std::size_t>(embedder.dimensions())) {
+          throw std::runtime_error("concurrent embed produced invalid shape");
+        }
+      }
+    });
+  }
+  for (auto& worker : workers) {
+    worker.join();
+  }
+
+  const auto a = embedder.Embed("shared-key");
+  const auto b = embedder.Embed("shared-key");
+  Require(a == b, "concurrent memoization must remain deterministic for same key");
+  Require(embedder.cache_size() <= 32, "concurrent memoization must respect capacity bound");
+}
+
 }  // namespace
 
 int main() {
@@ -104,6 +135,7 @@ int main() {
     ScenarioNormalizationAndEmptyInput();
     ScenarioBatchParity();
     ScenarioMemoizationCapacity();
+    ScenarioConcurrentEmbedThreadSafety();
     waxcpp::tests::Log("embeddings_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -49,6 +50,7 @@ class MiniLMEmbedderTorch final : public BatchEmbeddingProvider {
   std::size_t memoization_capacity_ = 0;
   std::unordered_map<std::string, std::vector<float>> memoized_embeddings_{};
   std::deque<std::string> memoization_order_{};
+  mutable std::mutex memoization_mutex_{};
 };
 
 }  // namespace waxcpp
