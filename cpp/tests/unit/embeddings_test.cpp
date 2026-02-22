@@ -183,9 +183,13 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       Require(info.libtorch_manifest_path.has_value(), "manifest path should be present when detected");
       Require(info.libtorch_selected_artifact_path.has_value(),
               "selected artifact path should be present when manifest is detected");
+      Require(info.libtorch_selected_artifact_sha256.has_value(),
+              "selected artifact sha256 should be present when manifest is detected");
     } else {
       Require(!info.libtorch_selected_artifact_path.has_value(),
               "selected artifact path should be empty without detected manifest");
+      Require(!info.libtorch_selected_artifact_sha256.has_value(),
+              "selected artifact sha256 should be empty without detected manifest");
     }
   }
 
@@ -397,6 +401,11 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
             "single cpu manifest should select cpu artifact path");
     Require(*info.libtorch_selected_artifact_path == "libtorch-cpu.zip",
             "single cpu manifest selected artifact mismatch");
+    Require(info.libtorch_selected_artifact_sha256.has_value(),
+            "single cpu manifest should select cpu artifact sha256");
+    Require(*info.libtorch_selected_artifact_sha256 ==
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            "single cpu manifest selected artifact sha256 mismatch");
   }
 
   {
@@ -416,6 +425,11 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
             "cpu-cuda manifest should select cuda artifact in fallback_cuda mode");
     Require(*info.libtorch_selected_artifact_path == "libtorch-cuda121.zip",
             "cpu-cuda manifest selected cuda artifact mismatch");
+    Require(info.libtorch_selected_artifact_sha256.has_value(),
+            "cpu-cuda manifest should select cuda artifact sha256");
+    Require(*info.libtorch_selected_artifact_sha256 ==
+                "1111111111111111111111111111111111111111111111111111111111111111",
+            "cpu-cuda manifest selected cuda artifact sha256 mismatch");
   }
 
   {
@@ -432,6 +446,11 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
             "cpu_only runtime should still select cpu artifact from mixed manifest");
     Require(*info.libtorch_selected_artifact_path == "libtorch-cpu.zip",
             "cpu_only runtime selected artifact mismatch");
+    Require(info.libtorch_selected_artifact_sha256.has_value(),
+            "cpu_only runtime should select cpu artifact sha256");
+    Require(*info.libtorch_selected_artifact_sha256 ==
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            "cpu_only runtime selected artifact sha256 mismatch");
   }
 
   {
@@ -495,6 +514,11 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
             "alias-fields manifest should select cuda artifact path");
     Require(*info.libtorch_selected_artifact_path == "libtorch-cuda124.zip",
             "alias-fields selected artifact mismatch");
+    Require(info.libtorch_selected_artifact_sha256.has_value(),
+            "alias-fields manifest should select cuda artifact sha256");
+    Require(*info.libtorch_selected_artifact_sha256 ==
+                "2222222222222222222222222222222222222222222222222222222222222222",
+            "alias-fields selected artifact sha256 mismatch");
   }
 
   {
@@ -513,11 +537,18 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
             "cu-tag manifest should select cuda artifact path");
     Require(*info.libtorch_selected_artifact_path == "libtorch-cu124.zip",
             "cu-tag manifest selected artifact mismatch");
+    Require(info.libtorch_selected_artifact_sha256.has_value(),
+            "cu-tag manifest should select cuda artifact sha256");
+    Require(*info.libtorch_selected_artifact_sha256 ==
+                "4444444444444444444444444444444444444444444444444444444444444444",
+            "cu-tag manifest selected artifact sha256 mismatch");
   }
 
   {
     std::optional<std::string> selected_a{};
     std::optional<std::string> selected_b{};
+    std::optional<std::string> selected_sha_a{};
+    std::optional<std::string> selected_sha_b{};
     {
       const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
       const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", multi_cuda_manifest_a.string());
@@ -528,7 +559,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
               "multi-cuda manifest A should route to fallback_cuda");
       Require(info.libtorch_selected_artifact_path.has_value(),
               "multi-cuda manifest A should select cuda artifact path");
+      Require(info.libtorch_selected_artifact_sha256.has_value(),
+              "multi-cuda manifest A should select cuda artifact sha256");
       selected_a = info.libtorch_selected_artifact_path;
+      selected_sha_a = info.libtorch_selected_artifact_sha256;
     }
     {
       const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
@@ -540,19 +574,29 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
               "multi-cuda manifest B should route to fallback_cuda");
       Require(info.libtorch_selected_artifact_path.has_value(),
               "multi-cuda manifest B should select cuda artifact path");
+      Require(info.libtorch_selected_artifact_sha256.has_value(),
+              "multi-cuda manifest B should select cuda artifact sha256");
       selected_b = info.libtorch_selected_artifact_path;
+      selected_sha_b = info.libtorch_selected_artifact_sha256;
     }
-    Require(selected_a.has_value() && selected_b.has_value(),
+    Require(selected_a.has_value() && selected_b.has_value() &&
+                selected_sha_a.has_value() && selected_sha_b.has_value(),
             "multi-cuda manifests should produce selected artifact path");
     Require(*selected_a == *selected_b,
             "selected cuda artifact path should be deterministic regardless of manifest entry order");
+    Require(*selected_sha_a == *selected_sha_b,
+            "selected cuda artifact sha256 should be deterministic regardless of manifest entry order");
     Require(*selected_a == "libtorch-cu118.zip",
             "multi-cuda deterministic selection should pick lexicographically smallest path");
+    Require(*selected_sha_a == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "multi-cuda deterministic selection should pick matching sha256");
   }
 
   {
     std::optional<std::string> selected_a{};
     std::optional<std::string> selected_b{};
+    std::optional<std::string> selected_sha_a{};
+    std::optional<std::string> selected_sha_b{};
     {
       const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cpu_only"));
       const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", multi_cpu_manifest_a.string());
@@ -562,7 +606,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
               "multi-cpu manifest A should route to fallback_cpu");
       Require(info.libtorch_selected_artifact_path.has_value(),
               "multi-cpu manifest A should select cpu artifact path");
+      Require(info.libtorch_selected_artifact_sha256.has_value(),
+              "multi-cpu manifest A should select cpu artifact sha256");
       selected_a = info.libtorch_selected_artifact_path;
+      selected_sha_a = info.libtorch_selected_artifact_sha256;
     }
     {
       const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cpu_only"));
@@ -573,19 +620,29 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
               "multi-cpu manifest B should route to fallback_cpu");
       Require(info.libtorch_selected_artifact_path.has_value(),
               "multi-cpu manifest B should select cpu artifact path");
+      Require(info.libtorch_selected_artifact_sha256.has_value(),
+              "multi-cpu manifest B should select cpu artifact sha256");
       selected_b = info.libtorch_selected_artifact_path;
+      selected_sha_b = info.libtorch_selected_artifact_sha256;
     }
-    Require(selected_a.has_value() && selected_b.has_value(),
+    Require(selected_a.has_value() && selected_b.has_value() &&
+                selected_sha_a.has_value() && selected_sha_b.has_value(),
             "multi-cpu manifests should produce selected artifact path");
     Require(*selected_a == *selected_b,
             "selected cpu artifact path should be deterministic regardless of manifest entry order");
+    Require(*selected_sha_a == *selected_sha_b,
+            "selected cpu artifact sha256 should be deterministic regardless of manifest entry order");
     Require(*selected_a == "libtorch-cpu-avx2.zip",
             "multi-cpu deterministic selection should pick lexicographically smallest path");
+    Require(*selected_sha_a == "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "multi-cpu deterministic selection should pick matching sha256");
   }
 
   {
     std::optional<std::string> selected_a{};
     std::optional<std::string> selected_b{};
+    std::optional<std::string> selected_sha_a{};
+    std::optional<std::string> selected_sha_b{};
     {
       const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
       const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", generic_manifest_a.string());
@@ -598,7 +655,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
               "generic manifest should report zero cpu/cuda classified artifacts");
       Require(info.libtorch_selected_artifact_path.has_value(),
               "generic manifest A should select fallback any-artifact path");
+      Require(info.libtorch_selected_artifact_sha256.has_value(),
+              "generic manifest A should select fallback any-artifact sha256");
       selected_a = info.libtorch_selected_artifact_path;
+      selected_sha_a = info.libtorch_selected_artifact_sha256;
     }
     {
       const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
@@ -612,14 +672,22 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
               "generic manifest should report zero cpu/cuda classified artifacts");
       Require(info.libtorch_selected_artifact_path.has_value(),
               "generic manifest B should select fallback any-artifact path");
+      Require(info.libtorch_selected_artifact_sha256.has_value(),
+              "generic manifest B should select fallback any-artifact sha256");
       selected_b = info.libtorch_selected_artifact_path;
+      selected_sha_b = info.libtorch_selected_artifact_sha256;
     }
-    Require(selected_a.has_value() && selected_b.has_value(),
+    Require(selected_a.has_value() && selected_b.has_value() &&
+                selected_sha_a.has_value() && selected_sha_b.has_value(),
             "generic manifests should produce selected artifact path");
     Require(*selected_a == *selected_b,
             "generic any-artifact selection should be deterministic regardless of manifest entry order");
+    Require(*selected_sha_a == *selected_sha_b,
+            "generic any-artifact sha256 should be deterministic regardless of manifest entry order");
     Require(*selected_a == "libtorch-a.tar",
             "generic any-artifact deterministic selection should pick lexicographically smallest path");
+    Require(*selected_sha_a == "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "generic any-artifact deterministic selection should pick matching sha256");
   }
 
   {
@@ -634,6 +702,11 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
             "root-array manifest should select artifact path");
     Require(*info.libtorch_selected_artifact_path == "libtorch-cpu.zip",
             "root-array selected artifact mismatch");
+    Require(info.libtorch_selected_artifact_sha256.has_value(),
+            "root-array manifest should select artifact sha256");
+    Require(*info.libtorch_selected_artifact_sha256 ==
+                "3333333333333333333333333333333333333333333333333333333333333333",
+            "root-array selected artifact sha256 mismatch");
   }
 
   {
@@ -796,6 +869,9 @@ void ScenarioRuntimeInfoSnapshotStability() {
   Require(before.libtorch_selected_artifact_path == after_single.libtorch_selected_artifact_path &&
               after_single.libtorch_selected_artifact_path == after_batch.libtorch_selected_artifact_path,
           "selected artifact path should remain stable after embedding calls");
+  Require(before.libtorch_selected_artifact_sha256 == after_single.libtorch_selected_artifact_sha256 &&
+              after_single.libtorch_selected_artifact_sha256 == after_batch.libtorch_selected_artifact_sha256,
+          "selected artifact sha256 should remain stable after embedding calls");
 }
 
 }  // namespace

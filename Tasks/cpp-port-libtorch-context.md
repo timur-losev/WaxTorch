@@ -230,6 +230,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add permutation-invariance regression coverage for unified search and FastRAG context assembly (input candidate order must not affect deterministic output)
 - [x] Harden duplicate-frame merge determinism for equal-score entries by introducing order-independent preview tie-break and adding dedicated regression coverage
 - [x] Make manifest artifact selection deterministic across entry order by selecting lexicographically minimal matching `cpu/cuda/any` path; add dual-order regression coverage
+- [x] Extend runtime diagnostics with selected manifest artifact `sha256` and enforce deterministic `path+sha` selection across manifest entry permutations
 - [x] Add runtime-info stability regression: `MiniLMEmbedderTorch::runtime_info()` snapshot remains invariant across `Embed`/`EmbedBatch` calls
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
@@ -423,6 +424,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/search_test.cpp` | Added equal-score duplicate source-union regression for context path, asserting deterministic source dedupe/order after duplicate-frame merge | Codex |
 | `cpp/src/rag/embeddings.cpp` | Made manifest artifact-path selection order-independent by tracking lexicographically minimal valid `any/cpu/cuda` path while scanning artifacts | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added multi-entry CPU/CUDA manifest regressions (reversed order variants) asserting identical selected artifact path across ordering permutations | Codex |
+| `cpp/include/waxcpp/embeddings.hpp` | Extended `MiniLMRuntimeInfo` with `libtorch_selected_artifact_sha256` for explicit selected-artifact integrity diagnostics | Codex |
+| `cpp/src/rag/embeddings.cpp` | Switched manifest selection internals to deterministic `path+sha` artifact selection and propagated selected `sha256` into runtime info | Codex |
+| `cpp/tests/unit/embeddings_test.cpp` | Added selected-artifact `sha256` regressions across cpu/cuda/alias/cu-tag/root-array/generic and dual-order manifest variants | Codex |
 | `cpp/src/rag/search.cpp` | Hardened duplicate-frame preview merge to preserve deterministic fallback previews when higher-score entries lack preview text (promote prior best preview into fallback pool on best-score upgrade) | Codex |
 | `cpp/tests/unit/search_test.cpp` | Added lower-score preview fallback regression ensuring duplicate merge keeps deterministic preview text even when top-score duplicate has `nullopt` preview | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added generic-manifest regressions (no cpu/cuda tags) asserting deterministic fallback to lexicographically minimal `any` artifact path and stable backend routing | Codex |

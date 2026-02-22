@@ -367,26 +367,35 @@ std::optional<std::string_view> ExtractArtifactPath(std::string_view object) {
   return path;
 }
 
-bool HasValidSha256(std::string_view object) {
+std::optional<std::string_view> ExtractArtifactSha256(std::string_view object) {
   const auto sha = ExtractJsonStringField(object, "\"sha256\"", "\"sha256sum\"");
   if (!sha.has_value() || sha->size() != 64) {
-    return false;
+    return std::nullopt;
   }
   for (const char ch : *sha) {
     if (!IsAsciiHex(ch)) {
-      return false;
+      return std::nullopt;
     }
   }
-  return true;
+  return sha;
 }
+
+bool HasValidSha256(std::string_view object) {
+  return ExtractArtifactSha256(object).has_value();
+}
+
+struct ManifestArtifactSelection {
+  std::string path{};
+  std::string sha256{};
+};
 
 struct ManifestValidationSummary {
   std::size_t valid_artifact_count = 0;
   std::size_t cpu_artifact_count = 0;
   std::size_t cuda_artifact_count = 0;
-  std::optional<std::string> any_artifact_path{};
-  std::optional<std::string> cpu_artifact_path{};
-  std::optional<std::string> cuda_artifact_path{};
+  std::optional<ManifestArtifactSelection> any_artifact{};
+  std::optional<ManifestArtifactSelection> cpu_artifact{};
+  std::optional<ManifestArtifactSelection> cuda_artifact{};
 };
 
 bool ArtifactPathLooksCuda(std::string_view path) {
@@ -426,9 +435,13 @@ ManifestValidationSummary CountValidArtifactObjects(std::string_view json,
   }
 
   ManifestValidationSummary summary{};
-  auto update_min_path = [](std::optional<std::string>& slot, std::string_view candidate) {
-    if (!slot.has_value() || candidate < *slot) {
-      slot = std::string(candidate);
+  auto update_min_selection = [](std::optional<ManifestArtifactSelection>& slot,
+                                 std::string_view candidate_path,
+                                 std::string_view candidate_sha256) {
+    if (!slot.has_value() ||
+        candidate_path < slot->path ||
+        (candidate_path == slot->path && candidate_sha256 < slot->sha256)) {
+      slot = ManifestArtifactSelection{std::string(candidate_path), std::string(candidate_sha256)};
     }
   };
   bool in_string = false;
@@ -471,19 +484,20 @@ ManifestValidationSummary CountValidArtifactObjects(std::string_view json,
       if (brace_depth == 0 && object_begin != std::string_view::npos && i > object_begin) {
         const auto artifact_object = json.substr(object_begin, i - object_begin + 1);
         const auto path = ExtractArtifactPath(artifact_object);
-        if (path.has_value() && HasValidSha256(artifact_object)) {
+        const auto sha256 = ExtractArtifactSha256(artifact_object);
+        if (path.has_value() && sha256.has_value()) {
           ++summary.valid_artifact_count;
-          update_min_path(summary.any_artifact_path, *path);
+          update_min_selection(summary.any_artifact, *path, *sha256);
 
           const bool looks_cuda = ArtifactPathLooksCuda(*path);
           const bool looks_cpu = ArtifactPathLooksCpu(*path);
           if (looks_cuda) {
             ++summary.cuda_artifact_count;
-            update_min_path(summary.cuda_artifact_path, *path);
+            update_min_selection(summary.cuda_artifact, *path, *sha256);
           }
           if (looks_cpu) {
             ++summary.cpu_artifact_count;
-            update_min_path(summary.cpu_artifact_path, *path);
+            update_min_selection(summary.cpu_artifact, *path, *sha256);
           }
         }
       }
@@ -627,9 +641,9 @@ MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
   runtime_info_.selected_backend = "fallback_cpu";
 
   bool override_was_set = false;
-  std::optional<std::string> manifest_any_artifact_path{};
-  std::optional<std::string> manifest_cpu_artifact_path{};
-  std::optional<std::string> manifest_cuda_artifact_path{};
+  std::optional<ManifestArtifactSelection> manifest_any_artifact{};
+  std::optional<ManifestArtifactSelection> manifest_cpu_artifact{};
+  std::optional<ManifestArtifactSelection> manifest_cuda_artifact{};
   const auto manifest_path = ResolveLibTorchManifestPath(&override_was_set);
   if (manifest_path.has_value()) {
     runtime_info_.libtorch_manifest_detected = true;
@@ -639,9 +653,9 @@ MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
       runtime_info_.libtorch_manifest_artifact_count = manifest_summary.valid_artifact_count;
       runtime_info_.libtorch_manifest_cpu_artifact_count = manifest_summary.cpu_artifact_count;
       runtime_info_.libtorch_manifest_cuda_artifact_count = manifest_summary.cuda_artifact_count;
-      manifest_any_artifact_path = manifest_summary.any_artifact_path;
-      manifest_cpu_artifact_path = manifest_summary.cpu_artifact_path;
-      manifest_cuda_artifact_path = manifest_summary.cuda_artifact_path;
+      manifest_any_artifact = manifest_summary.any_artifact;
+      manifest_cpu_artifact = manifest_summary.cpu_artifact;
+      manifest_cuda_artifact = manifest_summary.cuda_artifact;
       runtime_info_.libtorch_manifest_valid = true;
     } catch (const std::exception& ex) {
       throw std::runtime_error(std::string("MiniLMEmbedderTorch libtorch manifest is invalid: ") + ex.what());
@@ -668,14 +682,15 @@ MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
   }
 
   if (runtime_info_.libtorch_manifest_detected && runtime_info_.libtorch_manifest_valid) {
+    std::optional<ManifestArtifactSelection> selected_artifact{};
     if (runtime_info_.selected_backend == "fallback_cuda") {
-      runtime_info_.libtorch_selected_artifact_path = manifest_cuda_artifact_path.has_value()
-                                                          ? manifest_cuda_artifact_path
-                                                          : manifest_any_artifact_path;
+      selected_artifact = manifest_cuda_artifact.has_value() ? manifest_cuda_artifact : manifest_any_artifact;
     } else {
-      runtime_info_.libtorch_selected_artifact_path = manifest_cpu_artifact_path.has_value()
-                                                          ? manifest_cpu_artifact_path
-                                                          : manifest_any_artifact_path;
+      selected_artifact = manifest_cpu_artifact.has_value() ? manifest_cpu_artifact : manifest_any_artifact;
+    }
+    if (selected_artifact.has_value()) {
+      runtime_info_.libtorch_selected_artifact_path = selected_artifact->path;
+      runtime_info_.libtorch_selected_artifact_sha256 = selected_artifact->sha256;
     }
   }
 }
