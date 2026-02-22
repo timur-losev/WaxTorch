@@ -57,4 +57,11 @@ class USearchVectorEngine final : public VectorSearchEngine {
   std::vector<PendingMutation> pending_mutations_;
 };
 
+namespace vector::testing {
+
+void SetCommitFailCountdown(std::uint32_t countdown);
+void ClearCommitFailCountdown();
+
+}  // namespace vector::testing
+
 }  // namespace waxcpp

@@ -938,6 +938,68 @@ void ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(const std::
   }
 }
 
+void ScenarioTextIndexCommitFailureRecoversFromCommittedStore(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: text index commit failure recovers from committed store");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("text commit fail apple", {});
+
+    bool flush_threw = false;
+    waxcpp::text::testing::SetCommitFailCountdown(1);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::text::testing::ClearCommitFailCountdown();
+    Require(flush_threw, "flush should throw when text index commit failpoint is set");
+
+    const auto context = orchestrator.Recall("apple");
+    Require(!context.items.empty(),
+            "flush recovery should rebuild text index from committed store state");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioVectorIndexCommitFailureRecoversFromCommittedStore(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector index commit failure recovers from committed store");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("vector commit fail apple", {});
+    embedder->Reset();
+
+    bool flush_threw = false;
+    waxcpp::vector::testing::SetCommitFailCountdown(1);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::vector::testing::ClearCommitFailCountdown();
+    Require(flush_threw, "flush should throw when vector index commit failpoint is set");
+    Require(embedder->batch_calls() == 0, "vector rebuild should use persisted embeddings without EmbedBatch");
+    Require(embedder->embed_calls() == 0, "vector rebuild should use persisted embeddings without Embed");
+
+    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(),
+            "flush recovery should rebuild vector index from committed store state");
+    Require(embedder->batch_calls() == 0, "explicit embedding recall should not call EmbedBatch");
+    Require(embedder->embed_calls() == 0, "explicit embedding recall should not call Embed");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioUseAfterCloseThrows(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: use-after-close throws");
   waxcpp::OrchestratorConfig config{};
@@ -1136,6 +1198,8 @@ int main() {
     const auto path30 = UniquePath();
     const auto path31 = UniquePath();
     const auto path32 = UniquePath();
+    const auto path33 = UniquePath();
+    const auto path34 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -1167,6 +1231,8 @@ int main() {
     ScenarioFlushFailureThenCloseReopenRecoversVector(path24);
     ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(path25);
     ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(path32);
+    ScenarioTextIndexCommitFailureRecoversFromCommittedStore(path33);
+    ScenarioVectorIndexCommitFailureRecoversFromCommittedStore(path34);
     ScenarioUseAfterCloseThrows(path26);
     ScenarioStructuredFactStagedOrderBeforeFlush(path27);
     ScenarioStructuredFactCloseWithoutFlushPersistsViaStoreClose(path28);
@@ -1175,6 +1241,7 @@ int main() {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
         path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
+        path33, path34,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

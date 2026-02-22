@@ -1,6 +1,7 @@
 #include "waxcpp/fts5_search_engine.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cctype>
 #include <optional>
@@ -17,6 +18,8 @@
 
 namespace waxcpp {
 namespace {
+
+std::atomic<std::uint32_t> g_test_commit_fail_countdown{0};
 
 std::vector<std::string> Tokenize(std::string_view text) {
   std::vector<std::string> tokens{};
@@ -266,6 +269,18 @@ void RebuildSqliteSnapshot(sqlite3* db, const std::unordered_map<std::uint64_t, 
 
 #endif  // WAXCPP_HAS_SQLITE
 
+void MaybeInjectCommitFailure() {
+  auto remaining = g_test_commit_fail_countdown.load(std::memory_order_relaxed);
+  while (remaining > 0) {
+    if (g_test_commit_fail_countdown.compare_exchange_weak(remaining,
+                                                           remaining - 1,
+                                                           std::memory_order_relaxed,
+                                                           std::memory_order_relaxed)) {
+      throw std::runtime_error("FTS5SearchEngine::CommitStaged injected failure");
+    }
+  }
+}
+
 }  // namespace
 
 struct FTS5SearchEngine::SQLiteState {
@@ -353,6 +368,7 @@ void FTS5SearchEngine::StageRemove(std::uint64_t frame_id) {
 }
 
 void FTS5SearchEngine::CommitStaged() {
+  MaybeInjectCommitFailure();
   for (const auto& mutation : pending_mutations_) {
     if (mutation.type == PendingMutationType::kIndex) {
       docs_[mutation.frame_id] = mutation.text;
@@ -442,5 +458,17 @@ std::vector<SearchResult> FTS5SearchEngine::Search(const std::string& query, int
 
   return ScoreResults(docs_, query_tokens_raw, top_k, nullptr);
 }
+
+namespace text::testing {
+
+void SetCommitFailCountdown(std::uint32_t countdown) {
+  g_test_commit_fail_countdown.store(countdown, std::memory_order_relaxed);
+}
+
+void ClearCommitFailCountdown() {
+  g_test_commit_fail_countdown.store(0, std::memory_order_relaxed);
+}
+
+}  // namespace text::testing
 
 }  // namespace waxcpp

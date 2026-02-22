@@ -662,6 +662,46 @@ void RebuildStructuredFactIndex(const StructuredMemoryStore& structured_memory, 
   structured_text_index.CommitStaged();
 }
 
+void RebuildRuntimeStateFromStore(WaxStore& store,
+                                  const OrchestratorConfig& config,
+                                  const std::shared_ptr<EmbeddingProvider>& embedder,
+                                  StructuredMemoryStore& structured_memory,
+                                  FTS5SearchEngine& store_text_index,
+                                  FTS5SearchEngine& structured_text_index,
+                                  std::unique_ptr<USearchVectorEngine>& vector_index,
+                                  std::unordered_map<std::uint64_t, std::vector<float>>& embedding_cache) {
+  structured_memory = StructuredMemoryStore{};
+  ReplayStructuredFactsFromStore(store, structured_memory);
+  embedding_cache.clear();
+
+  if (config.enable_text_search) {
+    RebuildTextIndexFromStore(store, store_text_index);
+    RebuildStructuredFactIndex(structured_memory, structured_text_index);
+  } else {
+    store_text_index = FTS5SearchEngine{};
+    structured_text_index = FTS5SearchEngine{};
+  }
+
+  if (!config.enable_vector_search) {
+    vector_index.reset();
+    return;
+  }
+
+  const auto persisted_embeddings = LoadPersistedEmbeddingsFromStore(store);
+  const auto vector_dims = ResolveVectorDimensions(embedder, persisted_embeddings);
+  if (!vector_dims.has_value() || *vector_dims <= 0) {
+    vector_index.reset();
+    return;
+  }
+
+  vector_index = std::make_unique<USearchVectorEngine>(*vector_dims);
+  RebuildVectorIndexFromStore(store,
+                              persisted_embeddings,
+                              embedder,
+                              config.ingest_batch_size,
+                              *vector_index);
+}
+
 }  // namespace
 
 MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
@@ -684,21 +724,14 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
   if (config_.enable_vector_search && embedder_ == nullptr) {
     throw std::runtime_error("vector-enabled config requires embedder");
   }
-  ReplayStructuredFactsFromStore(store_, structured_memory_);
-  RebuildTextIndexFromStore(store_, store_text_index_);
-  RebuildStructuredFactIndex(structured_memory_, structured_text_index_);
-  if (config_.enable_vector_search) {
-    const auto persisted_embeddings = LoadPersistedEmbeddingsFromStore(store_);
-    const auto vector_dims = ResolveVectorDimensions(embedder_, persisted_embeddings);
-    if (vector_dims.has_value() && *vector_dims > 0) {
-      vector_index_ = std::make_unique<USearchVectorEngine>(*vector_dims);
-      RebuildVectorIndexFromStore(store_,
-                                  persisted_embeddings,
-                                  embedder_,
-                                  config_.ingest_batch_size,
-                                  *vector_index_);
-    }
-  }
+  RebuildRuntimeStateFromStore(store_,
+                               config_,
+                               embedder_,
+                               structured_memory_,
+                               store_text_index_,
+                               structured_text_index_,
+                               vector_index_,
+                               embedding_cache_);
 }
 
 void MemoryOrchestrator::Remember(const std::string& content, const Metadata& metadata) {
@@ -845,13 +878,25 @@ std::vector<StructuredMemoryEntry> MemoryOrchestrator::RecallFactsByEntityPrefix
 void MemoryOrchestrator::Flush() {
   ThrowIfClosed(closed_);
   store_.Commit();
-  structured_memory_.CommitStaged();
-  if (config_.enable_text_search) {
-    store_text_index_.CommitStaged();
-    structured_text_index_.CommitStaged();
-  }
-  if (vector_index_ != nullptr) {
-    vector_index_->CommitStaged();
+  try {
+    structured_memory_.CommitStaged();
+    if (config_.enable_text_search) {
+      store_text_index_.CommitStaged();
+      structured_text_index_.CommitStaged();
+    }
+    if (vector_index_ != nullptr) {
+      vector_index_->CommitStaged();
+    }
+  } catch (...) {
+    RebuildRuntimeStateFromStore(store_,
+                                 config_,
+                                 embedder_,
+                                 structured_memory_,
+                                 store_text_index_,
+                                 structured_text_index_,
+                                 vector_index_,
+                                 embedding_cache_);
+    throw;
   }
 }
 

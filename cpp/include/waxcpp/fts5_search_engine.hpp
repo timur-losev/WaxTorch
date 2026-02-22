@@ -49,4 +49,11 @@ class FTS5SearchEngine {
   std::unique_ptr<SQLiteState> sqlite_;
 };
 
+namespace text::testing {
+
+void SetCommitFailCountdown(std::uint32_t countdown);
+void ClearCommitFailCountdown();
+
+}  // namespace text::testing
+
 }  // namespace waxcpp

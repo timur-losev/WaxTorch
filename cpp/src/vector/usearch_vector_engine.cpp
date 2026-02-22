@@ -1,6 +1,7 @@
 #include "waxcpp/vector_engine.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <span>
 #include <stdexcept>
@@ -9,6 +10,8 @@
 
 namespace waxcpp {
 namespace {
+
+std::atomic<std::uint32_t> g_test_commit_fail_countdown{0};
 
 float Dot(std::span<const float> lhs, std::span<const float> rhs) {
   float dot = 0.0F;
@@ -30,6 +33,18 @@ float CosineSimilarity(std::span<const float> lhs, std::span<const float> rhs) {
     return 0.0F;
   }
   return Dot(lhs, rhs) / (lhs_norm * rhs_norm);
+}
+
+void MaybeInjectCommitFailure() {
+  auto remaining = g_test_commit_fail_countdown.load(std::memory_order_relaxed);
+  while (remaining > 0) {
+    if (g_test_commit_fail_countdown.compare_exchange_weak(remaining,
+                                                           remaining - 1,
+                                                           std::memory_order_relaxed,
+                                                           std::memory_order_relaxed)) {
+      throw std::runtime_error("USearchVectorEngine::CommitStaged injected failure");
+    }
+  }
 }
 
 }  // namespace
@@ -96,6 +111,7 @@ void USearchVectorEngine::StageRemove(std::uint64_t frame_id) {
 }
 
 void USearchVectorEngine::CommitStaged() {
+  MaybeInjectCommitFailure();
   for (auto& mutation : pending_mutations_) {
     if (mutation.type == PendingMutationType::kAdd) {
       vectors_[mutation.frame_id] = std::move(mutation.vector);
@@ -129,5 +145,17 @@ void USearchVectorEngine::Remove(std::uint64_t frame_id) {
   StageRemove(frame_id);
   CommitStaged();
 }
+
+namespace vector::testing {
+
+void SetCommitFailCountdown(std::uint32_t countdown) {
+  g_test_commit_fail_countdown.store(countdown, std::memory_order_relaxed);
+}
+
+void ClearCommitFailCountdown() {
+  g_test_commit_fail_countdown.store(0, std::memory_order_relaxed);
+}
+
+}  // namespace vector::testing
 
 }  // namespace waxcpp
