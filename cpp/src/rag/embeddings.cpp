@@ -426,6 +426,11 @@ ManifestValidationSummary CountValidArtifactObjects(std::string_view json,
   }
 
   ManifestValidationSummary summary{};
+  auto update_min_path = [](std::optional<std::string>& slot, std::string_view candidate) {
+    if (!slot.has_value() || candidate < *slot) {
+      slot = std::string(candidate);
+    }
+  };
   bool in_string = false;
   bool escaped = false;
   int brace_depth = 0;
@@ -468,23 +473,17 @@ ManifestValidationSummary CountValidArtifactObjects(std::string_view json,
         const auto path = ExtractArtifactPath(artifact_object);
         if (path.has_value() && HasValidSha256(artifact_object)) {
           ++summary.valid_artifact_count;
-          if (!summary.any_artifact_path.has_value()) {
-            summary.any_artifact_path = std::string(*path);
-          }
+          update_min_path(summary.any_artifact_path, *path);
 
           const bool looks_cuda = ArtifactPathLooksCuda(*path);
           const bool looks_cpu = ArtifactPathLooksCpu(*path);
           if (looks_cuda) {
             ++summary.cuda_artifact_count;
-            if (!summary.cuda_artifact_path.has_value()) {
-              summary.cuda_artifact_path = std::string(*path);
-            }
+            update_min_path(summary.cuda_artifact_path, *path);
           }
           if (looks_cpu) {
             ++summary.cpu_artifact_count;
-            if (!summary.cpu_artifact_path.has_value()) {
-              summary.cpu_artifact_path = std::string(*path);
-            }
+            update_min_path(summary.cpu_artifact_path, *path);
           }
         }
       }

@@ -248,6 +248,14 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_alias_fields.json";
   const auto cu_tag_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_cu_tag.json";
+  const auto multi_cuda_manifest_a =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_multi_cuda_a.json";
+  const auto multi_cuda_manifest_b =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_multi_cuda_b.json";
+  const auto multi_cpu_manifest_a =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_multi_cpu_a.json";
+  const auto multi_cpu_manifest_b =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_multi_cpu_b.json";
   const auto root_array_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_root_array.json";
   {
@@ -318,6 +326,34 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       throw std::runtime_error("failed to create cu-tag manifest file");
     }
     out << R"({"artifacts":[{"path":"libtorch-cu124.zip","sha256":"4444444444444444444444444444444444444444444444444444444444444444"}]})";
+  }
+  {
+    std::ofstream out(multi_cuda_manifest_a, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create multi-cuda manifest A file");
+    }
+    out << R"({"artifacts":[{"path":"libtorch-cuda121.zip","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"path":"libtorch-cu118.zip","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]})";
+  }
+  {
+    std::ofstream out(multi_cuda_manifest_b, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create multi-cuda manifest B file");
+    }
+    out << R"({"artifacts":[{"path":"libtorch-cu118.zip","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},{"path":"libtorch-cuda121.zip","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]})";
+  }
+  {
+    std::ofstream out(multi_cpu_manifest_a, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create multi-cpu manifest A file");
+    }
+    out << R"({"artifacts":[{"path":"libtorch-cpu.zip","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},{"path":"libtorch-cpu-avx2.zip","sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}]})";
+  }
+  {
+    std::ofstream out(multi_cpu_manifest_b, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create multi-cpu manifest B file");
+    }
+    out << R"({"artifacts":[{"path":"libtorch-cpu-avx2.zip","sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},{"path":"libtorch-cpu.zip","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]})";
   }
   {
     std::ofstream out(root_array_manifest, std::ios::binary | std::ios::trunc);
@@ -462,6 +498,74 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    std::optional<std::string> selected_a{};
+    std::optional<std::string> selected_b{};
+    {
+      const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+      const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", multi_cuda_manifest_a.string());
+      const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
+      waxcpp::MiniLMEmbedderTorch embedder;
+      const auto info = embedder.runtime_info();
+      Require(info.selected_backend == "fallback_cuda",
+              "multi-cuda manifest A should route to fallback_cuda");
+      Require(info.libtorch_selected_artifact_path.has_value(),
+              "multi-cuda manifest A should select cuda artifact path");
+      selected_a = info.libtorch_selected_artifact_path;
+    }
+    {
+      const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+      const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", multi_cuda_manifest_b.string());
+      const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
+      waxcpp::MiniLMEmbedderTorch embedder;
+      const auto info = embedder.runtime_info();
+      Require(info.selected_backend == "fallback_cuda",
+              "multi-cuda manifest B should route to fallback_cuda");
+      Require(info.libtorch_selected_artifact_path.has_value(),
+              "multi-cuda manifest B should select cuda artifact path");
+      selected_b = info.libtorch_selected_artifact_path;
+    }
+    Require(selected_a.has_value() && selected_b.has_value(),
+            "multi-cuda manifests should produce selected artifact path");
+    Require(*selected_a == *selected_b,
+            "selected cuda artifact path should be deterministic regardless of manifest entry order");
+    Require(*selected_a == "libtorch-cu118.zip",
+            "multi-cuda deterministic selection should pick lexicographically smallest path");
+  }
+
+  {
+    std::optional<std::string> selected_a{};
+    std::optional<std::string> selected_b{};
+    {
+      const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cpu_only"));
+      const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", multi_cpu_manifest_a.string());
+      waxcpp::MiniLMEmbedderTorch embedder;
+      const auto info = embedder.runtime_info();
+      Require(info.selected_backend == "fallback_cpu",
+              "multi-cpu manifest A should route to fallback_cpu");
+      Require(info.libtorch_selected_artifact_path.has_value(),
+              "multi-cpu manifest A should select cpu artifact path");
+      selected_a = info.libtorch_selected_artifact_path;
+    }
+    {
+      const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cpu_only"));
+      const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", multi_cpu_manifest_b.string());
+      waxcpp::MiniLMEmbedderTorch embedder;
+      const auto info = embedder.runtime_info();
+      Require(info.selected_backend == "fallback_cpu",
+              "multi-cpu manifest B should route to fallback_cpu");
+      Require(info.libtorch_selected_artifact_path.has_value(),
+              "multi-cpu manifest B should select cpu artifact path");
+      selected_b = info.libtorch_selected_artifact_path;
+    }
+    Require(selected_a.has_value() && selected_b.has_value(),
+            "multi-cpu manifests should produce selected artifact path");
+    Require(*selected_a == *selected_b,
+            "selected cpu artifact path should be deterministic regardless of manifest entry order");
+    Require(*selected_a == "libtorch-cpu-avx2.zip",
+            "multi-cpu deterministic selection should pick lexicographically smallest path");
+  }
+
+  {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", root_array_manifest.string());
     waxcpp::MiniLMEmbedderTorch embedder;
     const auto info = embedder.runtime_info();
@@ -567,6 +671,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(cpu_cuda_manifest, ec);
   std::filesystem::remove(alias_fields_manifest, ec);
   std::filesystem::remove(cu_tag_manifest, ec);
+  std::filesystem::remove(multi_cuda_manifest_a, ec);
+  std::filesystem::remove(multi_cuda_manifest_b, ec);
+  std::filesystem::remove(multi_cpu_manifest_a, ec);
+  std::filesystem::remove(multi_cpu_manifest_b, ec);
   std::filesystem::remove(root_array_manifest, ec);
 }
 
