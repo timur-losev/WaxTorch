@@ -626,6 +626,38 @@ void ScenarioEqualScoreDuplicatePreviewTieBreakIsOrderIndependent() {
           "context text should be order-independent for equal-score duplicate previews");
 }
 
+void ScenarioEqualScoreDuplicatePrefersPresentPreviewOverNullopt() {
+  waxcpp::tests::Log("scenario: equal-score duplicate prefers present preview over nullopt");
+
+  waxcpp::SearchRequest request{};
+  request.mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+  request.top_k = 8;
+  request.preview_max_bytes = 256;
+  request.expansion_max_tokens = 16;
+  request.snippet_max_tokens = 16;
+  request.max_context_tokens = 64;
+
+  const std::vector<waxcpp::SearchResult> forward = {
+      {.frame_id = 77, .score = 1.0F, .preview_text = std::nullopt, .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 77, .score = 1.0F, .preview_text = std::string("present"), .sources = {waxcpp::SearchSource::kStructuredMemory}},
+  };
+  const std::vector<waxcpp::SearchResult> reversed = {
+      {.frame_id = 77, .score = 1.0F, .preview_text = std::string("present"), .sources = {waxcpp::SearchSource::kStructuredMemory}},
+      {.frame_id = 77, .score = 1.0F, .preview_text = std::nullopt, .sources = {waxcpp::SearchSource::kText}},
+  };
+
+  const auto response_forward = waxcpp::UnifiedSearchWithCandidates(request, forward, {});
+  const auto response_reversed = waxcpp::UnifiedSearchWithCandidates(request, reversed, {});
+  Require(response_forward.results.size() == 1 && response_reversed.results.size() == 1,
+          "nullopt-preview duplicate scenario should collapse to one frame");
+  Require(response_forward.results[0].preview_text.has_value() && response_reversed.results[0].preview_text.has_value(),
+          "nullopt-preview duplicate scenario should keep present preview");
+  Require(*response_forward.results[0].preview_text == "present",
+          "present preview must win over nullopt for equal-score duplicates");
+  Require(*response_reversed.results[0].preview_text == "present",
+          "present preview winner must be input-order independent");
+}
+
 }  // namespace
 
 int main() {
@@ -650,6 +682,7 @@ int main() {
     ScenarioRequestClampingParity();
     ScenarioPermutationInvariance();
     ScenarioEqualScoreDuplicatePreviewTieBreakIsOrderIndependent();
+    ScenarioEqualScoreDuplicatePrefersPresentPreviewOverNullopt();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
