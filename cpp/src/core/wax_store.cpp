@@ -1178,7 +1178,14 @@ void WaxStore::Commit() {
     }
   }
 
-  const auto toc_offset = data_end;
+  std::uint64_t toc_offset = data_end;
+  if (footer_offset_ > std::numeric_limits<std::uint64_t>::max() - core::mv2s::kFooterSize) {
+    throw StoreError("footer offset overflow while computing append-only TOC placement");
+  }
+  const auto previous_committed_end = footer_offset_ + core::mv2s::kFooterSize;
+  if (toc_offset < previous_committed_end) {
+    toc_offset = previous_committed_end;
+  }
   const auto footer_offset = toc_offset + toc_bytes.size();
   Footer footer{};
   footer.toc_len = toc_bytes.size();

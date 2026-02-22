@@ -1055,6 +1055,41 @@ void RunScenarioVisibleCommitProbeStep1NoRefresh(const std::filesystem::path& pa
   store.Close();
 }
 
+void RunScenarioVisibleCommitProbeStep1PreservesLifecyclePendingCounters(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: published-commit probe step1 preserves lifecycle pending counters");
+  auto store = waxcpp::WaxStore::Create(path);
+  (void)store.Put({std::byte{0xA7}});
+  (void)store.Put({std::byte{0xA8}});
+  store.Commit();
+  store.Delete(0);
+
+  bool threw = false;
+  {
+    ScopedCommitFailStep fail_step(1);
+    try {
+      store.Commit();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+  }
+  Require(threw, "commit should fail at injected step 1 for lifecycle pending probe");
+
+  const bool refreshed = store.TryRefreshIfPublishedCommitVisible();
+  Require(!refreshed, "step1 failure must not publish lifecycle pending commit");
+
+  const auto wal_after_probe = store.WalStats();
+  Require(wal_after_probe.pending_delete_mutations == 1,
+          "step1 probe must preserve pending delete counter");
+  Require(wal_after_probe.pending_supersede_mutations == 0,
+          "step1 probe must preserve pending supersede counter");
+
+  store.Commit();
+  const auto wal_after_retry = store.WalStats();
+  Require(wal_after_retry.pending_delete_mutations == 0,
+          "retry commit after step1 must clear pending delete counter");
+  store.Close();
+}
+
 void RunScenarioVisibleCommitProbeStep2Refreshes(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: published-commit probe refreshes after step2 failure");
   auto store = waxcpp::WaxStore::Create(path);
@@ -1668,6 +1703,7 @@ int main(int argc, char** argv) {
     RunScenarioCrashWindowAfterHeaderA(path);
     RunScenarioCrashWindowAfterHeaderB(path);
     RunScenarioVisibleCommitProbeStep1NoRefresh(path);
+    RunScenarioVisibleCommitProbeStep1PreservesLifecyclePendingCounters(path);
     RunScenarioVisibleCommitProbeStep2Refreshes(path);
     RunScenarioVisibleCommitProbeStep3Refreshes(path);
     RunScenarioVisibleCommitProbeStep4Refreshes(path);
