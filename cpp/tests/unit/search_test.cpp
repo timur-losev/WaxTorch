@@ -118,6 +118,36 @@ void ScenarioUnifiedSearchModesAndHybridRrf() {
   }
 }
 
+void ScenarioHybridAlphaClamp() {
+  waxcpp::tests::Log("scenario: hybrid alpha clamp");
+  const std::vector<waxcpp::SearchResult> text_results = {
+      {.frame_id = 10, .score = 4.0F, .preview_text = std::string("t10"), .sources = {waxcpp::SearchSource::kText}},
+  };
+  const std::vector<waxcpp::SearchResult> vector_results = {
+      {.frame_id = 20, .score = 5.0F, .preview_text = std::string("v20"), .sources = {waxcpp::SearchSource::kVector}},
+  };
+
+  {
+    waxcpp::SearchRequest request{};
+    request.mode = {waxcpp::SearchModeKind::kHybrid, -1.0F};  // clamp to 0 => vector-only weight.
+    request.top_k = 10;
+    request.rrf_k = 60;
+    const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, vector_results);
+    Require(!response.results.empty(), "hybrid alpha<0 should still produce response");
+    Require(response.results[0].frame_id == 20, "alpha<0 clamp should prioritize vector channel");
+  }
+
+  {
+    waxcpp::SearchRequest request{};
+    request.mode = {waxcpp::SearchModeKind::kHybrid, 2.0F};  // clamp to 1 => text-only weight.
+    request.top_k = 10;
+    request.rrf_k = 60;
+    const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, vector_results);
+    Require(!response.results.empty(), "hybrid alpha>1 should still produce response");
+    Require(response.results[0].frame_id == 10, "alpha>1 clamp should prioritize text channel");
+  }
+}
+
 void ScenarioContextTokenBudgetClamp() {
   waxcpp::tests::Log("scenario: context token budget clamp");
   waxcpp::SearchRequest request{};
@@ -195,6 +225,7 @@ int main() {
     ScenarioPreviewClampAndTokenCount();
     ScenarioNaNScoreNormalization();
     ScenarioUnifiedSearchModesAndHybridRrf();
+    ScenarioHybridAlphaClamp();
     ScenarioContextTokenBudgetClamp();
     ScenarioRagItemKindPolicy();
     ScenarioSurrogateFallback();
