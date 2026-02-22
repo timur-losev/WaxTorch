@@ -176,6 +176,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add `WaxStore::PutEmbedding`/`PutEmbeddingBatch` write-path support (WAL append + commit/recovery safety baseline)
 - [x] Add `WaxStore::PendingEmbeddingMutations(since)` snapshot API parity with decoded embedding vectors + latest-sequence tracking
 - [x] Add commit-time validation for WAL `putEmbedding` mutations (frame must exist; payload dimension/vector size must match)
+- [x] Add MV2V vector-segment codec baseline (`MV2V` header detect/encode/decode for `uSearch` and `metal`) with deterministic unit coverage
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

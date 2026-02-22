@@ -14,6 +14,7 @@ set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/embeddings.hpp
   include/waxcpp/fts5_search_engine.hpp
   include/waxcpp/memory_orchestrator.hpp
+  include/waxcpp/mv2v_format.hpp
   include/waxcpp/pch.hpp
   include/waxcpp/search.hpp
   include/waxcpp/structured_memory.hpp
@@ -30,6 +31,7 @@ add_library(waxcpp STATIC
   src/text/fts5_search_engine.cpp
   src/text/structured_memory_store.cpp
   src/vector/usearch_vector_engine.cpp
+  src/vector/mv2v_format.cpp
   src/rag/search.cpp
   src/rag/embeddings.cpp
   src/orchestrator/memory_orchestrator.cpp
@@ -139,6 +141,16 @@ if (WAXCPP_BUILD_TESTS)
   endif()
   target_precompile_headers(waxcpp_usearch_vector_engine_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_usearch_vector_engine_test COMMAND waxcpp_usearch_vector_engine_test)
+
+  add_executable(waxcpp_mv2v_format_test tests/unit/mv2v_format_test.cpp)
+  target_link_libraries(waxcpp_mv2v_format_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_mv2v_format_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_mv2v_format_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_mv2v_format_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_mv2v_format_test COMMAND waxcpp_mv2v_format_test)
 
   add_executable(waxcpp_embeddings_test tests/unit/embeddings_test.cpp)
   target_link_libraries(waxcpp_embeddings_test PRIVATE waxcpp)
