@@ -545,6 +545,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added vector-only recall regression: `Recall(\"\")` without explicit embedding returns empty context and does not invoke embedder (`Embed`/`EmbedBatch`) | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Hardened query gating by treating whitespace-only queries as empty for text/vector channel activation (prevents unintended embed/search on blank input) | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added vector-only recall regression: whitespace-only query without explicit embedding returns empty context and does not invoke embedder | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added hybrid whitespace-query regressions: no-embedding path returns empty without embedder calls, explicit-embedding path returns vector-only sourced context without query embed calls | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
