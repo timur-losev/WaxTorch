@@ -87,6 +87,14 @@ endif()
 
 if (WAXCPP_BUILD_TESTS)
   enable_testing()
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if (Python3_Interpreter_FOUND)
+    add_test(
+      NAME waxcpp_verify_submodules_policy_test
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify_submodules.py
+    )
+  endif()
+
   add_executable(waxcpp_smoke_test tests/unit/smoke_test.cpp)
   target_link_libraries(waxcpp_smoke_test PRIVATE waxcpp)
   if (MSVC)

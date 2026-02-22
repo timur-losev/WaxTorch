@@ -558,6 +558,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/embeddings_test.cpp` | Added negative regression for control-character escape in artifact path (`cpu\\n...`): manifest must be rejected deterministically | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added deterministic seeded fuzz regression for libtorch manifest parsing (`256` iterations): malformed payloads may throw, valid parses must expose consistent runtime manifest diagnostics | Codex |
 | `cpp/CMakeLists.txt` | Added global MSVC `/FS` compile option to reduce parallel PDB contention risk when reusing PCH across many test targets | Codex |
+| `cpp/CMakeLists.txt` | Added `waxcpp_verify_submodules_policy_test` CTest entry (Python3) to run `scripts/verify_submodules.py` inside default C++ test matrix | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
