@@ -190,6 +190,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_split_fields.json";
   const auto nested_fields_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_nested_fields.json";
+  const auto nested_plus_top_level_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_nested_plus_top_level.json";
   {
     std::ofstream out(temp_manifest, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
@@ -230,6 +232,13 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       throw std::runtime_error("failed to create nested-fields manifest file");
     }
     out << R"({"artifacts":[{"meta":{"path":"libtorch-cpu.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}}]})";
+  }
+  {
+    std::ofstream out(nested_plus_top_level_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create nested-plus-top-level manifest file");
+    }
+    out << R"({"artifacts":[{"meta":{"path":"ignored-nested.zip","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},"path":"libtorch-cpu.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]})";
   }
 
   {
@@ -305,6 +314,14 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", nested_plus_top_level_manifest.string());
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.libtorch_manifest_valid, "manifest should accept top-level path/sha even with nested metadata");
+    Require(info.libtorch_manifest_artifact_count == 1, "expected one valid artifact object in nested-plus-top-level manifest");
+  }
+
+  {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", temp_manifest.string() + ".missing");
     const ScopedEnvVar require_manifest("WAXCPP_REQUIRE_LIBTORCH_MANIFEST", std::string("1"));
     bool threw = false;
@@ -324,6 +341,7 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(bad_sha_manifest, ec);
   std::filesystem::remove(split_fields_manifest, ec);
   std::filesystem::remove(nested_fields_manifest, ec);
+  std::filesystem::remove(nested_plus_top_level_manifest, ec);
 }
 
 void ScenarioConcurrentEmbedThreadSafety() {

@@ -311,9 +311,6 @@ std::optional<std::string_view> ExtractJsonStringField(std::string_view object,
         break;
       }
       if (!key_matches(parsed_key)) {
-        if (i < object.size() && (object[i] == '{' || object[i] == '[')) {
-          ++nested_depth;
-        }
         continue;
       }
       if (i >= object.size() || object[i] != '"') {

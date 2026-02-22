@@ -208,6 +208,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Fix expansion-disabled behavior in C++ FastRAG context builder: when `expansion_max_tokens=0`, context now falls back to snippet-tier outputs (instead of suppressing all items), with search/orchestrator regressions
 - [x] Fix hybrid RRF zero-weight channel handling in C++ unified search: channels with effective weight `0` are now excluded from fusion (no zero-score leak candidates), with alpha clamp regressions asserting output-set parity
 - [x] Harden runtime libtorch-manifest validation to artifact-object level: require `path|file` and valid 64-hex `sha256|sha256sum` in the same artifact object (not split across objects), with dedicated regression
+- [x] Fix manifest parser nested-depth edge case: artifact objects with extra nested metadata now remain valid when top-level `path|file` + `sha256|sha256sum` are present; add regression for nested+top-level mixed payload
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
