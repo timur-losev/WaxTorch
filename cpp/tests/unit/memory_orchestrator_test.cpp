@@ -130,6 +130,32 @@ std::vector<std::byte> BuildMalformedEmbeddingRecordPayloadV2IdentityLen(std::ui
   return payload;
 }
 
+std::vector<std::byte> BuildEmbeddingRecordPayloadV2(std::uint64_t frame_id,
+                                                     const std::string& identity_tag,
+                                                     const std::vector<float>& embedding) {
+  constexpr std::array<std::byte, 6> kMagic = {
+      std::byte{'W'},
+      std::byte{'A'},
+      std::byte{'X'},
+      std::byte{'E'},
+      std::byte{'M'},
+      std::byte{'2'},
+  };
+  std::vector<std::byte> payload{};
+  payload.reserve(kMagic.size() + 8 + 4 + 4 + identity_tag.size() + embedding.size() * 4);
+  payload.insert(payload.end(), kMagic.begin(), kMagic.end());
+  AppendU64LE(payload, frame_id);
+  AppendU32LE(payload, static_cast<std::uint32_t>(embedding.size()));
+  AppendU32LE(payload, static_cast<std::uint32_t>(identity_tag.size()));
+  for (const char ch : identity_tag) {
+    payload.push_back(static_cast<std::byte>(static_cast<unsigned char>(ch)));
+  }
+  for (const float value : embedding) {
+    AppendF32LE(payload, value);
+  }
+  return payload;
+}
+
 void AppendStringField(std::vector<std::byte>& out, const std::string& value) {
   AppendU32LE(out, static_cast<std::uint32_t>(value.size()));
   for (const char ch : value) {
@@ -2500,6 +2526,64 @@ void ScenarioVectorReopenWithMalformedPersistedEmbeddingIdentitySkipsRecord(cons
   }
 }
 
+void ScenarioVectorReopenMalformedEmbeddingFuzzKeepsValidPersistedVector(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector reopen malformed embedding fuzz keeps valid persisted vector");
+  std::uint64_t user_frame_id = 0;
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    user_frame_id = store.Put(StringToBytes("persisted vector apple"), {});
+    (void)store.Put(BuildEmbeddingRecordPayloadV2(user_frame_id,
+                                                  "provider=WaxCppTest;model=CountingBatchEmbedder;dimensions=4;normalized=true",
+                                                  {1.0F, 0.0F, 0.0F, 0.0F}),
+                    {});
+
+    std::mt19937 rng(0xE6B311DU);
+    std::uniform_int_distribution<int> type_dist(0, 2);
+    std::uniform_int_distribution<int> byte_dist(0, 255);
+    std::uniform_int_distribution<int> tail_dist(0, 16);
+    constexpr int kMalformedRecords = 128;
+    for (int i = 0; i < kMalformedRecords; ++i) {
+      const std::uint64_t malformed_frame_id = user_frame_id + static_cast<std::uint64_t>(i) + 1U;
+      std::vector<std::byte> payload{};
+      const int kind = type_dist(rng);
+      if (kind == 0) {
+        payload = BuildMalformedEmbeddingRecordPayloadV1(malformed_frame_id, 0xFFFFFFFFU);
+      } else if (kind == 1) {
+        payload = BuildMalformedEmbeddingRecordPayloadV2IdentityLen(malformed_frame_id, 4U, 0xFFFFU);
+      } else {
+        payload = BuildEmbeddingRecordPayloadV1(malformed_frame_id, {1.0F, 0.0F, 0.0F, 0.0F});
+        if (payload.size() > 10) {
+          payload.resize(payload.size() - 3);
+        }
+      }
+      const int tail = tail_dist(rng);
+      for (int t = 0; t < tail; ++t) {
+        payload.push_back(static_cast<std::byte>(static_cast<unsigned char>(byte_dist(rng))));
+      }
+      (void)store.Put(payload, {});
+    }
+
+    store.Commit();
+    store.Close();
+  }
+
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    Require(embedder->batch_calls() == 0, "valid persisted vector should avoid batch re-embed despite malformed records");
+    Require(embedder->embed_calls() == 0,
+            "valid persisted vector should avoid single-item re-embed despite malformed records");
+    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "vector recall should remain available with malformed embedding journal noise");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: remember ingest_concurrency propagates embed errors");
   waxcpp::OrchestratorConfig config{};
@@ -3257,6 +3341,7 @@ int main() {
     const auto path85 = UniquePath();
     const auto path86 = UniquePath();
     const auto path87 = UniquePath();
+    const auto path88 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -3280,6 +3365,7 @@ int main() {
     ScenarioVectorReopenWithNonFinitePersistedEmbeddingReembeds(path79);
     ScenarioVectorReopenWithMalformedPersistedEmbeddingCountSkipsRecord(path83);
     ScenarioVectorReopenWithMalformedPersistedEmbeddingIdentitySkipsRecord(path87);
+    ScenarioVectorReopenMalformedEmbeddingFuzzKeepsValidPersistedVector(path88);
     ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(path39);
     ScenarioRememberRejectsNonFiniteEmbeddings(path80);
     ScenarioRecallExplicitEmbeddingRejectsNonFinite(path81);
@@ -3356,7 +3442,7 @@ int main() {
         path55, path56, path57, path58, path59, path60, path61, path62, path63, path64, path65,
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
-        path83, path84, path85, path86, path87,
+        path83, path84, path85, path86, path87, path88,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
