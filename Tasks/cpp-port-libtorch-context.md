@@ -188,6 +188,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add hybrid RRF `alpha` clamp regression coverage (`alpha<0 -> vector-weighted`, `alpha>1 -> text-weighted`) to lock deterministic mode behavior
 - [x] Add deterministic duplicate-frame dedup in unified search channels (single/hybrid): collapse same `frame_id`, keep best score, merge sources, and prevent duplicate RRF overcount
 - [x] Harden submodule policy verifier for `libtorch-dist`: enforce `verify_checksum + required_manifest` lock fields and validate manifest-declared SHA256 artifacts when submodule checkout is present
+- [x] Extend submodule policy verifier to enforce lock-vs-`.gitmodules` remote URL parity for all required submodules
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

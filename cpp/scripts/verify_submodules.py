@@ -57,6 +57,10 @@ def parse_lock_file(text: str) -> Dict[str, Dict[str, object]]:
             pinned = line.split(':', 1)[1].strip().strip('"')
             entries_by_path[current_path]['pinned_commit'] = pinned
             continue
+        if line.startswith('remote:'):
+            remote = line.split(':', 1)[1].strip().strip('"')
+            entries_by_path[current_path]['remote'] = remote
+            continue
         if line.startswith('verify_checksum:'):
             raw_value = line.split(':', 1)[1].strip()
             parsed = parse_bool(raw_value)
@@ -172,6 +176,7 @@ parser = configparser.ConfigParser()
 parser.read(GITMODULES, encoding='utf-8')
 
 paths = set()
+remote_by_path: Dict[str, str] = {}
 for section in parser.sections():
     if not section.startswith('submodule '):
         continue
@@ -182,6 +187,7 @@ for section in parser.sections():
     if not url:
         fail(f'{section} missing url')
     paths.add(path)
+    remote_by_path[path] = url
 
 missing = REQUIRED_PATHS - paths
 if missing:
@@ -198,6 +204,12 @@ for path in sorted(REQUIRED_PATHS):
         fail(f'lock file missing entry for {path}')
     if 'pinned_commit' not in lock_entries[path]:
         fail(f'lock file missing pinned_commit for {path}')
+    lock_remote = lock_entries[path].get('remote')
+    if not isinstance(lock_remote, str) or not lock_remote.strip():
+        fail(f'lock file missing remote for {path}')
+    declared_remote = remote_by_path.get(path, '')
+    if declared_remote != lock_remote:
+        fail(f'remote mismatch for {path}: .gitmodules has {declared_remote}, lock has {lock_remote}')
 
 if any(entry.get('pinned_commit') == '<PIN_REQUIRED>' for entry in lock_entries.values()):
     warn('pinned commits are placeholders and must be updated before release')
