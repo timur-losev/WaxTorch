@@ -28,6 +28,15 @@ bool IsAsciiWhitespace(char ch) {
   return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v';
 }
 
+bool HasNonWhitespace(std::string_view text) {
+  for (const char ch : text) {
+    if (!IsAsciiWhitespace(ch)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::string ToAsciiLower(std::string_view text) {
   std::string out{};
   out.reserve(text.size());
@@ -504,7 +513,7 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
   }
   const bool text_mode_enabled = request.mode.kind != SearchModeKind::kVectorOnly;
   const bool vector_mode_enabled = request.mode.kind != SearchModeKind::kTextOnly;
-  const bool has_query_text = request.query.has_value() && !request.query->empty();
+  const bool has_query_text = request.query.has_value() && HasNonWhitespace(*request.query);
   const bool text_channel_enabled = enable_text_search && text_mode_enabled && has_query_text;
 
   std::optional<std::vector<float>> query_embedding = request.embedding;
