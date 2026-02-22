@@ -250,6 +250,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/fts5_search_engine_test.cpp` | Added text-engine unit coverage for ranking, deterministic ties, remove behavior, batch validation, and empty-input semantics | Codex |
 | `cpp/CMakeLists.txt` | Added `waxcpp_fts5_search_engine_test` target to C++ test matrix | Codex |
 | `cpp/CMakeLists.txt` | Added optional bundled-SQLite wiring (`waxcpp_sqlite3`) with auto-detect of `cpp/third_party/sqlite/sqlite3.c|h` and `WAXCPP_HAS_SQLITE` compile gate | Codex |
+| `cpp/CMakeLists.txt` | Set SQLite backend option default to `OFF` to keep WAL-first implementation path as active default | Codex |
 | `cpp/include/waxcpp/fts5_search_engine.hpp` | Added move-only lifecycle for backend-owned resources (SQLite state via pImpl) | Codex |
 | `cpp/src/text/fts5_search_engine.cpp` | Added optional SQLite FTS5 candidate path with deterministic TF-IDF ranking fallback and resilient rebuild/disable behavior on backend errors | Codex |
 | `cpp/src/text/fts5_search_engine.cpp` | Fixed SQLite backend lifetime via `SQLiteState` RAII destructor so failover `sqlite_.reset()` paths do not leak DB handles | Codex |

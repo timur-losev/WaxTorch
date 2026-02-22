@@ -37,6 +37,11 @@ Core format unit test:
 ctest --test-dir cpp/build -R waxcpp_mv2s_format_test --output-on-failure
 ```
 
+SQLite backend (optional, currently disabled by default in favor of WAL-focused track):
+```bash
+cmake -S cpp -B cpp/build -DWAXCPP_ENABLE_SQLITE_BACKEND=ON
+```
+
 ## Dependency Policy
 All third-party dependencies are managed via git submodules under `cpp/third_party/`.
 Do not replace this with package manager auto-fetch.
