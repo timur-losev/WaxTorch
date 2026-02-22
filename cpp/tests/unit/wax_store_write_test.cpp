@@ -965,6 +965,36 @@ void RunScenarioVisibleCommitProbeRefreshIsIdempotent(const std::filesystem::pat
   store.Close();
 }
 
+void RunScenarioVisibleCommitProbeIgnoresCorruptFooterMagicTail(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: published-commit probe ignores corrupt footer-magic tail");
+  auto store = waxcpp::WaxStore::Create(path);
+  (void)store.Put({std::byte{0xBA}});
+  store.Commit();
+
+  const auto before_stats = store.Stats();
+  std::error_code ec;
+  const auto file_size = std::filesystem::file_size(path, ec);
+  if (ec) {
+    throw std::runtime_error("failed to read file size for corrupt tail scenario");
+  }
+
+  std::vector<std::byte> fake_footer_tail(static_cast<std::size_t>(waxcpp::core::mv2s::kFooterSize), std::byte{0});
+  std::copy(waxcpp::core::mv2s::kFooterMagic.begin(),
+            waxcpp::core::mv2s::kFooterMagic.end(),
+            fake_footer_tail.begin());
+  // Intentionally keep the payload invalid (zero/garbage fields) so decode must fail.
+  WriteBytesAt(path, file_size, fake_footer_tail);
+
+  const bool refreshed = store.TryRefreshIfPublishedCommitVisible();
+  Require(!refreshed, "probe must ignore corrupt footer-like tail bytes");
+  const auto after_stats = store.Stats();
+  Require(after_stats.frame_count == before_stats.frame_count,
+          "corrupt-tail probe must keep committed frame_count unchanged");
+  Require(after_stats.pending_frames == before_stats.pending_frames,
+          "corrupt-tail probe must keep pending state unchanged");
+  store.Close();
+}
+
 void RunScenarioSupersedeCycleRejected(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: supersede cycle rejected at commit");
   {
@@ -1236,6 +1266,7 @@ int main() {
     RunScenarioVisibleCommitProbeNoNewGenerationNoRefresh(path);
     RunScenarioVisibleCommitProbeClosedStoreThrows(path);
     RunScenarioVisibleCommitProbeRefreshIsIdempotent(path);
+    RunScenarioVisibleCommitProbeIgnoresCorruptFooterMagicTail(path);
     RunScenarioSupersedeCycleRejected(path);
     RunScenarioSupersedeConflictRejected(path);
     RunScenarioCloseAutoCommitsPending(path);

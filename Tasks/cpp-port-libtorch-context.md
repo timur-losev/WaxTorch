@@ -181,7 +181,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Wire `WaxWALStats.auto_commit_count` to real runtime state and add close-path regressions (increments only for local pending auto-commit)
 - [x] Add `PutBatch` write-path regressions (dense id allocation, pending/frame-count persistence, metadata-size contract validation)
 - [x] Add crash-window failpoint + regression for post-checkpoint/pre-header publication (commit step 5)
-- [x] Add `WaxStore::TryRefreshIfPublishedCommitVisible()` probe API and direct write-path regressions (`step1` no-refresh, `step2/3/4/5` refresh, no-op when generation unchanged, closed-store throw contract, idempotent second probe no-op) to support orchestrator in-process crash-window recovery
+- [x] Add `WaxStore::TryRefreshIfPublishedCommitVisible()` probe API and direct write-path regressions (`step1` no-refresh, `step2/3/4/5` refresh, no-op when generation unchanged, closed-store throw contract, idempotent second probe no-op, corrupt footer-magic tail ignored) to support orchestrator in-process crash-window recovery
 - [x] Add `WaxStore::PutEmbedding`/`PutEmbeddingBatch` write-path support (WAL append + commit/recovery safety baseline)
 - [x] Add `WaxStore::PendingEmbeddingMutations(since)` snapshot API parity with decoded embedding vectors + latest-sequence tracking
 - [x] Add commit-time validation for WAL `putEmbedding` mutations (frame must exist; payload dimension/vector size must match)
