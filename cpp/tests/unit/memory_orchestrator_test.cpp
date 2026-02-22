@@ -7,7 +7,9 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <atomic>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -44,6 +46,18 @@ std::string BytesToString(const std::vector<std::byte>& bytes) {
     text.push_back(static_cast<char>(std::to_integer<unsigned char>(b)));
   }
   return text;
+}
+
+bool StartsWithMagic(const std::vector<std::byte>& bytes, const char* magic, std::size_t size) {
+  if (bytes.size() < size) {
+    return false;
+  }
+  for (std::size_t i = 0; i < size; ++i) {
+    if (bytes[i] != static_cast<std::byte>(static_cast<unsigned char>(magic[i]))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 void CleanupPath(const std::filesystem::path& path) {
@@ -114,6 +128,58 @@ class CountingBatchEmbedder final : public waxcpp::BatchEmbeddingProvider {
 
   int embed_calls_ = 0;
   int batch_calls_ = 0;
+};
+
+class ThreadTrackingEmbedder final : public waxcpp::EmbeddingProvider {
+ public:
+  explicit ThreadTrackingEmbedder(std::thread::id caller_thread_id)
+      : caller_thread_id_(caller_thread_id) {}
+
+  int dimensions() const override { return 4; }
+  bool normalize() const override { return true; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override { return std::nullopt; }
+
+  std::vector<float> Embed(const std::string& text) override {
+    std::vector<float> out(4, 0.0F);
+    for (std::size_t i = 0; i < text.size(); ++i) {
+      out[i % out.size()] += static_cast<float>(static_cast<unsigned char>(text[i])) / 255.0F;
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      ++calls_;
+      if (std::this_thread::get_id() == caller_thread_id_) {
+        called_from_caller_thread_ = true;
+      }
+      thread_ids_.insert(std::this_thread::get_id());
+    }
+
+    // Encourage overlap so ingest_concurrency assertions stay stable.
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    return out;
+  }
+
+  int calls() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return calls_;
+  }
+
+  std::size_t distinct_thread_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return thread_ids_.size();
+  }
+
+  bool called_from_caller_thread() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return called_from_caller_thread_;
+  }
+
+ private:
+  std::thread::id caller_thread_id_{};
+  mutable std::mutex mutex_{};
+  std::unordered_set<std::thread::id> thread_ids_{};
+  int calls_ = 0;
+  bool called_from_caller_thread_ = false;
 };
 
 void ScenarioVectorPolicyValidation(const std::filesystem::path& path) {
@@ -896,6 +962,48 @@ void ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(const std::filesy
   }
 }
 
+void ScenarioRememberUsesConfiguredIngestConcurrency(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: remember uses configured ingest_concurrency");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+  config.chunking.target_tokens = 1;
+  config.chunking.overlap_tokens = 0;
+  config.ingest_concurrency = 4;
+
+  auto embedder = std::make_shared<ThreadTrackingEmbedder>(std::this_thread::get_id());
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("a b c d e f g h", {});  // 8 chunks
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  Require(embedder->calls() == 8, "ingest_concurrency scenario should embed each chunk exactly once");
+  Require(!embedder->called_from_caller_thread(),
+          "ingest_concurrency>1 should run non-batch embed calls on worker threads");
+  Require(embedder->distinct_thread_count() >= 2,
+          "ingest_concurrency>1 should utilize more than one worker thread");
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    std::uint64_t user_payload_frames = 0;
+    for (const auto& meta : store.FrameMetas()) {
+      if (meta.status != 0) {
+        continue;
+      }
+      const auto payload = store.FrameContent(meta.id);
+      if (StartsWithMagic(payload, "WAXEM1", 6)) {
+        continue;
+      }
+      ++user_payload_frames;
+    }
+    Require(user_payload_frames == 8, "ingest_concurrency scenario should persist all user chunk frames");
+    store.Close();
+  }
+}
+
 void ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: flush failure does not expose staged structured fact until retry");
   waxcpp::OrchestratorConfig config{};
@@ -1311,6 +1419,7 @@ int main() {
     const auto path34 = UniquePath();
     const auto path35 = UniquePath();
     const auto path36 = UniquePath();
+    const auto path37 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -1324,6 +1433,7 @@ int main() {
     ScenarioRememberChunking(path7);
     ScenarioBatchProviderUsedForRemember(path8);
     ScenarioRememberRespectsIngestBatchSize(path9);
+    ScenarioRememberUsesConfiguredIngestConcurrency(path37);
     ScenarioTextOnlyRecallSkipsVectorEmbedding(path10);
     ScenarioStructuredMemoryFacts(path11);
     ScenarioRecallIncludesStructuredMemory(path12);
@@ -1354,7 +1464,7 @@ int main() {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
         path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
-        path33, path34, path35, path36,
+        path33, path34, path35, path36, path37,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

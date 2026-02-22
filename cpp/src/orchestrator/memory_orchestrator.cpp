@@ -3,17 +3,21 @@
 #include "waxcpp/search.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <iterator>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <span>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 #include <utility>
@@ -524,6 +528,7 @@ PersistedEmbeddingSnapshot LoadPersistedEmbeddingsFromStore(WaxStore& store) {
 std::vector<std::vector<float>> BuildEmbeddingsForTexts(std::shared_ptr<EmbeddingProvider> embedder,
                                                          const std::vector<std::string>& texts,
                                                          int ingest_batch_size,
+                                                         int ingest_concurrency,
                                                          const char* error_context) {
   if (texts.empty()) {
     return {};
@@ -551,8 +556,52 @@ std::vector<std::vector<float>> BuildEmbeddingsForTexts(std::shared_ptr<Embeddin
                  std::make_move_iterator(partial.end()));
     }
   } else {
-    for (const auto& text : texts) {
-      out.push_back(embedder->Embed(text));
+    const std::size_t worker_count = ingest_concurrency > 1
+                                         ? std::min(texts.size(), static_cast<std::size_t>(ingest_concurrency))
+                                         : 1ULL;
+    if (worker_count <= 1) {
+      for (const auto& text : texts) {
+        out.push_back(embedder->Embed(text));
+      }
+      return out;
+    }
+
+    out.assign(texts.size(), {});
+    std::atomic<std::size_t> next_index{0};
+    std::exception_ptr first_error{};
+    std::mutex error_mutex{};
+
+    auto worker = [&]() {
+      while (true) {
+        if (first_error != nullptr) {
+          return;
+        }
+        const auto index = next_index.fetch_add(1);
+        if (index >= texts.size()) {
+          return;
+        }
+        try {
+          out[index] = embedder->Embed(texts[index]);
+        } catch (...) {
+          std::lock_guard<std::mutex> error_lock(error_mutex);
+          if (first_error == nullptr) {
+            first_error = std::current_exception();
+          }
+          return;
+        }
+      }
+    };
+
+    std::vector<std::thread> workers{};
+    workers.reserve(worker_count);
+    for (std::size_t i = 0; i < worker_count; ++i) {
+      workers.emplace_back(worker);
+    }
+    for (auto& thread : workers) {
+      thread.join();
+    }
+    if (first_error != nullptr) {
+      std::rethrow_exception(first_error);
     }
   }
   return out;
@@ -562,6 +611,7 @@ void RebuildVectorIndexFromStore(WaxStore& store,
                                  const PersistedEmbeddingSnapshot& persisted_embeddings,
                                  std::shared_ptr<EmbeddingProvider> embedder,
                                  int ingest_batch_size,
+                                 int ingest_concurrency,
                                  USearchVectorEngine& vector_index) {
   const auto metas = store.FrameMetas();
   std::vector<std::uint64_t> frame_ids{};
@@ -597,7 +647,8 @@ void RebuildVectorIndexFromStore(WaxStore& store,
   }
 
   if (embedder != nullptr && !missing_ids.empty()) {
-    auto embeddings = BuildEmbeddingsForTexts(embedder, missing_texts, ingest_batch_size, "rebuild vector index");
+    auto embeddings = BuildEmbeddingsForTexts(
+        embedder, missing_texts, ingest_batch_size, ingest_concurrency, "rebuild vector index");
     if (embeddings.size() != missing_ids.size()) {
       throw std::runtime_error("rebuild vector index: embedding count mismatch");
     }
@@ -699,6 +750,7 @@ void RebuildRuntimeStateFromStore(WaxStore& store,
                               persisted_embeddings,
                               embedder,
                               config.ingest_batch_size,
+                              config.ingest_concurrency,
                               *vector_index);
 }
 
@@ -743,7 +795,7 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
   std::optional<std::vector<std::vector<float>>> chunk_embeddings{};
   if (config_.enable_vector_search && embedder_ != nullptr) {
     chunk_embeddings = BuildEmbeddingsForTexts(
-        embedder_, chunks, config_.ingest_batch_size, "remember");
+        embedder_, chunks, config_.ingest_batch_size, config_.ingest_concurrency, "remember");
     if (chunk_embeddings->size() != chunks.size()) {
       throw std::runtime_error("remember: embedding count mismatch");
     }
