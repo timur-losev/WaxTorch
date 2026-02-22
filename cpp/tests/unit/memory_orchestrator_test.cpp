@@ -1281,6 +1281,66 @@ void ScenarioFlushFailureThenCloseReopenRecoversVector(const std::filesystem::pa
   }
 }
 
+void ScenarioFlushCrashWindowHeaderPublishRebuildsText(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: flush crash-window after header publish rebuilds text state");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("flush step4 text apple", {});
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(4);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw on injected crash-window step 4");
+
+    const auto context = orchestrator.Recall("apple");
+    Require(!context.items.empty(),
+            "after header-publish crash-window failure, runtime rebuild should expose committed text");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioFlushCrashWindowHeaderPublishRebuildsVector(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: flush crash-window after header publish rebuilds vector state");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("flush step4 vector apple", {});
+    embedder->Reset();
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(4);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw on injected crash-window step 4");
+
+    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(),
+            "after header-publish crash-window failure, runtime rebuild should expose committed vector");
+    Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
+    Require(embedder->embed_calls() == 0, "explicit embedding recall should not trigger Embed");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: flush failure then close/reopen recovers structured fact");
   waxcpp::OrchestratorConfig config{};
@@ -1860,6 +1920,8 @@ int main() {
     const auto path44 = UniquePath();
     const auto path45 = UniquePath();
     const auto path46 = UniquePath();
+    const auto path47 = UniquePath();
+    const auto path48 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -1899,6 +1961,8 @@ int main() {
     ScenarioFlushFailureDoesNotExposeStagedVector(path21);
     ScenarioFlushFailureThenCloseReopenRecoversText(path23);
     ScenarioFlushFailureThenCloseReopenRecoversVector(path24);
+    ScenarioFlushCrashWindowHeaderPublishRebuildsText(path47);
+    ScenarioFlushCrashWindowHeaderPublishRebuildsVector(path48);
     ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(path25);
     ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(path32);
     ScenarioTextIndexCommitFailureRecoversFromCommittedStore(path33);
@@ -1914,7 +1978,7 @@ int main() {
         path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
         path33, path34, path35, path36, path37, path38, path39, path40, path41, path42, path43,
-        path44, path45, path46,
+        path44, path45, path46, path47, path48,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

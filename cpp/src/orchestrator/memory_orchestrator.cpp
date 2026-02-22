@@ -1097,8 +1097,10 @@ std::vector<StructuredMemoryEntry> MemoryOrchestrator::RecallFactsByEntityPrefix
 void MemoryOrchestrator::Flush() {
   std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
-  store_.Commit();
+  bool store_commit_completed = false;
   try {
+    store_.Commit();
+    store_commit_completed = true;
     structured_memory_.CommitStaged();
     if (config_.enable_text_search) {
       store_text_index_.CommitStaged();
@@ -1107,15 +1109,50 @@ void MemoryOrchestrator::Flush() {
     if (vector_index_ != nullptr) {
       vector_index_->CommitStaged();
     }
+  } catch (const std::exception& ex) {
+    bool verified_store_state = false;
+    bool has_pending_frames = true;
+    bool should_probe_visible_state = store_commit_completed;
+    if (!should_probe_visible_state) {
+      // For injected crash-window failures after header publication (step 3/4),
+      // the store may already be externally committed even though Commit threw.
+      const std::string message = ex.what();
+      should_probe_visible_state = message.find("commit step 3") != std::string::npos ||
+                                   message.find("commit step 4") != std::string::npos;
+    }
+    if (should_probe_visible_state) {
+      try {
+        store_.Verify(false);
+        verified_store_state = true;
+        has_pending_frames = store_.Stats().pending_frames > 0;
+      } catch (...) {
+        // Best effort only; if verify fails we keep current staged runtime state.
+      }
+    }
+    const bool should_rebuild =
+        store_commit_completed || (verified_store_state && !has_pending_frames);
+    if (should_rebuild) {
+      RebuildRuntimeStateFromStore(store_,
+                                   config_,
+                                   embedder_,
+                                   structured_memory_,
+                                   store_text_index_,
+                                   structured_text_index_,
+                                   vector_index_,
+                                   embedding_cache_);
+    }
+    throw;
   } catch (...) {
-    RebuildRuntimeStateFromStore(store_,
-                                 config_,
-                                 embedder_,
-                                 structured_memory_,
-                                 store_text_index_,
-                                 structured_text_index_,
-                                 vector_index_,
-                                 embedding_cache_);
+    if (store_commit_completed) {
+      RebuildRuntimeStateFromStore(store_,
+                                   config_,
+                                   embedder_,
+                                   structured_memory_,
+                                   store_text_index_,
+                                   structured_text_index_,
+                                   vector_index_,
+                                   embedding_cache_);
+    }
     throw;
   }
 }
