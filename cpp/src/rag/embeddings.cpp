@@ -446,6 +446,11 @@ std::optional<std::string> ExtractArtifactPath(std::string_view object) {
   if (!decoded.has_value() || decoded->empty()) {
     return std::nullopt;
   }
+  for (const unsigned char ch : *decoded) {
+    if (ch < 0x20U || ch == 0x7FU) {
+      return std::nullopt;
+    }
+  }
   return decoded;
 }
 
