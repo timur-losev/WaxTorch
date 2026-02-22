@@ -28,6 +28,19 @@ bool IsAsciiWhitespace(char ch) {
   return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v';
 }
 
+std::string ToAsciiLower(std::string_view text) {
+  std::string out{};
+  out.reserve(text.size());
+  for (const char ch : text) {
+    if (ch >= 'A' && ch <= 'Z') {
+      out.push_back(static_cast<char>(ch - 'A' + 'a'));
+    } else {
+      out.push_back(ch);
+    }
+  }
+  return out;
+}
+
 inline constexpr std::array<std::byte, 6> kStructuredFactMagic = {
     std::byte{'W'},
     std::byte{'A'},
@@ -778,6 +791,33 @@ void EnsureEmbedderRequiredForRemember(const OrchestratorConfig& config,
   }
 }
 
+void EnsureOnDeviceProviderPolicy(const OrchestratorConfig& config,
+                                  const std::shared_ptr<EmbeddingProvider>& embedder) {
+  if (!config.enable_vector_search || !config.require_on_device_providers) {
+    return;
+  }
+  if (embedder == nullptr) {
+    throw std::runtime_error("on-device policy requires embedder");
+  }
+  const auto identity = embedder->identity();
+  if (!identity.has_value() || !identity->provider.has_value() || identity->provider->empty()) {
+    throw std::runtime_error("on-device policy requires embedder identity provider");
+  }
+  const auto provider_lower = ToAsciiLower(*identity->provider);
+  constexpr std::array<std::string_view, 5> kDisallowedProviderTokens = {
+      "openai",
+      "anthropic",
+      "cohere",
+      "azure",
+      "huggingface",
+  };
+  for (const auto token : kDisallowedProviderTokens) {
+    if (provider_lower.find(token) != std::string::npos) {
+      throw std::runtime_error("on-device policy rejected remote embedder provider: " + *identity->provider);
+    }
+  }
+}
+
 void StagePersistedEmbeddingRecord(WaxStore& store,
                                    std::uint64_t frame_id,
                                    const std::vector<float>& embedding,
@@ -874,6 +914,7 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
   if (config_.enable_vector_search && embedder_ == nullptr) {
     throw std::runtime_error("vector-enabled config requires embedder");
   }
+  EnsureOnDeviceProviderPolicy(config_, embedder_);
   RebuildRuntimeStateFromStore(store_,
                                config_,
                                embedder_,

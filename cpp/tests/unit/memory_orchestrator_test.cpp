@@ -71,7 +71,14 @@ class CountingEmbedder final : public waxcpp::EmbeddingProvider {
  public:
   int dimensions() const override { return 4; }
   bool normalize() const override { return true; }
-  std::optional<waxcpp::EmbeddingIdentity> identity() const override { return std::nullopt; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override {
+    return waxcpp::EmbeddingIdentity{
+        .provider = std::string("WaxCppTest"),
+        .model = std::string("CountingEmbedder"),
+        .dimensions = 4,
+        .normalized = true,
+    };
+  }
 
   std::vector<float> Embed(const std::string& text) override {
     ++calls_;
@@ -93,7 +100,14 @@ class CountingBatchEmbedder final : public waxcpp::BatchEmbeddingProvider {
  public:
   int dimensions() const override { return 4; }
   bool normalize() const override { return true; }
-  std::optional<waxcpp::EmbeddingIdentity> identity() const override { return std::nullopt; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override {
+    return waxcpp::EmbeddingIdentity{
+        .provider = std::string("WaxCppTest"),
+        .model = std::string("CountingBatchEmbedder"),
+        .dimensions = 4,
+        .normalized = true,
+    };
+  }
 
   std::vector<float> Embed(const std::string& text) override {
     ++embed_calls_;
@@ -191,7 +205,14 @@ class ThreadTrackingEmbedder final : public waxcpp::EmbeddingProvider {
 
   int dimensions() const override { return 4; }
   bool normalize() const override { return true; }
-  std::optional<waxcpp::EmbeddingIdentity> identity() const override { return std::nullopt; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override {
+    return waxcpp::EmbeddingIdentity{
+        .provider = std::string("WaxCppTest"),
+        .model = std::string("ThreadTrackingEmbedder"),
+        .dimensions = 4,
+        .normalized = true,
+    };
+  }
 
   std::vector<float> Embed(const std::string& text) override {
     std::vector<float> out(4, 0.0F);
@@ -240,12 +261,41 @@ class FailingEmbedder final : public waxcpp::EmbeddingProvider {
  public:
   int dimensions() const override { return 4; }
   bool normalize() const override { return true; }
-  std::optional<waxcpp::EmbeddingIdentity> identity() const override { return std::nullopt; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override {
+    return waxcpp::EmbeddingIdentity{
+        .provider = std::string("WaxCppTest"),
+        .model = std::string("FailingEmbedder"),
+        .dimensions = 4,
+        .normalized = true,
+    };
+  }
 
   std::vector<float> Embed(const std::string& text) override {
     if (text.find("boom") != std::string::npos) {
       throw std::runtime_error("failing embedder triggered");
     }
+    std::vector<float> out(4, 0.0F);
+    for (std::size_t i = 0; i < text.size(); ++i) {
+      out[i % out.size()] += static_cast<float>(static_cast<unsigned char>(text[i])) / 255.0F;
+    }
+    return out;
+  }
+};
+
+class CloudIdentityEmbedder final : public waxcpp::EmbeddingProvider {
+ public:
+  int dimensions() const override { return 4; }
+  bool normalize() const override { return true; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override {
+    return waxcpp::EmbeddingIdentity{
+        .provider = std::string("OpenAI"),
+        .model = std::string("text-embedding-3-small"),
+        .dimensions = 4,
+        .normalized = true,
+    };
+  }
+
+  std::vector<float> Embed(const std::string& text) override {
     std::vector<float> out(4, 0.0F);
     for (std::size_t i = 0; i < text.size(); ++i) {
       out[i % out.size()] += static_cast<float>(static_cast<unsigned char>(text[i])) / 255.0F;
@@ -267,6 +317,42 @@ void ScenarioVectorPolicyValidation(const std::filesystem::path& path) {
     threw = true;
   }
   Require(threw, "vector-enabled config must require embedder");
+}
+
+void ScenarioOnDeviceProviderPolicyValidation(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: on-device provider policy validation");
+
+  {
+    waxcpp::OrchestratorConfig config{};
+    config.enable_text_search = false;
+    config.enable_vector_search = true;
+    config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+    config.require_on_device_providers = true;
+
+    auto cloud_embedder = std::make_shared<CloudIdentityEmbedder>();
+    bool threw = false;
+    try {
+      waxcpp::MemoryOrchestrator orchestrator(path, config, cloud_embedder);
+      orchestrator.Close();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "on-device policy should reject cloud provider identities");
+  }
+
+  {
+    waxcpp::OrchestratorConfig config{};
+    config.enable_text_search = false;
+    config.enable_vector_search = true;
+    config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+    config.require_on_device_providers = false;
+
+    auto cloud_embedder = std::make_shared<CloudIdentityEmbedder>();
+    waxcpp::MemoryOrchestrator orchestrator(path, config, cloud_embedder);
+    orchestrator.Remember("cloud policy disabled path", {});
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
 }
 
 void ScenarioSearchModePolicyValidation(const std::filesystem::path& path) {
@@ -1617,8 +1703,10 @@ int main() {
     const auto path39 = UniquePath();
     const auto path40 = UniquePath();
     const auto path41 = UniquePath();
+    const auto path42 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
+    ScenarioOnDeviceProviderPolicyValidation(path42);
     ScenarioSearchModePolicyValidation(path22);
     ScenarioRecallEmbeddingPolicyValidation(path29);
     ScenarioRememberFlushPersistsFrame(path1);
@@ -1665,7 +1753,7 @@ int main() {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
         path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
-        path33, path34, path35, path36, path37, path38, path39, path40, path41,
+        path33, path34, path35, path36, path37, path38, path39, path40, path41, path42,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
