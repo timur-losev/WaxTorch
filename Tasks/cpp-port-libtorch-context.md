@@ -554,6 +554,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/embeddings_test.cpp` | Added negative regression for malformed Unicode escape in artifact path (`\\u00ZZ`): manifest must be rejected deterministically | Codex |
 | `cpp/src/rag/embeddings.cpp` | Hardened artifact path validation to reject decoded ASCII control characters (`<0x20`, `0x7f`) after JSON-unescape | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added negative regression for control-character escape in artifact path (`cpu\\n...`): manifest must be rejected deterministically | Codex |
+| `cpp/CMakeLists.txt` | Added global MSVC `/FS` compile option to reduce parallel PDB contention risk when reusing PCH across many test targets | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
