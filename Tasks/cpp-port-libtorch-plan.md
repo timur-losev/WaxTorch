@@ -92,5 +92,9 @@ LibTorch follows practical hybrid delivery via pinned submodule artifacts + chec
 - Fuzz + fault-injection + compatibility matrix + release docs.
 
 ## Current Status
-- M0, M1 scaffolding initialized in this repo.
-- Implementation milestones M2+ remain pending.
+- M0-M2 complete: binary format parity (`.mv2s`) with Swift fixtures, deep verify, checksum/range validation.
+- M3-M4 baseline complete: WAL ring writer/scan/recovery, crash-window failpoints/reopen behavior, store write-path lifecycle parity.
+- M5-M6 baseline complete: deterministic text/vector engines with two-phase staging and committed-index rebuild flows.
+- M7-M9 baseline complete: deterministic embedding provider runtime policies, unified search/FastRAG/token-budget behavior, orchestrator lifecycle/concurrency/close guards.
+- M10 optional baseline complete for policy surface: `cpu_only|cuda_preferred` routing, manifest diagnostics, CI policy matrix; real CUDA/libtorch runtime backend remains future work.
+- M11 hardening in progress: deterministic fuzzing/regressions for TOC/MV2V/WAL parsers and crash-recovery paths are active; remaining release tasks include dependency pin finalization and dedicated artifact mirror cutover.
