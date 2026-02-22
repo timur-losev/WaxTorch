@@ -2,7 +2,7 @@
 
 **Created**: 2026-02-18
 **Last Updated**: 2026-02-22
-**Current Phase**: M3 complete baseline + M5/M6 deterministic CPU baselines
+**Current Phase**: M7-M9 baseline complete, M11 hardening in progress
 **Next Agent**: wax-rag-specialist
 
 ## Task Summary
@@ -247,7 +247,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Extend parity sidecar schema/assertions with lifecycle WAL counters (`wal_pending_delete_mutations`, `wal_pending_supersede_mutations`) and wire baseline synthetic fixture expectations
 - [x] Harden commit crash-window safety for metadata-only mutations by enforcing append-only TOC placement (never overwrite previous committed TOC region), with probe regression for lifecycle pending counters across step1 failure + retry commit
 - [x] Add deterministic mixed replay regression for pending WAL (`put + delete + supersede + putEmbedding`) validating reopen counters and final TOC lifecycle edges after commit
-- [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
+- [x] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
 
