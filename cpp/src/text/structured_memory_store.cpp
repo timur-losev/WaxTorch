@@ -74,6 +74,12 @@ std::uint64_t StructuredMemoryStore::StageUpsert(const std::string& entity,
 
 std::optional<std::uint64_t> StructuredMemoryStore::StageRemove(const std::string& entity,
                                                                 const std::string& attribute) {
+  if (entity.empty()) {
+    throw std::runtime_error("StructuredMemoryStore::Remove entity must be non-empty");
+  }
+  if (attribute.empty()) {
+    throw std::runtime_error("StructuredMemoryStore::Remove attribute must be non-empty");
+  }
   const auto key = CompositeKey(entity, attribute);
   if (pending_mutations_.empty()) {
     const auto committed_it = entries_.find(key);

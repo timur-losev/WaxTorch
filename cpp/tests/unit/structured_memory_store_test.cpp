@@ -93,6 +93,22 @@ void ScenarioValidation() {
     attribute_throw = true;
   }
   Require(attribute_throw, "empty attribute should throw");
+
+  bool remove_entity_throw = false;
+  try {
+    (void)store.Remove("", "name");
+  } catch (const std::exception&) {
+    remove_entity_throw = true;
+  }
+  Require(remove_entity_throw, "remove with empty entity should throw");
+
+  bool remove_attribute_throw = false;
+  try {
+    (void)store.Remove("user:1", "");
+  } catch (const std::exception&) {
+    remove_attribute_throw = true;
+  }
+  Require(remove_attribute_throw, "remove with empty attribute should throw");
 }
 
 void ScenarioStagedMutationVisibilityAndRollback() {

@@ -736,6 +736,32 @@ void ScenarioMaxSnippetsClamp(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioForgetFactValidation(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: forget fact validation");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  bool threw_empty_entity = false;
+  try {
+    (void)orchestrator.ForgetFact("", "city");
+  } catch (const std::exception&) {
+    threw_empty_entity = true;
+  }
+  Require(threw_empty_entity, "ForgetFact should reject empty entity");
+
+  bool threw_empty_attribute = false;
+  try {
+    (void)orchestrator.ForgetFact("user:1", "");
+  } catch (const std::exception&) {
+    threw_empty_attribute = true;
+  }
+  Require(threw_empty_attribute, "ForgetFact should reject empty attribute");
+  orchestrator.Close();
+}
+
 void ScenarioMaxSnippetsZeroSuppressesSnippetsOnly(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: max_snippets zero suppresses snippets only");
   waxcpp::OrchestratorConfig config{};
@@ -3023,12 +3049,14 @@ int main() {
     const auto path81 = UniquePath();
     const auto path82 = UniquePath();
     const auto path83 = UniquePath();
+    const auto path84 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
     ScenarioEmbeddingDimensionPolicyValidation(path43);
     ScenarioSearchModePolicyValidation(path22);
     ScenarioRecallEmbeddingPolicyValidation(path29);
+    ScenarioForgetFactValidation(path84);
     ScenarioRememberFlushPersistsFrame(path1);
     ScenarioRecallReturnsRankedItems(path2);
     ScenarioHybridRecallWithEmbedder(path3);
@@ -3118,7 +3146,7 @@ int main() {
         path55, path56, path57, path58, path59, path60, path61, path62, path63, path64, path65,
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
-        path83,
+        path83, path84,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

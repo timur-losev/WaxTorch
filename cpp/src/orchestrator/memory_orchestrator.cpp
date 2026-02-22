@@ -285,6 +285,9 @@ std::optional<StructuredFactRecord> ParseStructuredFactPayload(const std::vector
     record.opcode = StructuredFactOpcode::kUpsert;
     record.entity = *entity;
     record.attribute = *attribute;
+    if (record.entity.empty() || record.attribute.empty()) {
+      return std::nullopt;
+    }
     record.value = *value;
     record.metadata = std::move(metadata);
   } else if (*opcode_u8 == static_cast<std::uint8_t>(StructuredFactOpcode::kRemove)) {
@@ -296,6 +299,9 @@ std::optional<StructuredFactRecord> ParseStructuredFactPayload(const std::vector
     record.opcode = StructuredFactOpcode::kRemove;
     record.entity = *entity;
     record.attribute = *attribute;
+    if (record.entity.empty() || record.attribute.empty()) {
+      return std::nullopt;
+    }
   } else {
     return std::nullopt;
   }
