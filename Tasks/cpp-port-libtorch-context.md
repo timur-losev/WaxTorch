@@ -233,6 +233,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Extend runtime diagnostics with selected manifest artifact `sha256` and enforce deterministic `path+sha` selection across manifest entry permutations
 - [x] Add runtime-info stability regression: `MiniLMEmbedderTorch::runtime_info()` snapshot remains invariant across `Embed`/`EmbedBatch` calls
 - [x] Add strict placeholder pin enforcement mode to submodule verifier (`--enforce-pin-required` / `WAXCPP_ENFORCE_PIN_REQUIRED`) for release-gate CI
+- [x] Add CPU-vs-CUDA policy parity regression for fallback embeddings: routing/artifact selection may differ, but embedding vectors remain deterministic and identical across `cpu_only` and `cuda_preferred`
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -428,6 +429,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/include/waxcpp/embeddings.hpp` | Extended `MiniLMRuntimeInfo` with `libtorch_selected_artifact_sha256` for explicit selected-artifact integrity diagnostics | Codex |
 | `cpp/src/rag/embeddings.cpp` | Switched manifest selection internals to deterministic `path+sha` artifact selection and propagated selected `sha256` into runtime info | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added selected-artifact `sha256` regressions across cpu/cuda/alias/cu-tag/root-array/generic and dual-order manifest variants | Codex |
+| `cpp/tests/unit/embeddings_test.cpp` | Added CPU-vs-CUDA policy parity regression asserting fallback embedding output invariance while runtime backend/artifact routing changes deterministically | Codex |
 | `cpp/src/rag/search.cpp` | Hardened duplicate-frame preview merge to preserve deterministic fallback previews when higher-score entries lack preview text (promote prior best preview into fallback pool on best-score upgrade) | Codex |
 | `cpp/tests/unit/search_test.cpp` | Added lower-score preview fallback regression ensuring duplicate merge keeps deterministic preview text even when top-score duplicate has `nullopt` preview | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added generic-manifest regressions (no cpu/cuda tags) asserting deterministic fallback to lexicographically minimal `any` artifact path and stable backend routing | Codex |

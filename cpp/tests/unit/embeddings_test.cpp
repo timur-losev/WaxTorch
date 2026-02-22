@@ -433,6 +433,42 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", cpu_cuda_manifest.string());
+    const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
+
+    std::vector<float> cpu_embedding{};
+    {
+      const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cpu_only"));
+      waxcpp::MiniLMEmbedderTorch embedder;
+      const auto info = embedder.runtime_info();
+      Require(info.selected_backend == "fallback_cpu",
+              "cpu_only policy should route to fallback_cpu backend");
+      Require(info.libtorch_selected_artifact_path.has_value(),
+              "cpu_only policy should select cpu artifact path");
+      Require(*info.libtorch_selected_artifact_path == "libtorch-cpu.zip",
+              "cpu_only policy should select cpu artifact");
+      cpu_embedding = embedder.Embed("policy parity text");
+    }
+
+    std::vector<float> cuda_embedding{};
+    {
+      const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+      waxcpp::MiniLMEmbedderTorch embedder;
+      const auto info = embedder.runtime_info();
+      Require(info.selected_backend == "fallback_cuda",
+              "cuda_preferred policy with available CUDA should route to fallback_cuda backend");
+      Require(info.libtorch_selected_artifact_path.has_value(),
+              "cuda_preferred policy should select cuda artifact path");
+      Require(*info.libtorch_selected_artifact_path == "libtorch-cuda121.zip",
+              "cuda_preferred policy should select cuda artifact");
+      cuda_embedding = embedder.Embed("policy parity text");
+    }
+
+    Require(cpu_embedding == cuda_embedding,
+            "fallback embeddings should remain deterministic across cpu_only and cuda_preferred policies");
+  }
+
+  {
     const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cpu_only"));
     const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", cpu_cuda_manifest.string());
