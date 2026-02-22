@@ -320,7 +320,13 @@ int main() {
                 "mode=pass\n"
                 "verify_deep=true\n"
                 "frame_count=1\n"
-                "generation=5\n");
+                "generation=5\n"
+                "wal_pending_bytes=0\n"
+                "wal_last_seq=9\n"
+                "wal_committed_seq=9\n"
+                "frame_payload_len.0=8\n"
+                "frame_status.0=0\n"
+                "frame_payload_utf8.0=WaxCPP!!\n");
       waxcpp::tests::Log("fixture generated");
       waxcpp::tests::LogKV("name", "synthetic_valid_payload");
       waxcpp::tests::LogKV("mode", "pass");

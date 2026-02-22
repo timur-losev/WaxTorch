@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -12,6 +13,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -40,6 +43,16 @@ struct FixtureExpectation {
   std::optional<std::uint64_t> frame_count;
   std::optional<std::uint64_t> generation;
   std::optional<std::string> error_contains;
+
+  std::optional<std::uint64_t> wal_write_pos;
+  std::optional<std::uint64_t> wal_checkpoint_pos;
+  std::optional<std::uint64_t> wal_pending_bytes;
+  std::optional<std::uint64_t> wal_last_seq;
+  std::optional<std::uint64_t> wal_committed_seq;
+
+  std::unordered_map<std::uint64_t, std::uint64_t> frame_payload_len;
+  std::unordered_map<std::uint64_t, std::uint64_t> frame_status;
+  std::unordered_map<std::uint64_t, std::string> frame_payload_utf8;
 };
 
 std::string Trim(std::string value) {
@@ -84,6 +97,31 @@ FixtureMode ParseMode(std::string value) {
   throw std::runtime_error("invalid mode value: " + value);
 }
 
+std::uint64_t ParseUInt64(const std::string& value, const std::string& key) {
+  std::size_t parsed = 0;
+  const auto out = std::stoull(value, &parsed, 10);
+  if (parsed != value.size()) {
+    throw std::runtime_error("invalid uint64 value for key '" + key + "'");
+  }
+  return static_cast<std::uint64_t>(out);
+}
+
+std::optional<std::uint64_t> ParseFrameIdKey(std::string_view key, std::string_view prefix) {
+  if (key.size() < prefix.size() || key.compare(0, prefix.size(), prefix) != 0) {
+    return std::nullopt;
+  }
+  const auto suffix = key.substr(prefix.size());
+  if (suffix.empty()) {
+    throw std::runtime_error("missing frame id in sidecar key: " + std::string(key));
+  }
+  std::size_t parsed = 0;
+  const auto id = std::stoull(std::string(suffix), &parsed, 10);
+  if (parsed != suffix.size()) {
+    throw std::runtime_error("invalid frame id in sidecar key: " + std::string(key));
+  }
+  return static_cast<std::uint64_t>(id);
+}
+
 FixtureExpectation LoadExpectation(const std::filesystem::path& mv2s_path) {
   FixtureExpectation expected{};
   const auto expected_path = std::filesystem::path(mv2s_path.string() + ".expected");
@@ -115,19 +153,48 @@ FixtureExpectation LoadExpectation(const std::filesystem::path& mv2s_path) {
     } else if (key == "verify_deep") {
       expected.verify_deep = ParseBool(value, key);
     } else if (key == "frame_count") {
-      expected.frame_count = static_cast<std::uint64_t>(std::stoull(value));
+      expected.frame_count = ParseUInt64(value, key);
     } else if (key == "generation") {
-      expected.generation = static_cast<std::uint64_t>(std::stoull(value));
+      expected.generation = ParseUInt64(value, key);
     } else if (key == "error_contains") {
       expected.error_contains = value;
+    } else if (key == "wal_write_pos") {
+      expected.wal_write_pos = ParseUInt64(value, key);
+    } else if (key == "wal_checkpoint_pos") {
+      expected.wal_checkpoint_pos = ParseUInt64(value, key);
+    } else if (key == "wal_pending_bytes") {
+      expected.wal_pending_bytes = ParseUInt64(value, key);
+    } else if (key == "wal_last_seq") {
+      expected.wal_last_seq = ParseUInt64(value, key);
+    } else if (key == "wal_committed_seq") {
+      expected.wal_committed_seq = ParseUInt64(value, key);
     } else {
+      const auto frame_payload_len_id = ParseFrameIdKey(key, "frame_payload_len.");
+      if (frame_payload_len_id.has_value()) {
+        expected.frame_payload_len[*frame_payload_len_id] = ParseUInt64(value, key);
+        continue;
+      }
+      const auto frame_status_id = ParseFrameIdKey(key, "frame_status.");
+      if (frame_status_id.has_value()) {
+        expected.frame_status[*frame_status_id] = ParseUInt64(value, key);
+        continue;
+      }
+      const auto frame_payload_utf8_id = ParseFrameIdKey(key, "frame_payload_utf8.");
+      if (frame_payload_utf8_id.has_value()) {
+        expected.frame_payload_utf8[*frame_payload_utf8_id] = value;
+        continue;
+      }
       throw std::runtime_error("unknown key in expected sidecar: " + key);
     }
   }
 
   if (expected.mode != FixtureMode::kPass &&
-      (expected.frame_count.has_value() || expected.generation.has_value())) {
-    throw std::runtime_error("stats expectations are only valid for mode=pass");
+      (expected.frame_count.has_value() || expected.generation.has_value() ||
+       expected.wal_write_pos.has_value() || expected.wal_checkpoint_pos.has_value() ||
+       expected.wal_pending_bytes.has_value() || expected.wal_last_seq.has_value() ||
+       expected.wal_committed_seq.has_value() || !expected.frame_payload_len.empty() ||
+       !expected.frame_status.empty() || !expected.frame_payload_utf8.empty())) {
+    throw std::runtime_error("state expectations are only valid for mode=pass");
   }
   return expected;
 }
@@ -167,14 +234,158 @@ std::vector<std::filesystem::path> DiscoverFixtures(const std::filesystem::path&
   return fixtures;
 }
 
+std::string BytesToString(const std::vector<std::byte>& bytes) {
+  std::string out{};
+  out.reserve(bytes.size());
+  for (const auto value : bytes) {
+    out.push_back(static_cast<char>(std::to_integer<unsigned char>(value)));
+  }
+  return out;
+}
+
+bool MetaEqual(const waxcpp::WaxFrameMeta& lhs, const waxcpp::WaxFrameMeta& rhs) {
+  return lhs.id == rhs.id &&
+         lhs.payload_offset == rhs.payload_offset &&
+         lhs.payload_length == rhs.payload_length &&
+         lhs.canonical_encoding == rhs.canonical_encoding &&
+         lhs.status == rhs.status &&
+         lhs.supersedes == rhs.supersedes &&
+         lhs.superseded_by == rhs.superseded_by;
+}
+
 void AssertExpected(const std::filesystem::path& fixture_path,
                     const waxcpp::WaxStats& stats,
+                    const waxcpp::WaxWALStats& wal_stats,
                     const FixtureExpectation& expected) {
   if (expected.frame_count.has_value() && stats.frame_count != *expected.frame_count) {
     throw std::runtime_error("frame_count mismatch for " + fixture_path.string());
   }
   if (expected.generation.has_value() && stats.generation != *expected.generation) {
     throw std::runtime_error("generation mismatch for " + fixture_path.string());
+  }
+  if (expected.wal_write_pos.has_value() && wal_stats.write_pos != *expected.wal_write_pos) {
+    throw std::runtime_error("wal_write_pos mismatch for " + fixture_path.string());
+  }
+  if (expected.wal_checkpoint_pos.has_value() && wal_stats.checkpoint_pos != *expected.wal_checkpoint_pos) {
+    throw std::runtime_error("wal_checkpoint_pos mismatch for " + fixture_path.string());
+  }
+  if (expected.wal_pending_bytes.has_value() && wal_stats.pending_bytes != *expected.wal_pending_bytes) {
+    throw std::runtime_error("wal_pending_bytes mismatch for " + fixture_path.string());
+  }
+  if (expected.wal_last_seq.has_value() && wal_stats.last_seq != *expected.wal_last_seq) {
+    throw std::runtime_error("wal_last_seq mismatch for " + fixture_path.string());
+  }
+  if (expected.wal_committed_seq.has_value() && wal_stats.committed_seq != *expected.wal_committed_seq) {
+    throw std::runtime_error("wal_committed_seq mismatch for " + fixture_path.string());
+  }
+}
+
+void AssertPassInvariants(const std::filesystem::path& fixture_path,
+                          waxcpp::WaxStore& store,
+                          const waxcpp::WaxStats& stats,
+                          const waxcpp::WaxWALStats& wal_stats,
+                          const FixtureExpectation& expected) {
+  if (wal_stats.wal_size > 0) {
+    if (wal_stats.write_pos >= wal_stats.wal_size) {
+      throw std::runtime_error("write_pos out of wal_size range for " + fixture_path.string());
+    }
+    if (wal_stats.checkpoint_pos >= wal_stats.wal_size) {
+      throw std::runtime_error("checkpoint_pos out of wal_size range for " + fixture_path.string());
+    }
+    if (wal_stats.pending_bytes > wal_stats.wal_size) {
+      throw std::runtime_error("pending_bytes out of wal_size range for " + fixture_path.string());
+    }
+  }
+  if (wal_stats.pending_bytes == 0 && wal_stats.wal_size > 0 &&
+      wal_stats.write_pos != wal_stats.checkpoint_pos) {
+    throw std::runtime_error("clean wal must have write_pos == checkpoint_pos for " + fixture_path.string());
+  }
+  if (wal_stats.committed_seq > wal_stats.last_seq) {
+    throw std::runtime_error("committed_seq must be <= last_seq for " + fixture_path.string());
+  }
+
+  const auto metas = store.FrameMetas();
+  if (metas.size() != static_cast<std::size_t>(stats.frame_count)) {
+    throw std::runtime_error("FrameMetas count mismatch for " + fixture_path.string());
+  }
+
+  std::vector<std::uint64_t> frame_ids{};
+  frame_ids.reserve(metas.size());
+  std::unordered_set<std::uint64_t> seen_ids{};
+  seen_ids.reserve(metas.size());
+
+  bool first = true;
+  std::uint64_t prev_id = 0;
+  for (const auto& meta : metas) {
+    if (!seen_ids.insert(meta.id).second) {
+      throw std::runtime_error("duplicate frame id in FrameMetas for " + fixture_path.string());
+    }
+    if (!first && meta.id <= prev_id) {
+      throw std::runtime_error("FrameMetas must be strictly ordered by id for " + fixture_path.string());
+    }
+    first = false;
+    prev_id = meta.id;
+    frame_ids.push_back(meta.id);
+
+    const auto maybe_meta = store.FrameMeta(meta.id);
+    if (!maybe_meta.has_value()) {
+      throw std::runtime_error("FrameMeta(id) missing for id=" + std::to_string(meta.id));
+    }
+    if (!MetaEqual(meta, *maybe_meta)) {
+      throw std::runtime_error("FrameMeta(id) mismatch for id=" + std::to_string(meta.id));
+    }
+
+    const auto content = store.FrameContent(meta.id);
+    if (content.size() != meta.payload_length) {
+      throw std::runtime_error("FrameContent length mismatch for id=" + std::to_string(meta.id));
+    }
+
+    if (const auto it = expected.frame_payload_len.find(meta.id); it != expected.frame_payload_len.end()) {
+      if (meta.payload_length != it->second) {
+        throw std::runtime_error("frame_payload_len mismatch for id=" + std::to_string(meta.id));
+      }
+    }
+    if (const auto it = expected.frame_status.find(meta.id); it != expected.frame_status.end()) {
+      if (meta.status != static_cast<std::uint8_t>(it->second)) {
+        throw std::runtime_error("frame_status mismatch for id=" + std::to_string(meta.id));
+      }
+    }
+    if (const auto it = expected.frame_payload_utf8.find(meta.id); it != expected.frame_payload_utf8.end()) {
+      if (BytesToString(content) != it->second) {
+        throw std::runtime_error("frame_payload_utf8 mismatch for id=" + std::to_string(meta.id));
+      }
+    }
+  }
+
+  for (const auto& [frame_id, _] : expected.frame_payload_len) {
+    if (seen_ids.find(frame_id) == seen_ids.end()) {
+      throw std::runtime_error("frame_payload_len expectation references missing frame id=" + std::to_string(frame_id));
+    }
+  }
+  for (const auto& [frame_id, _] : expected.frame_status) {
+    if (seen_ids.find(frame_id) == seen_ids.end()) {
+      throw std::runtime_error("frame_status expectation references missing frame id=" + std::to_string(frame_id));
+    }
+  }
+  for (const auto& [frame_id, _] : expected.frame_payload_utf8) {
+    if (seen_ids.find(frame_id) == seen_ids.end()) {
+      throw std::runtime_error("frame_payload_utf8 expectation references missing frame id=" + std::to_string(frame_id));
+    }
+  }
+
+  const auto bulk_contents = store.FrameContents(frame_ids);
+  if (bulk_contents.size() != frame_ids.size()) {
+    throw std::runtime_error("FrameContents bulk size mismatch for " + fixture_path.string());
+  }
+  for (const auto frame_id : frame_ids) {
+    const auto direct_content = store.FrameContent(frame_id);
+    const auto it = bulk_contents.find(frame_id);
+    if (it == bulk_contents.end()) {
+      throw std::runtime_error("FrameContents bulk missing id=" + std::to_string(frame_id));
+    }
+    if (it->second != direct_content) {
+      throw std::runtime_error("FrameContents bulk mismatch for id=" + std::to_string(frame_id));
+    }
   }
 }
 
@@ -274,9 +485,17 @@ int main() {
 
       store.Verify(expected.verify_deep);
       const auto stats = store.Stats();
+      const auto wal_stats = store.WalStats();
       waxcpp::tests::LogKV("fixture_stats_frame_count", stats.frame_count);
       waxcpp::tests::LogKV("fixture_stats_generation", stats.generation);
-      AssertExpected(fixture, stats, expected);
+      waxcpp::tests::LogKV("fixture_wal_write_pos", wal_stats.write_pos);
+      waxcpp::tests::LogKV("fixture_wal_checkpoint_pos", wal_stats.checkpoint_pos);
+      waxcpp::tests::LogKV("fixture_wal_pending_bytes", wal_stats.pending_bytes);
+      waxcpp::tests::LogKV("fixture_wal_last_seq", wal_stats.last_seq);
+      waxcpp::tests::LogKV("fixture_wal_committed_seq", wal_stats.committed_seq);
+
+      AssertExpected(fixture, stats, wal_stats, expected);
+      AssertPassInvariants(fixture, store, stats, wal_stats, expected);
       store.Close();
       std::cout << "fixture OK: " << fixture.string() << "\n";
       waxcpp::tests::Log("fixture: pass mode passed");

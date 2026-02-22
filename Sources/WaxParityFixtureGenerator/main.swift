@@ -96,7 +96,8 @@ private struct FixtureGenerator {
     private func generateValidPayload(at fixtureURL: URL) async throws {
         try resetFixtureFiles(at: fixtureURL)
         let wax = try await Wax.create(at: fixtureURL, walSize: fixtureWalSize)
-        _ = try await wax.put(Data("swift parity payload fixture".utf8))
+        let payloadText = "swift parity payload fixture"
+        _ = try await wax.put(Data(payloadText.utf8))
         try await wax.commit()
         try await wax.close()
 
@@ -108,6 +109,9 @@ private struct FixtureGenerator {
                 "verify_deep=true",
                 "frame_count=\(stats.frameCount)",
                 "generation=\(stats.generation)",
+                "frame_payload_len.0=\(payloadText.utf8.count)",
+                "frame_status.0=0",
+                "frame_payload_utf8.0=\(payloadText)",
             ]
         )
         print("[swift-fixture-gen] generated \(fixtureURL.lastPathComponent) mode=pass")

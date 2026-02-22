@@ -1,7 +1,7 @@
 # Context: C++ Core RAG Port (LibTorch)
 
 **Created**: 2026-02-18
-**Last Updated**: 2026-02-21
+**Last Updated**: 2026-02-22
 **Current Phase**: M3 complete baseline + M5/M6 deterministic CPU baselines
 **Next Agent**: wax-rag-specialist
 
@@ -58,6 +58,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add GitHub Actions macOS workflow (`Swift Parity Fixtures`) to generate Swift fixtures when local macOS is unavailable
 - [x] Complete M2 parity against external Swift-generated fixtures (cross-language artifacts)
 - [x] Enable strict Swift fixture gate in default C++ CI configure step
+- [x] Extend parity runner pass-mode assertions with WAL state/read parity invariants (`WalStats`, `FrameMetas`, `FrameMeta(id)`, `FrameContent(s)`)
+- [x] Extend parity sidecar format with optional WAL/frame-level expectations and wire them into fixture validation
+- [x] Add payload-level sidecar expectations to Swift/synthetic valid payload fixtures (`frame_payload_len/status/payload_utf8`)
 - [x] Add C++ WAL ring read primitives (`terminal marker` + `scan state`) aligned with Swift WAL header semantics
 - [x] Implement `scanPendingMutationsWithState` parity behavior in C++ WAL reader (state scan continues after decode errors, pending decode stops)
 - [x] Wire WAL pending scan into `WaxStore::Open` with Swift-like `lastSequence = max(committedSeq, scanLastSeq)` handling
@@ -197,12 +200,20 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/mv2s_format_test.cpp` | Added TOC codec invariants test suite (roundtrip + checksum + version + dense IDs + optional tags) | Codex |
 | `cpp/tests/parity/mv2s_fixture_parity_test.cpp` | Added fixture-driven parity test runner for `.mv2s` (Open/Verify + sidecar modes + optional error matching) | Codex |
 | `cpp/tests/parity/mv2s_fixture_generator.cpp` | Added deterministic small-WAL synthetic fixture generator (`pass/open_fail/verify_fail`) | Codex |
+| `cpp/tests/parity/mv2s_fixture_parity_test.cpp` | Extended pass-mode parity checks with WAL state invariants and frame read-surface consistency (`FrameMetas`, `FrameMeta(id)`, `FrameContent(s)`) | Codex |
+| `cpp/tests/parity/mv2s_fixture_parity_test.cpp` | Added optional sidecar assertions for `wal_*` and `frame_*.<id>` keys (`payload_len/status/payload_utf8`) | Codex |
+| `cpp/tests/parity/mv2s_fixture_generator.cpp` | Extended synthetic valid-payload sidecar with frame/WAL assertions to exercise new parity key paths | Codex |
 | `cpp/tests/test_logger.hpp` | Added opt-in/Debug-default test logger (`WAXCPP_TEST_LOG`) for cleaner expected-failure diagnostics | Codex |
 | `cpp/tests/unit/wax_store_verify_test.cpp` | Added scenario logs and expected-exception logging to reduce Visual Studio first-chance exception ambiguity | Codex |
 | `cpp/CMakeLists.txt` | Added parity test target and strict fixture gating option (`WAXCPP_REQUIRE_PARITY_FIXTURES`) | Codex |
 | `.github/workflows/cpp-ci.yml` | Enabled strict fixture requirement and fixture generation step in C++ CI | Codex |
 | `cpp/tests/parity/README.md` | Added parity test and sidecar format documentation | Codex |
 | `fixtures/parity/README.md` | Added fixture and sidecar conventions | Codex |
+| `cpp/tests/parity/README.md` | Documented extended sidecar schema (`wal_*`, `frame_payload_len.<id>`, `frame_status.<id>`, `frame_payload_utf8.<id>`) | Codex |
+| `fixtures/parity/README.md` | Documented extended fixture sidecar keys for WAL/frame-level parity assertions | Codex |
+| `fixtures/parity/swift/swift_valid_payload.mv2s.expected` | Added payload-level frame assertions for stronger Swift<->C++ parity coverage | Codex |
+| `fixtures/parity/synthetic/synthetic_valid_payload.mv2s.expected` | Added payload/WAL assertions for stronger synthetic parity coverage | Codex |
+| `Sources/WaxParityFixtureGenerator/main.swift` | Extended Swift valid-payload sidecar generation with frame payload/status expectations | Codex |
 | `cpp/src/core/mv2s_format.hpp` | Extended TOC summary with index manifest metadata (`lex/vec/time`) | Codex |
 | `cpp/src/core/mv2s_format.cpp` | Added decode-time validation that index manifests have matching segment catalog entries | Codex |
 | `cpp/tests/unit/mv2s_format_test.cpp` | Added M2 tests for manifest/segment linkage fail/pass scenarios | Codex |

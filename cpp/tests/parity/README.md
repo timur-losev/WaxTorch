@@ -18,11 +18,21 @@ verify_deep=true     # bool, default true
 frame_count=0
 generation=7
 error_contains=checksum mismatch
+wal_write_pos=0
+wal_checkpoint_pos=0
+wal_pending_bytes=0
+wal_last_seq=9
+wal_committed_seq=9
+frame_payload_len.0=28
+frame_status.0=0
+frame_payload_utf8.0=swift parity payload fixture
 ```
 
 Notes:
 - `frame_count` / `generation` are valid only with `mode=pass`.
 - `error_contains` is optional and applies to failure modes.
+- `wal_*` keys are optional `mode=pass` assertions against `WaxStore::WalStats()`.
+- `frame_*.<id>` keys are optional `mode=pass` assertions against `FrameMetas/FrameContent`.
 
 CI hard mode:
 - set `-DWAXCPP_REQUIRE_PARITY_FIXTURES=ON` to fail when no fixtures are present.
