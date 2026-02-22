@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -66,6 +67,21 @@ std::vector<std::byte> ReadExactly(const std::filesystem::path& path, std::uint6
     throw std::runtime_error("short read");
   }
   return out;
+}
+
+void WriteBytesAt(const std::filesystem::path& path, std::uint64_t offset, std::span<const std::byte> bytes) {
+  std::fstream io(path, std::ios::binary | std::ios::in | std::ios::out);
+  if (!io) {
+    throw std::runtime_error("failed to open file for write");
+  }
+  io.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
+  if (!io) {
+    throw std::runtime_error("failed to seek for write");
+  }
+  io.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  if (!io) {
+    throw std::runtime_error("failed to write bytes");
+  }
 }
 
 class ScopedCommitFailStep {
@@ -475,6 +491,60 @@ void RunScenarioPendingRecoverySkipsUndecodableTail(const std::filesystem::path&
   reopened.Close();
 }
 
+void RunScenarioPendingRecoveryIgnoresPartialTail(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: pending WAL recovery ignores partial/corrupt tail");
+  const std::vector<std::byte> payload = {
+      std::byte{0x1D}, std::byte{0x1E}, std::byte{0x1F},
+  };
+  waxcpp::WaxWALStats crashed_wal{};
+
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    (void)store.Put(payload);
+    crashed_wal = store.WalStats();
+    // Simulate abrupt crash with one valid pending putFrame.
+  }
+
+  Require(crashed_wal.last_seq >= 1, "expected wal last_seq >= 1 before partial-tail injection");
+  Require(crashed_wal.pending_bytes > 0, "expected pending WAL bytes before partial-tail injection");
+
+  // Overwrite the sentinel at write_pos with an intentionally partial/corrupt next header prefix:
+  // - sequence = last_seq + 1 (non-zero)
+  // - length = 16
+  // Remaining header bytes stay zero (truncated-style torn write).
+  std::array<std::byte, 12> partial_prefix{};
+  const auto next_seq = crashed_wal.last_seq + 1;
+  for (std::size_t i = 0; i < 8; ++i) {
+    partial_prefix[i] = static_cast<std::byte>((next_seq >> (8U * i)) & 0xFFU);
+  }
+  constexpr std::uint32_t kClaimedLength = 16;
+  for (std::size_t i = 0; i < 4; ++i) {
+    partial_prefix[8 + i] = static_cast<std::byte>((kClaimedLength >> (8U * i)) & 0xFFU);
+  }
+
+  const auto inject_offset = waxcpp::core::mv2s::kWalOffset + crashed_wal.write_pos;
+  WriteBytesAt(path, inject_offset, partial_prefix);
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  const auto before = reopened.Stats();
+  const auto before_wal = reopened.WalStats();
+  Require(before.frame_count == 0, "partial tail must not change committed frame_count");
+  Require(before.pending_frames == 1, "partial tail must preserve valid pending putFrame");
+  Require(before_wal.last_seq == crashed_wal.last_seq,
+          "partial/corrupt tail must not advance scanned wal last_seq");
+  Require(before_wal.pending_bytes == crashed_wal.pending_bytes,
+          "partial/corrupt tail must not inflate scanned pending_bytes");
+  Require(before_wal.write_pos == crashed_wal.write_pos,
+          "partial/corrupt tail must keep write_pos at first invalid header");
+
+  reopened.Commit();
+  const auto after = reopened.Stats();
+  Require(after.frame_count == 1, "commit should apply valid pending putFrame despite partial tail");
+  Require(after.pending_frames == 0, "pending state should clear after commit");
+  Require(reopened.FrameContent(0) == payload, "committed payload mismatch after partial-tail recovery");
+  reopened.Close();
+}
+
 void RunScenarioDeleteAndSupersedePersist(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: delete/supersede persist in TOC");
   auto store = waxcpp::WaxStore::Create(path);
@@ -858,6 +928,7 @@ int main() {
     RunScenarioPutEmbeddingForwardReferenceRejected(path);
     RunScenarioPendingRecoveryCommit(path);
     RunScenarioPendingRecoverySkipsUndecodableTail(path);
+    RunScenarioPendingRecoveryIgnoresPartialTail(path);
     RunScenarioDeleteAndSupersedePersist(path);
     RunScenarioCrashWindowAfterTocWrite(path);
     RunScenarioCrashWindowAfterFooterWrite(path);

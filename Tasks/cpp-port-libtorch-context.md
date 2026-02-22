@@ -340,6 +340,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/core/wax_store.cpp` | Wired `WalStats().auto_commit_count` and increment-on-`Close` auto-commit semantics for local pending mutations only | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added `auto_commit_count` assertions for local pending close auto-commit vs recovered-pending close no-op behavior | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added `PutBatch` regressions for id sequencing, commit persistence, and metadata-size mismatch rejection | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added recovery regression for partial/corrupt WAL tail after valid pending mutation, validating scan cursor/sequence stability and commit of valid prefix only | Codex |
 | `cpp/src/core/wax_store.cpp` | Added commit failpoint step 5 immediately after WAL checkpoint write to model post-checkpoint/pre-header crash window | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added crash-window regression for step 5, validating reopen durability via footer scan with zero pending WAL | Codex |
 | `cpp/include/waxcpp/wax_store.hpp` | Added `PutEmbedding`/`PutEmbeddingBatch` APIs to C++ `WaxStore` parity surface | Codex |
