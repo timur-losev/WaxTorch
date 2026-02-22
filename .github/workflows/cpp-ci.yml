@@ -50,7 +50,7 @@ jobs:
         run: git submodule update --init --recursive
 
       - name: Verify dependency policy
-        run: python3 cpp/scripts/verify_submodules.py
+        run: python3 cpp/scripts/verify_submodules.py --require-checksum-submodules-present
 
       - name: Configure
         run: cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DWAXCPP_REQUIRE_PARITY_FIXTURES=ON -DWAXCPP_REQUIRE_SWIFT_FIXTURES=ON
@@ -99,4 +99,4 @@ jobs:
         run: git submodule update --init --recursive
 
       - name: Verify dependency policy (strict pins)
-        run: python3 cpp/scripts/verify_submodules.py --enforce-pin-required
+        run: python3 cpp/scripts/verify_submodules.py --enforce-pin-required --require-checksum-submodules-present

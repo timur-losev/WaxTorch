@@ -528,6 +528,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/CMakeLists.txt` | Registered `waxcpp_libtorch_manifest_gate_test` target/test in default C++ test suite | Codex |
 | `.github/workflows/cpp-ci.yml` | Added dedicated CI step running `waxcpp_libtorch_manifest_gate_test` with strict manifest/artifact checksum env configuration | Codex |
 | `cpp/README.md` | Documented explicit command to run libtorch manifest checksum gate test locally (requires initialized `cpp/third_party/libtorch-dist`) | Codex |
+| `cpp/scripts/verify_submodules.py` | Added `--require-checksum-submodules-present` strict mode to fail when checksum-verified submodule checkouts are missing locally | Codex |
+| `.github/workflows/cpp-ci.yml` | Switched dependency verification steps to strict presence mode for checksum-verified submodules | Codex |
+| `cpp/README.md` | Documented strict dependency verification command for CI-style local checks (`--require-checksum-submodules-present`) | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

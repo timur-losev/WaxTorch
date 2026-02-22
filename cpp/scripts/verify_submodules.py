@@ -29,6 +29,11 @@ def parse_args() -> argparse.Namespace:
         action='store_true',
         help='Fail if any pinned_commit remains as <PIN_REQUIRED> placeholder.'
     )
+    parser.add_argument(
+        '--require-checksum-submodules-present',
+        action='store_true',
+        help='Fail if any checksum-verified submodule checkout is missing locally.'
+    )
     return parser.parse_args()
 
 
@@ -229,6 +234,9 @@ for path in sorted(REQUIRED_PATHS):
 
 args = parse_args()
 enforce_pin_required = args.enforce_pin_required or env_truthy('WAXCPP_ENFORCE_PIN_REQUIRED')
+require_checksum_submodules_present = (
+    args.require_checksum_submodules_present or env_truthy('WAXCPP_REQUIRE_CHECKSUM_SUBMODULES_PRESENT')
+)
 has_pin_placeholders = any(entry.get('pinned_commit') == '<PIN_REQUIRED>' for entry in lock_entries.values())
 if has_pin_placeholders:
     message = 'pinned commits are placeholders and must be updated before release'
@@ -264,7 +272,10 @@ for path in sorted(REQUIRED_PATHS):
 
     submodule_root = ROOT / path
     if not submodule_root.exists():
-        warn(f'{path} checksum verification skipped: submodule checkout is missing locally')
+        message = f'{path} checksum verification skipped: submodule checkout is missing locally'
+        if require_checksum_submodules_present:
+            fail(message)
+        warn(message)
         continue
     validate_manifest_checksums(submodule_root, manifest_rel)
 

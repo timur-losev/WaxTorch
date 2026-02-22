@@ -74,3 +74,8 @@ See:
 - `.gitmodules`
 - `cpp/submodules.lock`
 - `cpp/scripts/verify_submodules.py`
+
+Strict CI-style dependency check (requires checksum-verified submodules to be present locally):
+```bash
+python3 cpp/scripts/verify_submodules.py --require-checksum-submodules-present
+```
