@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -225,6 +226,47 @@ void RunScenarioAppendBatchCapacityAtomicity(const std::filesystem::path& path) 
           "overflow batch must preserve scanned pending_bytes");
 }
 
+void RunScenarioSequenceOverflowGuard(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: sequence overflow guard");
+  constexpr std::uint64_t kWalSize = 512;
+  CreateSizedFile(path, static_cast<std::size_t>(kWalSize));
+
+  waxcpp::core::wal::WalRingWriter writer(path,
+                                          0,
+                                          kWalSize,
+                                          0,
+                                          0,
+                                          0,
+                                          std::numeric_limits<std::uint64_t>::max());
+  Require(!writer.CanAppend(9), "CanAppend must fail when sequence is exhausted");
+
+  const auto before_scan = waxcpp::core::wal::ScanPendingMutationsWithState(path, 0, kWalSize, 0, 0);
+  bool append_threw = false;
+  try {
+    (void)writer.Append(BuildDeletePayload(123));
+  } catch (const std::exception&) {
+    append_threw = true;
+  }
+  Require(append_threw, "Append must throw on sequence overflow");
+
+  bool batch_threw = false;
+  try {
+    (void)writer.AppendBatch({BuildDeletePayload(124)});
+  } catch (const std::exception&) {
+    batch_threw = true;
+  }
+  Require(batch_threw, "AppendBatch must throw on sequence overflow");
+
+  const auto after_scan = waxcpp::core::wal::ScanPendingMutationsWithState(path, 0, kWalSize, 0, 0);
+  Require(after_scan.pending_mutations.empty(), "sequence overflow must not append mutations");
+  Require(after_scan.state.last_sequence == before_scan.state.last_sequence,
+          "sequence overflow must not change scanned last_sequence");
+  Require(after_scan.state.write_pos == before_scan.state.write_pos,
+          "sequence overflow must not move scanned write_pos");
+  Require(after_scan.state.pending_bytes == before_scan.state.pending_bytes,
+          "sequence overflow must not change scanned pending_bytes");
+}
+
 }  // namespace
 
 int main() {
@@ -239,6 +281,7 @@ int main() {
     RunScenarioSeparateSentinelWrite(path);
     RunScenarioAppendBatch(path);
     RunScenarioAppendBatchCapacityAtomicity(path);
+    RunScenarioSequenceOverflowGuard(path);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);

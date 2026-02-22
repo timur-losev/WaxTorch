@@ -119,6 +119,13 @@ std::array<std::byte, kRecordHeaderSize> BuildWalPaddingRecord(std::uint64_t seq
   return BuildWalRecordHeader(sequence, skip_bytes, kFlagIsPadding, EmptyPayloadChecksum());
 }
 
+std::uint64_t NextSequenceOrThrow(std::uint64_t current) {
+  if (current == std::numeric_limits<std::uint64_t>::max()) {
+    throw WalError("sequence overflow");
+  }
+  return current + 1;
+}
+
 class PayloadCursor {
  public:
   explicit PayloadCursor(std::span<const std::byte> bytes) : bytes_(bytes) {}
@@ -419,6 +426,9 @@ bool WalRingWriter::CanAppend(std::size_t payload_size) const {
   if (payload_size == 0) {
     return false;
   }
+  if (last_sequence_ == std::numeric_limits<std::uint64_t>::max()) {
+    return false;
+  }
   if (wal_size_ == 0) {
     return false;
   }
@@ -472,6 +482,9 @@ std::uint64_t WalRingWriter::Append(std::span<const std::byte> payload, std::uin
   if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
     throw WalError("wal payload exceeds UInt32.max");
   }
+  if (last_sequence_ == std::numeric_limits<std::uint64_t>::max()) {
+    throw WalError("sequence overflow");
+  }
 
   const auto header_size = kRecordHeaderSize;
   const auto entry_size = header_size + static_cast<std::uint64_t>(payload.size());
@@ -524,7 +537,7 @@ std::uint64_t WalRingWriter::Append(std::span<const std::byte> payload, std::uin
     if (skip_bytes_64 > std::numeric_limits<std::uint32_t>::max()) {
       throw WalError("padding skip bytes exceeds UInt32.max");
     }
-    const auto padding_sequence = last_sequence_ + 1;
+    const auto padding_sequence = NextSequenceOrThrow(last_sequence_);
     const auto padding_header = BuildWalPaddingRecord(padding_sequence,
                                                       static_cast<std::uint32_t>(skip_bytes_64));
     WriteAll(padding_header, wal_offset_ + write_pos_);
@@ -536,7 +549,7 @@ std::uint64_t WalRingWriter::Append(std::span<const std::byte> payload, std::uin
     write_pos_ = 0;
   }
 
-  const auto sequence = last_sequence_ + 1;
+  const auto sequence = NextSequenceOrThrow(last_sequence_);
   const auto record_data = BuildWalDataRecord(sequence, flags, payload);
   const auto record_start = write_pos_;
   const auto record_end = record_start + entry_size;
@@ -642,6 +655,9 @@ std::vector<std::uint64_t> WalRingWriter::AppendBatch(const std::vector<std::vec
       }
     }
 
+    if (sim_last_sequence == std::numeric_limits<std::uint64_t>::max()) {
+      return false;
+    }
     sim_last_sequence += 1;
     return true;
   };
