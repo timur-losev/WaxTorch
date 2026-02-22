@@ -298,6 +298,9 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       std::filesystem::temp_directory_path() / "waxcpp_test_manifest_local_only.bin";
   const auto artifact_dist_root_strict_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_dist_root_strict.json";
+  const auto artifact_empty_file = artifact_root / "empty" / "libtorch-empty.zip";
+  const auto artifact_empty_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_empty_artifact.json";
   {
     std::ofstream out(temp_manifest, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
@@ -445,6 +448,14 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       throw std::runtime_error("failed to create test artifact file");
     }
     artifact_out << "abc";
+    std::filesystem::create_directories(artifact_empty_file.parent_path(), mkdir_ec);
+    if (mkdir_ec) {
+      throw std::runtime_error("failed to create test empty artifact directory");
+    }
+    std::ofstream empty_out(artifact_empty_file, std::ios::binary | std::ios::trunc);
+    if (!empty_out.is_open()) {
+      throw std::runtime_error("failed to create empty artifact file");
+    }
   }
   {
     std::ofstream out(artifact_manifest, std::ios::binary | std::ios::trunc);
@@ -505,6 +516,13 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       throw std::runtime_error("failed to create dist-root strict manifest file");
     }
     out << R"({"artifacts":[{"path":"waxcpp_test_manifest_local_only.bin","sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}]})";
+  }
+  {
+    std::ofstream out(artifact_empty_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create empty artifact manifest file");
+    }
+    out << R"({"artifacts":[{"path":"empty/libtorch-empty.zip","sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}]})";
   }
 
   {
@@ -1116,6 +1134,20 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_empty_manifest.string());
+    const ScopedEnvVar set_dist_root("WAXCPP_LIBTORCH_DIST_ROOT", artifact_root.string());
+    const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::string("1"));
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "checksum gate should reject empty selected artifact file");
+  }
+
+  {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_manifest.string());
     const ScopedEnvVar set_dist_root("WAXCPP_LIBTORCH_DIST_ROOT", artifact_root.string());
     const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::nullopt);
@@ -1153,8 +1185,11 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(artifact_absolute_manifest, ec);
   std::filesystem::remove(artifact_absolute_in_root_manifest, ec);
   std::filesystem::remove(artifact_dist_root_strict_manifest, ec);
+  std::filesystem::remove(artifact_empty_manifest, ec);
   std::filesystem::remove(manifest_local_artifact, ec);
   std::filesystem::remove(artifact_escape_file, ec);
+  std::filesystem::remove(artifact_empty_file, ec);
+  std::filesystem::remove(artifact_empty_file.parent_path(), ec);
   std::filesystem::remove(artifact_file, ec);
   std::filesystem::remove(artifact_file.parent_path(), ec);
   std::filesystem::remove(artifact_manifest_dir, ec);

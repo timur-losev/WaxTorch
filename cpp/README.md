@@ -55,6 +55,7 @@ export WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256=1
 Note: when `WAXCPP_LIBTORCH_DIST_ROOT` is set, selected artifact resolution is strict:
 - selected artifact paths (relative and absolute) are constrained to that root (no `..` escape);
 - manifest-directory fallback resolution is disabled.
+- checksum gate also rejects empty selected artifact files.
 
 Libtorch manifest checksum gate test (requires initialized `cpp/third_party/libtorch-dist`):
 ```bash

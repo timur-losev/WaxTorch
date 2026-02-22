@@ -417,6 +417,15 @@ std::string HexLower(std::span<const std::byte> bytes) {
 }
 
 std::string ComputeFileSha256Hex(const std::filesystem::path& path) {
+  std::error_code size_ec{};
+  const auto file_size = std::filesystem::file_size(path, size_ec);
+  if (size_ec) {
+    throw std::runtime_error("failed to read selected libtorch artifact file size for checksum verification");
+  }
+  if (file_size == 0) {
+    throw std::runtime_error("selected libtorch artifact is empty");
+  }
+
   std::ifstream input(path, std::ios::binary);
   if (!input.is_open()) {
     throw std::runtime_error("failed to open selected libtorch artifact for checksum verification");

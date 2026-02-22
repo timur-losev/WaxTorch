@@ -178,6 +178,8 @@ def validate_manifest_checksums(submodule_root: pathlib.Path, manifest_rel: str)
             fail(f'manifest {manifest_path} artifact #{idx} file is missing: {candidate}')
         if candidate.is_dir():
             fail(f'manifest {manifest_path} artifact #{idx} points to directory: {candidate}')
+        if candidate.stat().st_size == 0:
+            fail(f'manifest {manifest_path} artifact #{idx} file is empty: {candidate}')
 
         actual = sha256_file(candidate)
         if actual != expected:
