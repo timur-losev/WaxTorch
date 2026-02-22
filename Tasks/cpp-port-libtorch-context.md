@@ -232,6 +232,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Make manifest artifact selection deterministic across entry order by selecting lexicographically minimal matching `cpu/cuda/any` path; add dual-order regression coverage
 - [x] Extend runtime diagnostics with selected manifest artifact `sha256` and enforce deterministic `path+sha` selection across manifest entry permutations
 - [x] Add runtime-info stability regression: `MiniLMEmbedderTorch::runtime_info()` snapshot remains invariant across `Embed`/`EmbedBatch` calls
+- [x] Add strict placeholder pin enforcement mode to submodule verifier (`--enforce-pin-required` / `WAXCPP_ENFORCE_PIN_REQUIRED`) for release-gate CI
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -245,7 +246,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/CMakeLists.txt` | Added C++ build/test scaffold | Codex |
 | `cpp/README.md` | Added workspace purpose/build docs | Codex |
 | `cpp/submodules.lock` | Added dependency lock policy skeleton | Codex |
-| `cpp/scripts/verify_submodules.py` | Added policy consistency verifier | Codex |
+| `cpp/scripts/verify_submodules.py` | Added policy consistency verifier; extended with strict placeholder-pin enforcement mode (`--enforce-pin-required`, `WAXCPP_ENFORCE_PIN_REQUIRED`) | Codex |
 | `cpp/src/core/sha256.hpp` | Added internal SHA-256 interface | Codex |
 | `cpp/src/core/sha256.cpp` | Added SHA-256 implementation | Codex |
 | `cpp/src/core/mv2s_format.hpp` | Added MV2S constants and codec interfaces | Codex |

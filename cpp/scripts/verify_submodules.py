@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import configparser
 import hashlib
 import json
@@ -19,6 +20,21 @@ REQUIRED_PATHS = {
     'cpp/third_party/googletest',
     'cpp/third_party/libtorch-dist',
 }
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='Validate submodule lock policy and manifest checksums.')
+    parser.add_argument(
+        '--enforce-pin-required',
+        action='store_true',
+        help='Fail if any pinned_commit remains as <PIN_REQUIRED> placeholder.'
+    )
+    return parser.parse_args()
+
+
+def env_truthy(name: str) -> bool:
+    value = os.getenv(name, '').strip().lower()
+    return value in {'1', 'true', 'yes', 'on'}
 
 
 def fail(msg: str) -> None:
@@ -211,8 +227,14 @@ for path in sorted(REQUIRED_PATHS):
     if declared_remote != lock_remote:
         fail(f'remote mismatch for {path}: .gitmodules has {declared_remote}, lock has {lock_remote}')
 
-if any(entry.get('pinned_commit') == '<PIN_REQUIRED>' for entry in lock_entries.values()):
-    warn('pinned commits are placeholders and must be updated before release')
+args = parse_args()
+enforce_pin_required = args.enforce_pin_required or env_truthy('WAXCPP_ENFORCE_PIN_REQUIRED')
+has_pin_placeholders = any(entry.get('pinned_commit') == '<PIN_REQUIRED>' for entry in lock_entries.values())
+if has_pin_placeholders:
+    message = 'pinned commits are placeholders and must be updated before release'
+    if enforce_pin_required:
+        fail(message)
+    warn(message)
 
 libtorch_entry = lock_entries.get('cpp/third_party/libtorch-dist', {})
 if libtorch_entry.get('verify_checksum') is not True:
