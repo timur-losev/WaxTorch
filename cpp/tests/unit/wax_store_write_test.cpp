@@ -933,6 +933,38 @@ void RunScenarioVisibleCommitProbeClosedStoreThrows(const std::filesystem::path&
   Require(threw, "probe on closed store must throw");
 }
 
+void RunScenarioVisibleCommitProbeRefreshIsIdempotent(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: published-commit probe refresh is idempotent");
+  auto store = waxcpp::WaxStore::Create(path);
+  (void)store.Put({std::byte{0xAB}});
+  store.Commit();
+  (void)store.Put({std::byte{0xAC}});
+
+  bool threw = false;
+  {
+    ScopedCommitFailStep fail_step(2);
+    try {
+      store.Commit();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+  }
+  Require(threw, "commit should fail at injected step 2");
+
+  const bool first_refresh = store.TryRefreshIfPublishedCommitVisible();
+  Require(first_refresh, "first probe should refresh externally visible commit");
+  const auto first_stats = store.Stats();
+  Require(first_stats.frame_count == 2, "first probe should observe refreshed frame_count");
+  Require(first_stats.pending_frames == 0, "first probe should clear pending state");
+
+  const bool second_refresh = store.TryRefreshIfPublishedCommitVisible();
+  Require(!second_refresh, "second probe should be no-op after state is already refreshed");
+  const auto second_stats = store.Stats();
+  Require(second_stats.frame_count == 2, "second probe should keep committed frame_count stable");
+  Require(second_stats.pending_frames == 0, "second probe should keep pending state stable");
+  store.Close();
+}
+
 void RunScenarioSupersedeCycleRejected(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: supersede cycle rejected at commit");
   {
@@ -1203,6 +1235,7 @@ int main() {
     RunScenarioVisibleCommitProbeStep5Refreshes(path);
     RunScenarioVisibleCommitProbeNoNewGenerationNoRefresh(path);
     RunScenarioVisibleCommitProbeClosedStoreThrows(path);
+    RunScenarioVisibleCommitProbeRefreshIsIdempotent(path);
     RunScenarioSupersedeCycleRejected(path);
     RunScenarioSupersedeConflictRejected(path);
     RunScenarioCloseAutoCommitsPending(path);
