@@ -658,6 +658,38 @@ void ScenarioEqualScoreDuplicatePrefersPresentPreviewOverNullopt() {
           "present preview winner must be input-order independent");
 }
 
+void ScenarioEqualScoreDuplicateMergesSourcesDeterministically() {
+  waxcpp::tests::Log("scenario: equal-score duplicate merges sources deterministically");
+
+  waxcpp::SearchRequest request{};
+  request.query = "src-merge";
+  request.mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+  request.top_k = 8;
+  request.preview_max_bytes = 256;
+  request.expansion_max_tokens = 16;
+  request.snippet_max_tokens = 16;
+  request.max_context_tokens = 64;
+
+  waxcpp::SearchResponse response{};
+  response.results = {
+      {.frame_id = 99, .score = 1.0F, .preview_text = std::string("same"), .sources = {waxcpp::SearchSource::kVector}},
+      {.frame_id = 99,
+       .score = 1.0F,
+       .preview_text = std::string("same"),
+       .sources = {waxcpp::SearchSource::kStructuredMemory, waxcpp::SearchSource::kText}},
+  };
+
+  const auto context = waxcpp::BuildFastRAGContext(request, response);
+  Require(context.items.size() == 1, "equal-score duplicate source-merge scenario should collapse to one item");
+  Require(context.items[0].sources.size() == 3, "equal-score duplicate source-merge should union all sources");
+  Require(context.items[0].sources[0] == waxcpp::SearchSource::kText,
+          "merged sources should be normalized in deterministic enum order");
+  Require(context.items[0].sources[1] == waxcpp::SearchSource::kVector,
+          "merged sources should be normalized in deterministic enum order");
+  Require(context.items[0].sources[2] == waxcpp::SearchSource::kStructuredMemory,
+          "merged sources should be normalized in deterministic enum order");
+}
+
 }  // namespace
 
 int main() {
@@ -683,6 +715,7 @@ int main() {
     ScenarioPermutationInvariance();
     ScenarioEqualScoreDuplicatePreviewTieBreakIsOrderIndependent();
     ScenarioEqualScoreDuplicatePrefersPresentPreviewOverNullopt();
+    ScenarioEqualScoreDuplicateMergesSourcesDeterministically();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

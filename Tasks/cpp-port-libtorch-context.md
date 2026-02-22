@@ -419,6 +419,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/rag/search.cpp` | Made duplicate-frame merge preview selection order-independent for equal-score entries via deterministic preview tie-break (lexicographic) | Codex |
 | `cpp/tests/unit/search_test.cpp` | Added equal-score duplicate preview regression ensuring identical merged preview/context under forward/reversed candidate order | Codex |
 | `cpp/tests/unit/search_test.cpp` | Added equal-score duplicate regression asserting present preview text always outranks `nullopt` preview independent of candidate order | Codex |
+| `cpp/tests/unit/search_test.cpp` | Added equal-score duplicate source-union regression for context path, asserting deterministic source dedupe/order after duplicate-frame merge | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Added constructor policy validation for `search_mode` vs enabled channels and extra filtering of text index hits against committed store frame state | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added policy-validation scenarios for invalid text-only/vector-only/hybrid configuration combinations | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added regression scenario for `flush fail -> close -> reopen` recovery path, ensuring text index rebuild from committed store state | Codex |
