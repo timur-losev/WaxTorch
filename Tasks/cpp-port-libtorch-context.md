@@ -199,6 +199,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Tighten `MiniLMEmbedderTorch` manifest validation with SHA-256 format checks and runtime artifact-count introspection; add invalid-sha manifest regression
 - [x] Add mixed WAL lifecycle regression for embeddings: recovered pending `putEmbedding` + local mutation + `Close()` must auto-commit once and clear pending embedding state on reopen
 - [x] Add orchestrator regression for `hybrid` explicit-embedding recall path: `Recall(query, embedding)` must not invoke query embedder when embedding is supplied
+- [x] Align C++ FastRAG request clamping with Swift baseline in context assembly (`top_k/max_context/snippet/expansion` clamp to non-negative; zero disables output) and add negative/zero clamp regressions
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

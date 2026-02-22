@@ -223,17 +223,25 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
     context.query = *request.query;
   }
 
+  const int clamped_top_k = std::max(0, request.top_k);
+  const int clamped_max_context_tokens = std::max(0, request.max_context_tokens);
+  const int clamped_snippet_max_tokens = std::max(0, request.snippet_max_tokens);
+  const int clamped_expansion_max_tokens =
+      std::min(std::max(0, request.expansion_max_tokens), clamped_max_context_tokens);
+
+  if (clamped_top_k == 0 || clamped_max_context_tokens == 0) {
+    context.total_tokens = 0;
+    return context;
+  }
+
   std::vector<SearchResult> sorted_results = MergeDuplicateFrameResults(response.results);
   std::sort(sorted_results.begin(), sorted_results.end(), ScoreLess);
-  if (request.top_k > 0 && sorted_results.size() > static_cast<std::size_t>(request.top_k)) {
-    sorted_results.resize(static_cast<std::size_t>(request.top_k));
+  if (sorted_results.size() > static_cast<std::size_t>(clamped_top_k)) {
+    sorted_results.resize(static_cast<std::size_t>(clamped_top_k));
   }
 
   context.total_tokens = 0;
   context.items.reserve(sorted_results.size());
-  const int max_context_tokens = request.max_context_tokens;
-  const int snippet_max_tokens = request.snippet_max_tokens;
-  const int expansion_max_tokens = request.expansion_max_tokens;
   for (const auto& result : sorted_results) {
     const bool is_first_item = context.items.empty();
     auto item_kind = is_first_item ? RAGItemKind::kExpanded : RAGItemKind::kSnippet;
@@ -251,20 +259,22 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
     if (tokens.empty()) {
       continue;
     }
-    const int configured_limit = (item_kind == RAGItemKind::kExpanded) ? expansion_max_tokens : snippet_max_tokens;
+    const int configured_limit =
+        (item_kind == RAGItemKind::kExpanded) ? clamped_expansion_max_tokens : clamped_snippet_max_tokens;
+    if (configured_limit == 0) {
+      continue;
+    }
     const std::size_t per_item_limit =
         configured_limit > 0 ? std::min<std::size_t>(tokens.size(), static_cast<std::size_t>(configured_limit))
                              : tokens.size();
     std::size_t emit_tokens = per_item_limit;
-    if (max_context_tokens > 0) {
-      const int remaining = max_context_tokens - context.total_tokens;
-      if (remaining <= 0) {
-        break;
-      }
-      emit_tokens = std::min<std::size_t>(emit_tokens, static_cast<std::size_t>(remaining));
-      if (emit_tokens == 0) {
-        break;
-      }
+    const int remaining = clamped_max_context_tokens - context.total_tokens;
+    if (remaining <= 0) {
+      break;
+    }
+    emit_tokens = std::min<std::size_t>(emit_tokens, static_cast<std::size_t>(remaining));
+    if (emit_tokens == 0) {
+      break;
     }
 
     RAGItem item{};
@@ -275,7 +285,7 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
     item.text = JoinPrefixTokens(tokens, emit_tokens);
     context.total_tokens += static_cast<int>(emit_tokens);
     context.items.push_back(std::move(item));
-    if (max_context_tokens > 0 && context.total_tokens >= max_context_tokens) {
+    if (context.total_tokens >= clamped_max_context_tokens) {
       break;
     }
   }

@@ -299,6 +299,68 @@ void ScenarioAsciiWhitespaceTokenization() {
   Require(context.total_tokens == 4, "ascii whitespace tokenization token count mismatch");
 }
 
+void ScenarioRequestClampingParity() {
+  waxcpp::tests::Log("scenario: request clamping parity");
+
+  {
+    waxcpp::SearchRequest request{};
+    request.query = "q";
+    request.top_k = 0;
+    request.max_context_tokens = 128;
+    request.expansion_max_tokens = 32;
+    request.snippet_max_tokens = 16;
+    request.preview_max_bytes = 64;
+
+    waxcpp::SearchResponse response{};
+    response.results = {
+        {.frame_id = 1, .score = 1.0F, .preview_text = std::string("alpha beta"), .sources = {waxcpp::SearchSource::kText}},
+    };
+
+    const auto context = waxcpp::BuildFastRAGContext(request, response);
+    Require(context.items.empty(), "top_k=0 must yield empty context");
+    Require(context.total_tokens == 0, "top_k=0 must keep token count at zero");
+  }
+
+  {
+    waxcpp::SearchRequest request{};
+    request.query = "q";
+    request.top_k = 8;
+    request.max_context_tokens = -5;
+    request.expansion_max_tokens = 32;
+    request.snippet_max_tokens = 16;
+    request.preview_max_bytes = 64;
+
+    waxcpp::SearchResponse response{};
+    response.results = {
+        {.frame_id = 1, .score = 1.0F, .preview_text = std::string("alpha beta"), .sources = {waxcpp::SearchSource::kText}},
+    };
+
+    const auto context = waxcpp::BuildFastRAGContext(request, response);
+    Require(context.items.empty(), "negative max_context_tokens must clamp to zero");
+    Require(context.total_tokens == 0, "negative max_context_tokens must keep token count at zero");
+  }
+
+  {
+    waxcpp::SearchRequest request{};
+    request.query = "q";
+    request.top_k = 8;
+    request.max_context_tokens = 64;
+    request.expansion_max_tokens = -1;
+    request.snippet_max_tokens = -3;
+    request.preview_max_bytes = 64;
+
+    waxcpp::SearchResponse response{};
+    response.results = {
+        {.frame_id = 1, .score = 2.0F, .preview_text = std::string("alpha beta"), .sources = {waxcpp::SearchSource::kText}},
+        {.frame_id = 2, .score = 1.0F, .preview_text = std::string("gamma delta"), .sources = {waxcpp::SearchSource::kText}},
+    };
+
+    const auto context = waxcpp::BuildFastRAGContext(request, response);
+    Require(context.items.empty(), "negative per-item token caps must clamp to zero and suppress output");
+    Require(context.total_tokens == 0, "negative per-item token caps must keep token count at zero");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -315,6 +377,7 @@ int main() {
     ScenarioSurrogateFallback();
     ScenarioContextDeduplicatesDuplicateFrames();
     ScenarioAsciiWhitespaceTokenization();
+    ScenarioRequestClampingParity();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
