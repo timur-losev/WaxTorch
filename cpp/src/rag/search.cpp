@@ -76,7 +76,7 @@ float ClampAlpha(float alpha) {
   return std::max(0.0F, std::min(1.0F, alpha));
 }
 
-std::vector<SearchResult> SortedChannel(std::vector<SearchResult> results, int top_k) {
+std::vector<SearchResult> MergeDuplicateFrameResults(std::vector<SearchResult> results) {
   struct ChannelAggregate {
     float best_score = 0.0F;
     std::optional<std::string> preview_text{};
@@ -116,7 +116,11 @@ std::vector<SearchResult> SortedChannel(std::vector<SearchResult> results, int t
     });
     results.push_back(std::move(merged));
   }
+  return results;
+}
 
+std::vector<SearchResult> SortedChannel(std::vector<SearchResult> results, int top_k) {
+  results = MergeDuplicateFrameResults(std::move(results));
   std::sort(results.begin(), results.end(), ScoreLess);
   if (top_k > 0 && results.size() > static_cast<std::size_t>(top_k)) {
     results.resize(static_cast<std::size_t>(top_k));
@@ -216,7 +220,7 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
     context.query = *request.query;
   }
 
-  std::vector<SearchResult> sorted_results = response.results;
+  std::vector<SearchResult> sorted_results = MergeDuplicateFrameResults(response.results);
   std::sort(sorted_results.begin(), sorted_results.end(), ScoreLess);
   if (request.top_k > 0 && sorted_results.size() > static_cast<std::size_t>(request.top_k)) {
     sorted_results.resize(static_cast<std::size_t>(request.top_k));

@@ -254,6 +254,30 @@ void ScenarioSurrogateFallback() {
   Require(context.items[0].text == "frame 9", "surrogate text mismatch");
 }
 
+void ScenarioContextDeduplicatesDuplicateFrames() {
+  waxcpp::tests::Log("scenario: context deduplicates duplicate frames");
+  waxcpp::SearchRequest request{};
+  request.query = "dup";
+  request.top_k = 10;
+  request.preview_max_bytes = 256;
+  request.expansion_max_tokens = 10;
+  request.snippet_max_tokens = 10;
+  request.max_context_tokens = 100;
+
+  waxcpp::SearchResponse response{};
+  response.results = {
+      {.frame_id = 7, .score = 2.0F, .preview_text = std::string("alpha beta"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 7, .score = 1.0F, .preview_text = std::string("ignored"), .sources = {waxcpp::SearchSource::kVector}},
+      {.frame_id = 9, .score = 1.5F, .preview_text = std::string("gamma"), .sources = {waxcpp::SearchSource::kText}},
+  };
+
+  const auto context = waxcpp::BuildFastRAGContext(request, response);
+  Require(context.items.size() == 2, "context should collapse duplicate frame ids");
+  Require(context.items[0].frame_id == 7, "best duplicate score should define rank");
+  Require(context.items[1].frame_id == 9, "second unique frame id mismatch");
+  Require(context.items[0].sources.size() == 2, "duplicate merge should union sources");
+}
+
 }  // namespace
 
 int main() {
@@ -268,6 +292,7 @@ int main() {
     ScenarioContextTokenBudgetClamp();
     ScenarioRagItemKindPolicy();
     ScenarioSurrogateFallback();
+    ScenarioContextDeduplicatesDuplicateFrames();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

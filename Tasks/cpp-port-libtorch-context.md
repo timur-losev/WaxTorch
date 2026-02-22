@@ -190,6 +190,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Harden submodule policy verifier for `libtorch-dist`: enforce `verify_checksum + required_manifest` lock fields and validate manifest-declared SHA256 artifacts when submodule checkout is present
 - [x] Extend submodule policy verifier to enforce lock-vs-`.gitmodules` remote URL parity for all required submodules
 - [x] Make `MiniLMEmbedderTorch` memoization thread-safe (mutex-protected cache path with double-check insert) and add concurrent embed regression coverage
+- [x] Deduplicate duplicate `frame_id` results in `BuildFastRAGContext` input path (best-score merge + source union) to keep context materialization deterministic with external/non-unified response producers
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
