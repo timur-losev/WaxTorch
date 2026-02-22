@@ -403,6 +403,36 @@ void ScenarioContextDeduplicatesDuplicateFrames() {
   Require(context.items[0].sources.size() == 2, "duplicate merge should union sources");
 }
 
+void ScenarioContextNormalizesSourcesOrdering() {
+  waxcpp::tests::Log("scenario: context normalizes sources ordering");
+  waxcpp::SearchRequest request{};
+  request.query = "sources";
+  request.top_k = 4;
+  request.preview_max_bytes = 256;
+  request.expansion_max_tokens = 8;
+  request.snippet_max_tokens = 8;
+  request.max_context_tokens = 32;
+
+  waxcpp::SearchResponse response{};
+  response.results = {
+      {.frame_id = 1,
+       .score = 1.0F,
+       .preview_text = std::string("alpha"),
+       .sources = {waxcpp::SearchSource::kVector,
+                   waxcpp::SearchSource::kText,
+                   waxcpp::SearchSource::kVector,
+                   waxcpp::SearchSource::kStructuredMemory}},
+  };
+
+  const auto context = waxcpp::BuildFastRAGContext(request, response);
+  Require(context.items.size() == 1, "expected single context item");
+  Require(context.items[0].sources.size() == 3, "context should dedupe duplicate sources");
+  Require(context.items[0].sources[0] == waxcpp::SearchSource::kText, "sources must be sorted by enum order");
+  Require(context.items[0].sources[1] == waxcpp::SearchSource::kVector, "sources must be sorted by enum order");
+  Require(context.items[0].sources[2] == waxcpp::SearchSource::kStructuredMemory,
+          "sources must be sorted by enum order");
+}
+
 void ScenarioAsciiWhitespaceTokenization() {
   waxcpp::tests::Log("scenario: ascii whitespace tokenization");
   waxcpp::SearchRequest request{};
@@ -505,6 +535,7 @@ int main() {
     ScenarioExpansionDisabledStillYieldsSnippets();
     ScenarioSurrogateFallback();
     ScenarioContextDeduplicatesDuplicateFrames();
+    ScenarioContextNormalizesSourcesOrdering();
     ScenarioAsciiWhitespaceTokenization();
     ScenarioRequestClampingParity();
     waxcpp::tests::Log("search_test: finished");

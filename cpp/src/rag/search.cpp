@@ -75,6 +75,14 @@ bool ScoreLess(const SearchResult& lhs, const SearchResult& rhs) {
   return lhs.frame_id < rhs.frame_id;
 }
 
+std::vector<SearchSource> NormalizeSources(std::vector<SearchSource> sources) {
+  std::sort(sources.begin(), sources.end(), [](const auto lhs, const auto rhs) {
+    return static_cast<int>(lhs) < static_cast<int>(rhs);
+  });
+  sources.erase(std::unique(sources.begin(), sources.end()), sources.end());
+  return sources;
+}
+
 float ClampAlpha(float alpha) {
   return std::min(1.0F, std::max(0.0F, alpha));
 }
@@ -293,7 +301,7 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
     item.kind = item_kind;
     item.frame_id = result.frame_id;
     item.score = std::isnan(result.score) ? 0.0F : result.score;
-    item.sources = result.sources;
+    item.sources = NormalizeSources(result.sources);
     item.text = JoinPrefixTokens(tokens, emit_tokens);
     context.total_tokens += static_cast<int>(emit_tokens);
     if (counts_towards_snippet_cap) {
