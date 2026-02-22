@@ -241,6 +241,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Extend runtime diagnostics with selected artifact class (`cpu|cuda|any`) and add regressions to lock deterministic class assignment + runtime-info stability across embed calls
 - [x] Add deterministic MV2V decode fuzz regression (`512` seeded mutations over valid USearch/Metal segments) with decode-invariant checks for successful paths
 - [x] Extend WAL recovery/apply parity regressions for recovered non-put mutations: recovered `delete`/`supersede` + local `put` must auto-commit together on `Close()` and persist expected TOC lifecycle state
+- [x] Add deterministic WAL payload fuzz regression with valid per-record checksums (`256` seeded payloads) to harden mutation-decoder paths while preserving scan-state invariants
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -420,6 +421,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added failpoint-driven flush failure scenario ensuring staged vector results remain hidden until successful retry commit | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added structured-memory crash-window retry-no-op regressions for externally visible commit steps (2/3/4/5), locking in-process visibility + non-duplication on second flush | Codex |
 | `cpp/tests/unit/wal_ring_test.cpp` | Added deterministic WAL fuzz-scan regression (`256` pseudo-random ring snapshots) asserting parser state invariants and `ScanWalState` parity with pending-scan state | Codex |
+| `cpp/tests/unit/wal_ring_test.cpp` | Added deterministic valid-checksummed payload fuzz regression (`256` payloads) asserting robust decode-stop behavior and scan-state invariants under mutation payload corruption | Codex |
 | `cpp/tests/unit/mv2s_format_test.cpp` | Added deterministic TOC fuzz regression (`512` seeded mutations) validating decode robustness on corrupted/truncated/resigned payload variants | Codex |
 | `cpp/src/core/wax_store.cpp` | Hardened `Commit()` WAL sequence publication: footer/checkpoint now clamp committed sequence to `max(previous_committed_seq, scanned_last_seq)` to prevent sequence regression on corrupt/terminal pending headers | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added regression for corrupt pending WAL header at commit cursor, asserting committed sequence monotonicity across corruption-tolerant commit path | Codex |

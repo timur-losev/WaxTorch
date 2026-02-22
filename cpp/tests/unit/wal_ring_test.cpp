@@ -289,6 +289,60 @@ void RunScenarioDeterministicFuzzScan(const std::filesystem::path& path) {
   }
 }
 
+void RunScenarioDeterministicFuzzValidChecksummedPayload(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: deterministic fuzz with valid-checksummed payload");
+  constexpr std::uint64_t kWalSize = 512;
+  constexpr int kIterations = 256;
+  std::uint64_t seed = 0x0BADC0FFEE1234ABULL;
+  waxcpp::tests::LogKV("payload_fuzz_seed", seed);
+  waxcpp::tests::LogKV("payload_fuzz_iterations", static_cast<std::uint64_t>(kIterations));
+
+  for (int iteration = 0; iteration < kIterations; ++iteration) {
+    std::vector<std::byte> wal(static_cast<std::size_t>(kWalSize), std::byte{0});
+
+    const auto payload_size = static_cast<std::size_t>((NextPseudoRandom(seed) % 196ULL) + 1ULL);
+    std::vector<std::byte> payload(payload_size, std::byte{0});
+    FillPseudoRandomBytes(payload, seed);
+    const auto record = BuildWalRecord(1, 0, payload);
+    Require(record.size() < wal.size(), "fuzz record must fit WAL");
+    PlaceBytes(wal, 0, record);
+    WriteFile(path, wal);
+
+    const auto result = waxcpp::core::wal::ScanPendingMutationsWithState(path, 0, kWalSize, 0, 0);
+    const auto expected_size = static_cast<std::uint64_t>(record.size());
+    Require(result.state.last_sequence == 1,
+            "valid-checksummed payload fuzz: last_sequence mismatch at iteration " + std::to_string(iteration));
+    Require(result.state.write_pos == expected_size,
+            "valid-checksummed payload fuzz: write_pos mismatch at iteration " + std::to_string(iteration));
+    Require(result.state.pending_bytes == expected_size,
+            "valid-checksummed payload fuzz: pending_bytes mismatch at iteration " + std::to_string(iteration));
+
+    if (!result.pending_mutations.empty()) {
+      Require(result.pending_mutations.size() == 1,
+              "valid-checksummed payload fuzz: expected at most one decoded mutation");
+      const auto& mutation = result.pending_mutations[0];
+      Require(mutation.sequence == 1, "valid-checksummed payload fuzz: decoded sequence mismatch");
+      switch (mutation.kind) {
+        case waxcpp::core::wal::WalMutationKind::kPutFrame:
+          Require(mutation.put_frame.has_value(), "decoded putFrame must carry payload");
+          break;
+        case waxcpp::core::wal::WalMutationKind::kDeleteFrame:
+          Require(mutation.delete_frame.has_value(), "decoded deleteFrame must carry payload");
+          break;
+        case waxcpp::core::wal::WalMutationKind::kSupersedeFrame:
+          Require(mutation.supersede_frame.has_value(), "decoded supersedeFrame must carry payload");
+          break;
+        case waxcpp::core::wal::WalMutationKind::kPutEmbedding:
+          Require(mutation.put_embedding.has_value(), "decoded putEmbedding must carry payload");
+          Require(mutation.put_embedding->vector.size() ==
+                      static_cast<std::size_t>(mutation.put_embedding->dimension),
+                  "decoded putEmbedding vector/dimension mismatch");
+          break;
+      }
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -303,6 +357,7 @@ int main() {
     RunScenarioPutEmbeddingDecode(path);
     RunScenarioScanStateParity(path);
     RunScenarioDeterministicFuzzScan(path);
+    RunScenarioDeterministicFuzzValidChecksummedPayload(path);
 
     std::filesystem::remove(path);
     waxcpp::tests::Log("wal_ring_test: finished");
