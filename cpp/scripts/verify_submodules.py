@@ -242,9 +242,15 @@ enforce_pin_required = args.enforce_pin_required or env_truthy('WAXCPP_ENFORCE_P
 require_checksum_submodules_present = (
     args.require_checksum_submodules_present or env_truthy('WAXCPP_REQUIRE_CHECKSUM_SUBMODULES_PRESENT')
 )
-has_pin_placeholders = any(entry.get('pinned_commit') == '<PIN_REQUIRED>' for entry in lock_entries.values())
-if has_pin_placeholders:
-    message = 'pinned commits are placeholders and must be updated before release'
+placeholder_paths = sorted(
+    path for path, entry in lock_entries.items() if entry.get('pinned_commit') == '<PIN_REQUIRED>'
+)
+if placeholder_paths:
+    joined = ', '.join(placeholder_paths)
+    message = (
+        'pinned commits are placeholders and must be updated before release '
+        f'(unresolved: {joined})'
+    )
     if enforce_pin_required:
         fail(message)
     warn(message)

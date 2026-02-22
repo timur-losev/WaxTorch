@@ -265,6 +265,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/submodules.lock` | Replaced placeholder pins with concrete commit hashes for `usearch/sqlite/googletest`; `libtorch-dist` pin remains pending mirror finalization | Codex |
 | `cpp/scripts/verify_submodules.py` | Added policy consistency verifier; extended with strict placeholder-pin enforcement mode (`--enforce-pin-required`, `WAXCPP_ENFORCE_PIN_REQUIRED`) | Codex |
 | `cpp/scripts/verify_submodules.py` | Added policy gate rejecting `.gitmodules` `branch` tracking fields to enforce commit-pinned submodule workflow | Codex |
+| `cpp/scripts/verify_submodules.py` | Improved placeholder-pin diagnostics to report exact unresolved submodule paths (for release-gate triage) | Codex |
 | `cpp/src/core/sha256.hpp` | Added internal SHA-256 interface | Codex |
 | `cpp/src/core/sha256.cpp` | Added SHA-256 implementation | Codex |
 | `cpp/src/core/mv2s_format.hpp` | Added MV2S constants and codec interfaces | Codex |
