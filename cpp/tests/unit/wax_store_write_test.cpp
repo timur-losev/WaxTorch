@@ -909,6 +909,36 @@ void RunScenarioWriterLeaseExclusion(const std::filesystem::path& path) {
   reopened.Close();
 }
 
+void RunScenarioWriterLeaseArtifactDoesNotBlock(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: stale writer lease artifact file does not block open");
+  auto lease_path = path;
+  lease_path += ".writer.lease";
+
+  {
+    std::ofstream out(lease_path, std::ios::binary | std::ios::trunc);
+    Require(static_cast<bool>(out), "failed to create synthetic stale writer lease artifact");
+    const char marker[] = "stale-lease-artifact";
+    out.write(marker, static_cast<std::streamsize>(sizeof(marker) - 1));
+    Require(static_cast<bool>(out), "failed to write synthetic stale writer lease artifact");
+  }
+
+  auto store = waxcpp::WaxStore::Create(path);
+
+  bool threw = false;
+  try {
+    auto competing = waxcpp::WaxStore::Open(path);
+    competing.Close();
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  Require(threw, "competing open must fail while stale-artifact-backed lease is actively held");
+
+  store.Close();
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  reopened.Close();
+}
+
 }  // namespace
 
 int main() {
@@ -942,6 +972,7 @@ int main() {
     RunScenarioCloseDoesNotCommitRecoveredPending(path);
     RunScenarioRecoveredPendingPlusLocalMutationsCommit(path);
     RunScenarioWriterLeaseExclusion(path);
+    RunScenarioWriterLeaseArtifactDoesNotBlock(path);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);

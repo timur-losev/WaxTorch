@@ -18,3 +18,4 @@ DerivedData/
 /cpp/out/
 /cpp/.cache/
 build/
+*.writer.lease

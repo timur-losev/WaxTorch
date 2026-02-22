@@ -252,6 +252,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/include/waxcpp/wax_store.hpp` | Marked `WaxStore` non-copyable and added writer-lease ownership state | Codex |
 | `cpp/src/core/wax_store.cpp` | Added writer lease acquire/release lifecycle (`.writer.lock`) in open/close path | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added writer-lease exclusion scenario (competing open fails until primary close) | Codex |
+| `cpp/src/core/wax_store.cpp` | Replaced directory-sentinel lease with OS-level file lock lease (`.writer.lease`) for crash-safe automatic lock release | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added stale-lease-artifact regression: pre-existing lease file must not block open, while active lock still excludes competing writer | Codex |
 | `cpp/include/waxcpp/vector_engine.hpp` | Added in-memory vector storage backing for `USearchVectorEngine` baseline | Codex |
 | `cpp/src/vector/usearch_vector_engine.cpp` | Implemented deterministic CPU vector search baseline (cosine similarity + frame-id tie-break + dimension checks) | Codex |
 | `cpp/tests/unit/usearch_vector_engine_test.cpp` | Added vector-engine unit coverage for ranking, validation errors, remove, and top-k behavior | Codex |

@@ -13,7 +13,21 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <system_error>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#else
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace waxcpp {
 namespace {
@@ -29,28 +43,114 @@ std::runtime_error StoreError(const std::string& message) {
 
 std::filesystem::path WriterLeasePathForStore(const std::filesystem::path& store_path) {
   auto lease_path = store_path;
-  lease_path += ".writer.lock";
+  lease_path += ".writer.lease";
   return lease_path;
 }
 
-std::shared_ptr<std::filesystem::path> AcquireWriterLease(const std::filesystem::path& store_path) {
+std::string OsErrorMessage(int code) {
+#ifdef _WIN32
+  LPSTR buffer = nullptr;
+  const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
+  const DWORD lang_id = MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT);
+  const auto size =
+      ::FormatMessageA(flags, nullptr, static_cast<DWORD>(code), lang_id, reinterpret_cast<LPSTR>(&buffer), 0, nullptr);
+  if (size == 0 || buffer == nullptr) {
+    return "win32_error=" + std::to_string(code);
+  }
+  std::string message(buffer, size);
+  ::LocalFree(buffer);
+  while (!message.empty() && (message.back() == '\r' || message.back() == '\n' || message.back() == ' ')) {
+    message.pop_back();
+  }
+  return message;
+#else
+  const char* text = std::strerror(code);
+  if (text == nullptr) {
+    return "errno=" + std::to_string(code);
+  }
+  return std::string(text);
+#endif
+}
+
+std::shared_ptr<void> AcquireWriterLease(const std::filesystem::path& store_path) {
   const auto lease_path = WriterLeasePathForStore(store_path);
-  std::error_code ec;
-  const auto created = std::filesystem::create_directory(lease_path, ec);
-  if (!created) {
-    if (ec) {
-      throw StoreError("failed to acquire writer lease at " + lease_path.string() + ": " + ec.message());
-    }
-    throw StoreError("writer lease already held: " + lease_path.string());
+#ifdef _WIN32
+  HANDLE handle = ::CreateFileW(lease_path.c_str(),
+                                GENERIC_READ | GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                nullptr,
+                                OPEN_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL,
+                                nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    const auto code = static_cast<int>(::GetLastError());
+    throw StoreError("failed to open writer lease file at " + lease_path.string() + ": " + OsErrorMessage(code));
   }
 
-  return std::shared_ptr<std::filesystem::path>(
-      new std::filesystem::path(lease_path),
-      [](std::filesystem::path* path) {
-        std::error_code release_ec;
-        std::filesystem::remove_all(*path, release_ec);
-        delete path;
-      });
+  OVERLAPPED overlapped{};
+  if (!::LockFileEx(handle,
+                    LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                    0,
+                    std::numeric_limits<DWORD>::max(),
+                    std::numeric_limits<DWORD>::max(),
+                    &overlapped)) {
+    const auto code = static_cast<int>(::GetLastError());
+    ::CloseHandle(handle);
+    if (code == ERROR_LOCK_VIOLATION) {
+      throw StoreError("writer lease already held: " + lease_path.string());
+    }
+    throw StoreError("failed to acquire writer lease at " + lease_path.string() + ": " + OsErrorMessage(code));
+  }
+
+  return std::shared_ptr<void>(new HANDLE(handle), [](void* raw) {
+    auto* handle_ptr = static_cast<HANDLE*>(raw);
+    if (handle_ptr != nullptr && *handle_ptr != INVALID_HANDLE_VALUE) {
+      OVERLAPPED overlapped{};
+      (void)::UnlockFileEx(*handle_ptr,
+                           0,
+                           std::numeric_limits<DWORD>::max(),
+                           std::numeric_limits<DWORD>::max(),
+                           &overlapped);
+      (void)::CloseHandle(*handle_ptr);
+    }
+    delete handle_ptr;
+  });
+#else
+  const int fd = ::open(lease_path.c_str(), O_RDWR | O_CREAT, 0666);
+  if (fd < 0) {
+    const int code = errno;
+    throw StoreError("failed to open writer lease file at " + lease_path.string() + ": " + OsErrorMessage(code));
+  }
+
+  struct flock lock {};
+  lock.l_type = F_WRLCK;
+  lock.l_whence = SEEK_SET;
+  lock.l_start = 0;
+  lock.l_len = 0;
+
+  if (::fcntl(fd, F_SETLK, &lock) == -1) {
+    const int code = errno;
+    (void)::close(fd);
+    if (code == EACCES || code == EAGAIN) {
+      throw StoreError("writer lease already held: " + lease_path.string());
+    }
+    throw StoreError("failed to acquire writer lease at " + lease_path.string() + ": " + OsErrorMessage(code));
+  }
+
+  return std::shared_ptr<void>(new int(fd), [](void* raw) {
+    auto* fd_ptr = static_cast<int*>(raw);
+    if (fd_ptr != nullptr && *fd_ptr >= 0) {
+      struct flock unlock {};
+      unlock.l_type = F_UNLCK;
+      unlock.l_whence = SEEK_SET;
+      unlock.l_start = 0;
+      unlock.l_len = 0;
+      (void)::fcntl(*fd_ptr, F_SETLK, &unlock);
+      (void)::close(*fd_ptr);
+    }
+    delete fd_ptr;
+  });
+#endif
 }
 
 void MaybeInjectCommitCrash(std::uint32_t step) {

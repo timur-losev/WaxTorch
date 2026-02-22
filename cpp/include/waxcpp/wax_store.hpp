@@ -114,7 +114,7 @@ class WaxStore {
   bool has_local_mutations_ = false;
   bool is_open_ = false;
   std::vector<WaxFrameMeta> committed_frame_metas_{};
-  std::shared_ptr<std::filesystem::path> writer_lease_{};
+  std::shared_ptr<void> writer_lease_{};
   WaxStats stats_{};
 };
 
