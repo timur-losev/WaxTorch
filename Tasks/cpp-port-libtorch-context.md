@@ -234,6 +234,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add runtime-info stability regression: `MiniLMEmbedderTorch::runtime_info()` snapshot remains invariant across `Embed`/`EmbedBatch` calls
 - [x] Add strict placeholder pin enforcement mode to submodule verifier (`--enforce-pin-required` / `WAXCPP_ENFORCE_PIN_REQUIRED`) for release-gate CI
 - [x] Add CPU-vs-CUDA policy parity regression for fallback embeddings: routing/artifact selection may differ, but embedding vectors remain deterministic and identical across `cpu_only` and `cuda_preferred`
+- [x] Add deterministic MV2S TOC fuzz regression (`512` seeded mutations: flip/truncate/append/field-corrupt + optional resign) to harden decoder crash/exception behavior on corrupted binary inputs
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -411,6 +412,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added failpoint-driven flush failure scenario ensuring staged vector results remain hidden until successful retry commit | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added structured-memory crash-window retry-no-op regressions for externally visible commit steps (2/3/4/5), locking in-process visibility + non-duplication on second flush | Codex |
 | `cpp/tests/unit/wal_ring_test.cpp` | Added deterministic WAL fuzz-scan regression (`256` pseudo-random ring snapshots) asserting parser state invariants and `ScanWalState` parity with pending-scan state | Codex |
+| `cpp/tests/unit/mv2s_format_test.cpp` | Added deterministic TOC fuzz regression (`512` seeded mutations) validating decode robustness on corrupted/truncated/resigned payload variants | Codex |
 | `cpp/src/core/wax_store.cpp` | Hardened `Commit()` WAL sequence publication: footer/checkpoint now clamp committed sequence to `max(previous_committed_seq, scanned_last_seq)` to prevent sequence regression on corrupt/terminal pending headers | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added regression for corrupt pending WAL header at commit cursor, asserting committed sequence monotonicity across corruption-tolerant commit path | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added cross-process writer-lease exclusion regression via helper-mode test process (`--hold-writer-lease`), covering OS-level lock enforcement beyond in-process lease guard | Codex |

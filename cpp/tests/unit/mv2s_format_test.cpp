@@ -47,12 +47,29 @@ void WriteLE64(std::vector<std::byte>& bytes, std::size_t offset, std::uint64_t 
   }
 }
 
+void WriteLE32(std::vector<std::byte>& bytes, std::size_t offset, std::uint32_t value) {
+  if (offset + 4 > bytes.size()) {
+    throw std::runtime_error("WriteLE32 out of range");
+  }
+  for (std::size_t i = 0; i < 4; ++i) {
+    bytes[offset + i] = static_cast<std::byte>((value >> (8U * i)) & 0xFFU);
+  }
+}
+
 void ResignToc(std::vector<std::byte>& toc) {
   if (toc.size() < 32) {
     throw std::runtime_error("TOC too small for checksum");
   }
   const auto checksum = waxcpp::core::mv2s::ComputeTocChecksum(toc);
   std::copy(checksum.begin(), checksum.end(), toc.end() - 32);
+}
+
+std::uint64_t NextRandom(std::uint64_t& state) {
+  // Deterministic xorshift64* for reproducible fuzz mutations.
+  state ^= state >> 12U;
+  state ^= state << 25U;
+  state ^= state >> 27U;
+  return state * 2685821657736338717ULL;
 }
 
 class TocBuilder {
@@ -340,6 +357,92 @@ int main() {
         throw std::runtime_error("lex manifest segment linkage decode mismatch");
       }
       waxcpp::tests::Log("scenario passed: lex manifest with matching segment catalog entry succeeds");
+    }
+
+    {
+      waxcpp::tests::Log("scenario: deterministic TOC fuzz mutations");
+      FrameSummary first{};
+      first.id = 0;
+      first.payload_offset = 8'000;
+      first.payload_length = 64;
+      first.payload_checksum.fill(std::byte{0x12});
+
+      FrameSummary second{};
+      second.id = 1;
+      second.payload_offset = 9'000;
+      second.payload_length = 80;
+      second.payload_checksum.fill(std::byte{0x34});
+      second.canonical_encoding = 2;
+      second.canonical_length = 120;
+      std::array<std::byte, 32> second_stored{};
+      second_stored.fill(std::byte{0x56});
+      second.stored_checksum = second_stored;
+
+      const std::array base_frames{first, second};
+      const auto baseline = EncodeTocV1(base_frames);
+      constexpr std::uint64_t kFuzzSeed = 0xD17A5EEDBADC0FFEULL;
+      constexpr std::size_t kFuzzIterations = 512;
+      std::uint64_t rng = kFuzzSeed;
+      std::size_t success_count = 0;
+      std::size_t throw_count = 0;
+
+      for (std::size_t i = 0; i < kFuzzIterations; ++i) {
+        auto toc = baseline;
+        const std::uint64_t mode = NextRandom(rng) % 5ULL;
+        if (mode == 0ULL) {
+          if (!toc.empty()) {
+            const std::size_t idx = static_cast<std::size_t>(NextRandom(rng) % toc.size());
+            toc[idx] ^= static_cast<std::byte>((NextRandom(rng) % 255ULL) + 1ULL);
+          }
+        } else if (mode == 1ULL) {
+          if (!toc.empty()) {
+            const std::size_t flips = static_cast<std::size_t>((NextRandom(rng) % 4ULL) + 2ULL);
+            for (std::size_t flip = 0; flip < flips; ++flip) {
+              const std::size_t idx = static_cast<std::size_t>(NextRandom(rng) % toc.size());
+              toc[idx] ^= static_cast<std::byte>((NextRandom(rng) % 255ULL) + 1ULL);
+            }
+          }
+        } else if (mode == 2ULL) {
+          if (toc.size() > 1) {
+            const std::size_t min_size = 1;
+            const std::size_t max_trim = toc.size() - min_size;
+            const std::size_t trim = static_cast<std::size_t>((NextRandom(rng) % max_trim) + 1ULL);
+            toc.resize(toc.size() - trim);
+          }
+        } else if (mode == 3ULL) {
+          const std::size_t append_count = static_cast<std::size_t>((NextRandom(rng) % 24ULL) + 1ULL);
+          for (std::size_t a = 0; a < append_count; ++a) {
+            toc.push_back(static_cast<std::byte>(NextRandom(rng) & 0xFFULL));
+          }
+        } else {
+          if (toc.size() >= 12) {
+            WriteLE32(toc, 8, static_cast<std::uint32_t>(NextRandom(rng) & 0xFFFFFFFFULL));
+          }
+        }
+
+        if (toc.size() >= 32 && (NextRandom(rng) & 1ULL) == 0ULL) {
+          ResignToc(toc);
+        }
+
+        try {
+          const auto decoded = DecodeToc(toc);
+          if (decoded.frames.size() != decoded.frame_count) {
+            throw std::runtime_error("decoded frame count mismatch");
+          }
+          ++success_count;
+        } catch (const std::exception&) {
+          ++throw_count;
+        }
+      }
+
+      waxcpp::tests::LogKV("toc_fuzz_seed", kFuzzSeed);
+      waxcpp::tests::LogKV("toc_fuzz_iterations", static_cast<std::uint64_t>(kFuzzIterations));
+      waxcpp::tests::LogKV("toc_fuzz_success_count", static_cast<std::uint64_t>(success_count));
+      waxcpp::tests::LogKV("toc_fuzz_throw_count", static_cast<std::uint64_t>(throw_count));
+      if (throw_count == 0 || success_count == 0) {
+        throw std::runtime_error("TOC fuzz expected both valid decodes and rejected mutations");
+      }
+      waxcpp::tests::Log("scenario passed: deterministic TOC fuzz mutations");
     }
 
     waxcpp::tests::Log("mv2s_format_test: finished");
