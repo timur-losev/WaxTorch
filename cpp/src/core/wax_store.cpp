@@ -710,6 +710,7 @@ void WaxStore::PutEmbeddingBatch(const std::vector<std::uint64_t>& frame_ids,
   wal_checkpoint_count_ = writer.checkpoint_count();
   wal_sentinel_write_count_ = writer.sentinel_write_count();
   wal_write_call_count_ = writer.write_call_count();
+  wal_pending_embedding_mutations_ += static_cast<std::uint64_t>(frame_ids.size());
   dirty_ = true;
   has_local_mutations_ = true;
 }
@@ -970,6 +971,7 @@ void WaxStore::Commit() {
   wal_checkpoint_count_ = writer.checkpoint_count();
   wal_sentinel_write_count_ = writer.sentinel_write_count();
   wal_write_call_count_ = writer.write_call_count();
+  wal_pending_embedding_mutations_ = 0;
   footer_offset_ = footer_offset;
   dirty_ = false;
   has_local_mutations_ = false;
@@ -1011,6 +1013,7 @@ WaxWALStats WaxStore::WalStats() const {
   stats.sentinel_write_count = wal_sentinel_write_count_;
   stats.write_call_count = wal_write_call_count_;
   stats.auto_commit_count = wal_auto_commit_count_;
+  stats.pending_embedding_mutations = wal_pending_embedding_mutations_;
   stats.replay_snapshot_hit_count = wal_replay_snapshot_hit_count_;
   return stats;
 }
@@ -1203,26 +1206,29 @@ void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
 
   std::uint64_t required_end = footer_slice->footer_offset + core::mv2s::kFooterSize;
   std::uint64_t pending_put_frames = 0;
+  std::uint64_t pending_embedding_mutations = 0;
   std::uint64_t pending_max_frame_id_plus_one = toc_summary.frames.size();
   for (const auto& mutation : pending_mutations) {
-    if (!mutation.put_frame.has_value()) {
-      continue;
+    if (mutation.put_embedding.has_value()) {
+      ++pending_embedding_mutations;
     }
-    ++pending_put_frames;
-    const auto& put = *mutation.put_frame;
-    if (put.frame_id == std::numeric_limits<std::uint64_t>::max()) {
-      throw StoreError("pending WAL putFrame frame_id overflow");
-    }
-    const auto put_next = put.frame_id + 1;
-    if (put_next > pending_max_frame_id_plus_one) {
-      pending_max_frame_id_plus_one = put_next;
-    }
-    if (put.payload_offset > std::numeric_limits<std::uint64_t>::max() - put.payload_length) {
-      throw StoreError("pending WAL putFrame payload range overflow");
-    }
-    const auto end = put.payload_offset + put.payload_length;
-    if (end > required_end) {
-      required_end = end;
+    if (mutation.put_frame.has_value()) {
+      ++pending_put_frames;
+      const auto& put = *mutation.put_frame;
+      if (put.frame_id == std::numeric_limits<std::uint64_t>::max()) {
+        throw StoreError("pending WAL putFrame frame_id overflow");
+      }
+      const auto put_next = put.frame_id + 1;
+      if (put_next > pending_max_frame_id_plus_one) {
+        pending_max_frame_id_plus_one = put_next;
+      }
+      if (put.payload_offset > std::numeric_limits<std::uint64_t>::max() - put.payload_length) {
+        throw StoreError("pending WAL putFrame payload range overflow");
+      }
+      const auto end = put.payload_offset + put.payload_length;
+      if (end > required_end) {
+        required_end = end;
+      }
     }
   }
   if (required_end > file_size) {
@@ -1251,6 +1257,7 @@ void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
   wal_sentinel_write_count_ = 0;
   wal_write_call_count_ = 0;
   wal_auto_commit_count_ = 0;
+  wal_pending_embedding_mutations_ = pending_embedding_mutations;
   wal_replay_snapshot_hit_count_ = used_replay_snapshot ? 1U : 0U;
   footer_offset_ = footer_slice->footer_offset;
   next_frame_id_ = pending_max_frame_id_plus_one;

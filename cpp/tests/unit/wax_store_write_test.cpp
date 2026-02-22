@@ -167,6 +167,8 @@ void RunScenarioPutEmbeddingContracts(const std::filesystem::path& path) {
   Require(staged_stats.pending_frames == pre_stats.pending_frames,
           "putEmbedding must not affect pending_frames counter");
   Require(staged_wal.last_seq > pre_wal.last_seq, "putEmbedding must append WAL mutation");
+  Require(staged_wal.pending_embedding_mutations == 1,
+          "putEmbedding must increase pending_embedding_mutations");
 
   store.Commit();
   const auto after_commit = store.Stats();
@@ -176,6 +178,8 @@ void RunScenarioPutEmbeddingContracts(const std::filesystem::path& path) {
   Require(after_commit.pending_frames == 0, "commit should clear pending WAL state");
   Require(after_commit_wal.committed_seq >= staged_wal.last_seq,
           "commit should checkpoint putEmbedding WAL sequence");
+  Require(after_commit_wal.pending_embedding_mutations == 0,
+          "commit should clear pending_embedding_mutations");
   store.Close();
 
   bool threw = false;
@@ -222,8 +226,11 @@ void RunScenarioPendingEmbeddingSnapshot(const std::filesystem::path& path) {
   store.PutEmbeddingBatch({frame_ids[1], frame_ids[2]}, {{0.3F, 0.4F}, {0.5F, 0.6F}});
 
   const auto snapshot = store.PendingEmbeddingMutations();
+  const auto wal_stats = store.WalStats();
   Require(snapshot.embeddings.size() == 3, "expected three pending embeddings");
   Require(snapshot.latest_sequence.has_value(), "expected latest_sequence for pending embeddings");
+  Require(wal_stats.pending_embedding_mutations == 3,
+          "pending_embedding_mutations should match pending embedding snapshot size");
   bool has_frame0 = false;
   bool has_frame1 = false;
   bool has_frame2 = false;
@@ -253,8 +260,11 @@ void RunScenarioPendingEmbeddingSnapshot(const std::filesystem::path& path) {
 
   store.Commit();
   const auto after_commit = store.PendingEmbeddingMutations();
+  const auto after_commit_wal = store.WalStats();
   Require(after_commit.embeddings.empty(), "commit should clear pending embedding mutations");
   Require(!after_commit.latest_sequence.has_value(), "latest_sequence should be empty after embedding commit");
+  Require(after_commit_wal.pending_embedding_mutations == 0,
+          "commit should reset pending_embedding_mutations");
   store.Close();
 }
 
@@ -277,8 +287,11 @@ void RunScenarioPendingEmbeddingSnapshotReopenRecovery(const std::filesystem::pa
     Require(stats.pending_frames == 0, "embedding-only pending should not affect pending_frames counter");
 
     const auto snapshot = reopened.PendingEmbeddingMutations();
+    const auto wal_stats = reopened.WalStats();
     Require(snapshot.embeddings.size() == 1, "expected one recovered pending embedding");
     Require(snapshot.latest_sequence.has_value(), "expected latest sequence for recovered pending embedding");
+    Require(wal_stats.pending_embedding_mutations == 1,
+            "reopen should restore pending_embedding_mutations from WAL state");
     Require(snapshot.embeddings[0].frame_id == persisted_frame_id, "unexpected recovered pending embedding frame_id");
     Require(snapshot.embeddings[0].vector.size() == 2, "unexpected recovered embedding vector size");
     first_latest = snapshot.latest_sequence;
@@ -294,7 +307,10 @@ void RunScenarioPendingEmbeddingSnapshotReopenRecovery(const std::filesystem::pa
     Require(snapshot.latest_sequence == first_latest, "recovered pending embedding sequence must remain stable");
     reopened_again.Commit();
     const auto after_commit = reopened_again.PendingEmbeddingMutations();
+    const auto after_commit_wal = reopened_again.WalStats();
     Require(after_commit.embeddings.empty(), "commit should clear recovered pending embedding");
+    Require(after_commit_wal.pending_embedding_mutations == 0,
+            "commit should clear recovered pending_embedding_mutations");
     reopened_again.Close();
   }
 }
