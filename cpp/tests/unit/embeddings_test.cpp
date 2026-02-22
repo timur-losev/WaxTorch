@@ -181,6 +181,11 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(info.selected_backend == "fallback_cpu", "fallback backend should report fallback_cpu");
     if (info.libtorch_manifest_detected) {
       Require(info.libtorch_manifest_path.has_value(), "manifest path should be present when detected");
+      Require(info.libtorch_selected_artifact_path.has_value(),
+              "selected artifact path should be present when manifest is detected");
+    } else {
+      Require(!info.libtorch_selected_artifact_path.has_value(),
+              "selected artifact path should be empty without detected manifest");
     }
   }
 
@@ -325,6 +330,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(info.libtorch_manifest_path.has_value(), "manifest override path should be preserved");
     Require(*info.libtorch_manifest_path == std::filesystem::absolute(temp_manifest).string(),
             "manifest override absolute path mismatch");
+    Require(info.libtorch_selected_artifact_path.has_value(),
+            "single cpu manifest should select cpu artifact path");
+    Require(*info.libtorch_selected_artifact_path == "libtorch-cpu.zip",
+            "single cpu manifest selected artifact mismatch");
   }
 
   {
@@ -340,6 +349,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(info.cuda_preferred_requested, "cuda-preferred runtime should remain requested with mixed manifest");
     Require(info.selected_backend == "fallback_cuda",
             "cuda-preferred runtime with CUDA artifacts and runtime availability should choose fallback_cuda");
+    Require(info.libtorch_selected_artifact_path.has_value(),
+            "cpu-cuda manifest should select cuda artifact in fallback_cuda mode");
+    Require(*info.libtorch_selected_artifact_path == "libtorch-cuda121.zip",
+            "cpu-cuda manifest selected cuda artifact mismatch");
   }
 
   {
@@ -352,6 +365,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(info.libtorch_manifest_cuda_artifact_count == 1, "cpu-cuda manifest should still report cuda artifacts");
     Require(info.selected_backend == "fallback_cpu",
             "cpu_only runtime policy must keep fallback_cpu even when CUDA is available");
+    Require(info.libtorch_selected_artifact_path.has_value(),
+            "cpu_only runtime should still select cpu artifact from mixed manifest");
+    Require(*info.libtorch_selected_artifact_path == "libtorch-cpu.zip",
+            "cpu_only runtime selected artifact mismatch");
   }
 
   {
@@ -363,6 +380,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(!info.cuda_runtime_available, "default runtime should not assume CUDA availability");
     Require(info.selected_backend == "fallback_cpu",
             "cuda-preferred runtime without available CUDA must keep fallback_cpu backend");
+    Require(info.libtorch_selected_artifact_path.has_value(),
+            "cuda-preferred without runtime availability should select cpu artifact");
+    Require(*info.libtorch_selected_artifact_path == "libtorch-cpu.zip",
+            "fallback_cpu runtime selected artifact mismatch");
   }
 
   {
@@ -375,6 +396,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(!info.libtorch_manifest_detected, "missing override path should not mark manifest as detected");
     Require(info.selected_backend == "fallback_cuda",
             "cuda-preferred runtime with CUDA availability and no detected manifest should use fallback_cuda");
+    Require(!info.libtorch_selected_artifact_path.has_value(),
+            "selected artifact path should be empty when manifest override is missing");
   }
 
   {
@@ -387,6 +410,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(info.libtorch_manifest_cuda_artifact_count == 0, "cpu-only manifest should report zero cuda artifacts");
     Require(info.selected_backend == "fallback_cpu",
             "cuda-preferred runtime should fall back to CPU when manifest lacks CUDA artifacts");
+    Require(info.libtorch_selected_artifact_path.has_value(),
+            "cpu-only manifest should select cpu artifact path");
+    Require(*info.libtorch_selected_artifact_path == "libtorch-cpu.zip",
+            "cpu-only manifest selected artifact mismatch");
   }
 
   {
@@ -401,6 +428,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(info.libtorch_manifest_cuda_artifact_count == 1, "alias-fields manifest should report one cuda artifact");
     Require(info.selected_backend == "fallback_cuda",
             "cuda-preferred runtime should accept file/sha256sum alias fields for cuda routing");
+    Require(info.libtorch_selected_artifact_path.has_value(),
+            "alias-fields manifest should select cuda artifact path");
+    Require(*info.libtorch_selected_artifact_path == "libtorch-cuda124.zip",
+            "alias-fields selected artifact mismatch");
   }
 
   {
@@ -411,6 +442,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(info.libtorch_manifest_artifact_count == 1, "root-array manifest should report one artifact");
     Require(info.libtorch_manifest_cpu_artifact_count == 1, "root-array manifest should report one cpu artifact");
     Require(info.libtorch_manifest_cuda_artifact_count == 0, "root-array manifest should report zero cuda artifacts");
+    Require(info.libtorch_selected_artifact_path.has_value(),
+            "root-array manifest should select artifact path");
+    Require(*info.libtorch_selected_artifact_path == "libtorch-cpu.zip",
+            "root-array selected artifact mismatch");
   }
 
   {
@@ -563,6 +598,9 @@ void ScenarioRuntimeInfoSnapshotStability() {
   Require(before.libtorch_manifest_artifact_count == after_single.libtorch_manifest_artifact_count &&
               after_single.libtorch_manifest_artifact_count == after_batch.libtorch_manifest_artifact_count,
           "manifest artifact count should remain stable after embedding calls");
+  Require(before.libtorch_selected_artifact_path == after_single.libtorch_selected_artifact_path &&
+              after_single.libtorch_selected_artifact_path == after_batch.libtorch_selected_artifact_path,
+          "selected artifact path should remain stable after embedding calls");
 }
 
 }  // namespace

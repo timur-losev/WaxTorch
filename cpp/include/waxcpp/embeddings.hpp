@@ -31,6 +31,7 @@ struct MiniLMRuntimeInfo {
   std::size_t libtorch_manifest_cpu_artifact_count = 0;
   std::size_t libtorch_manifest_cuda_artifact_count = 0;
   std::optional<std::string> libtorch_manifest_path;
+  std::optional<std::string> libtorch_selected_artifact_path;
 };
 
 class EmbeddingProvider {
