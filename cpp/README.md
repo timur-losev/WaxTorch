@@ -44,6 +44,12 @@ export WAXCPP_LIBTORCH_MANIFEST=/abs/path/to/libtorch-manifest.json
 
 # Require manifest presence during MiniLM embedder construction
 export WAXCPP_REQUIRE_LIBTORCH_MANIFEST=1
+
+# Optional: override root directory used to resolve selected artifact relative paths
+export WAXCPP_LIBTORCH_DIST_ROOT=/abs/path/to/cpp/third_party/libtorch-dist
+
+# Optional: require selected artifact file checksum verification against manifest sha256
+export WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256=1
 ```
 
 SQLite backend (optional, currently disabled by default in favor of WAL-focused track):
