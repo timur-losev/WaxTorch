@@ -531,6 +531,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/scripts/verify_submodules.py` | Added `--require-checksum-submodules-present` strict mode to fail when checksum-verified submodule checkouts are missing locally | Codex |
 | `.github/workflows/cpp-ci.yml` | Switched dependency verification steps to strict presence mode for checksum-verified submodules | Codex |
 | `cpp/README.md` | Documented strict dependency verification command for CI-style local checks (`--require-checksum-submodules-present`) | Codex |
+| `cpp/src/rag/embeddings.cpp` | Hardened selected-artifact path resolution against path traversal by enforcing root containment (`WAXCPP_LIBTORCH_DIST_ROOT` / manifest roots) before file resolution | Codex |
+| `cpp/tests/unit/embeddings_test.cpp` | Added regression ensuring checksum gate rejects manifest artifact paths that escape dist root (`..` traversal) even when escaped file exists and hash matches | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

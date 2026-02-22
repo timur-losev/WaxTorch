@@ -52,6 +52,8 @@ export WAXCPP_LIBTORCH_DIST_ROOT=/abs/path/to/cpp/third_party/libtorch-dist
 export WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256=1
 ```
 
+Note: when `WAXCPP_LIBTORCH_DIST_ROOT` is set, selected artifact paths are constrained to that root (no `..` escape).
+
 Libtorch manifest checksum gate test (requires initialized `cpp/third_party/libtorch-dist`):
 ```bash
 export WAXCPP_REQUIRE_LIBTORCH_MANIFEST=1

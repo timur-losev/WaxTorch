@@ -441,30 +441,96 @@ std::string ComputeFileSha256Hex(const std::filesystem::path& path) {
   return HexLower(std::span<const std::byte>(digest.data(), digest.size()));
 }
 
+bool PathElementEqual(const std::filesystem::path& lhs, const std::filesystem::path& rhs) {
+#ifdef _WIN32
+  return ToAsciiLowerString(lhs.generic_string()) == ToAsciiLowerString(rhs.generic_string());
+#else
+  return lhs == rhs;
+#endif
+}
+
+std::filesystem::path NormalizeAbsolutePath(const std::filesystem::path& path) {
+  std::error_code ec{};
+  auto normalized = std::filesystem::weakly_canonical(path, ec);
+  if (ec) {
+    normalized = std::filesystem::absolute(path, ec);
+    if (ec) {
+      return path.lexically_normal();
+    }
+  }
+  return normalized.lexically_normal();
+}
+
+bool IsPathWithinRoot(const std::filesystem::path& candidate, const std::filesystem::path& root) {
+  const auto normalized_candidate = NormalizeAbsolutePath(candidate);
+  const auto normalized_root = NormalizeAbsolutePath(root);
+
+  if (normalized_root.empty()) {
+    return false;
+  }
+
+  auto candidate_it = normalized_candidate.begin();
+  auto root_it = normalized_root.begin();
+  for (; root_it != normalized_root.end(); ++root_it, ++candidate_it) {
+    if (candidate_it == normalized_candidate.end()) {
+      return false;
+    }
+    if (!PathElementEqual(*candidate_it, *root_it)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::optional<std::filesystem::path> ResolveSelectedArtifactPath(
     const std::filesystem::path& manifest_path,
     std::string_view relative_or_absolute_artifact_path) {
   const std::filesystem::path artifact_path(relative_or_absolute_artifact_path);
+  const auto dist_root = GetEnvValue("WAXCPP_LIBTORCH_DIST_ROOT");
   if (artifact_path.is_absolute()) {
+    if (dist_root.has_value()) {
+      const auto root = std::filesystem::path(*dist_root);
+      if (!IsPathWithinRoot(artifact_path, root)) {
+        return std::nullopt;
+      }
+    }
     if (std::filesystem::exists(artifact_path) && std::filesystem::is_regular_file(artifact_path)) {
-      return std::filesystem::absolute(artifact_path);
+      return NormalizeAbsolutePath(artifact_path);
     }
     return std::nullopt;
   }
 
-  std::vector<std::filesystem::path> candidates{};
-  if (const auto dist_root = GetEnvValue("WAXCPP_LIBTORCH_DIST_ROOT"); dist_root.has_value()) {
-    candidates.push_back(std::filesystem::path(*dist_root) / artifact_path);
+  struct RootedCandidate {
+    std::filesystem::path candidate;
+    std::filesystem::path root;
+  };
+
+  std::vector<RootedCandidate> candidates{};
+  if (dist_root.has_value()) {
+    const auto root = std::filesystem::path(*dist_root);
+    candidates.push_back(RootedCandidate{
+        .candidate = root / artifact_path,
+        .root = root,
+    });
   }
   const auto manifest_dir = manifest_path.parent_path();
-  candidates.push_back(manifest_dir / artifact_path);
+  candidates.push_back(RootedCandidate{
+      .candidate = manifest_dir / artifact_path,
+      .root = manifest_dir,
+  });
   if (manifest_dir.has_parent_path()) {
-    candidates.push_back(manifest_dir.parent_path() / artifact_path);
+    candidates.push_back(RootedCandidate{
+        .candidate = manifest_dir.parent_path() / artifact_path,
+        .root = manifest_dir.parent_path(),
+    });
   }
 
   for (const auto& candidate : candidates) {
-    if (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate)) {
-      return std::filesystem::absolute(candidate);
+    if (!IsPathWithinRoot(candidate.candidate, candidate.root)) {
+      continue;
+    }
+    if (std::filesystem::exists(candidate.candidate) && std::filesystem::is_regular_file(candidate.candidate)) {
+      return NormalizeAbsolutePath(candidate.candidate);
     }
   }
   return std::nullopt;

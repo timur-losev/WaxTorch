@@ -283,10 +283,13 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   const auto artifact_root =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_dist_root";
   const auto artifact_file = artifact_root / "cpu" / "libtorch-cpu.zip";
+  const auto artifact_manifest_dir = artifact_root / "manifest";
+  const auto artifact_escape_file = artifact_root.parent_path() / "waxcpp_test_libtorch_escape.bin";
   const auto artifact_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_artifact.json";
   const auto artifact_bad_sha_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_artifact_bad_sha.json";
+  const auto artifact_escape_manifest = artifact_manifest_dir / "manifest_escape.json";
   {
     std::ofstream out(temp_manifest, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
@@ -425,6 +428,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     if (mkdir_ec) {
       throw std::runtime_error("failed to create test artifact directory");
     }
+    std::filesystem::create_directories(artifact_manifest_dir, mkdir_ec);
+    if (mkdir_ec) {
+      throw std::runtime_error("failed to create test artifact manifest directory");
+    }
     std::ofstream artifact_out(artifact_file, std::ios::binary | std::ios::trunc);
     if (!artifact_out.is_open()) {
       throw std::runtime_error("failed to create test artifact file");
@@ -444,6 +451,20 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       throw std::runtime_error("failed to create bad artifact sha manifest file");
     }
     out << R"({"artifacts":[{"path":"cpu/libtorch-cpu.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]})";
+  }
+  {
+    std::ofstream outside_out(artifact_escape_file, std::ios::binary | std::ios::trunc);
+    if (!outside_out.is_open()) {
+      throw std::runtime_error("failed to create escape artifact file");
+    }
+    outside_out << "abc";
+  }
+  {
+    std::ofstream out(artifact_escape_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create escape artifact manifest file");
+    }
+    out << R"({"artifacts":[{"path":"../waxcpp_test_libtorch_escape.bin","sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}]})";
   }
 
   {
@@ -984,6 +1005,20 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_escape_manifest.string());
+    const ScopedEnvVar set_dist_root("WAXCPP_LIBTORCH_DIST_ROOT", artifact_root.string());
+    const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::string("1"));
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "checksum gate should reject selected artifact path traversal outside dist root");
+  }
+
+  {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_manifest.string());
     const ScopedEnvVar set_dist_root("WAXCPP_LIBTORCH_DIST_ROOT", artifact_root.string());
     const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::nullopt);
@@ -1017,8 +1052,11 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(root_array_manifest, ec);
   std::filesystem::remove(artifact_manifest, ec);
   std::filesystem::remove(artifact_bad_sha_manifest, ec);
+  std::filesystem::remove(artifact_escape_manifest, ec);
+  std::filesystem::remove(artifact_escape_file, ec);
   std::filesystem::remove(artifact_file, ec);
   std::filesystem::remove(artifact_file.parent_path(), ec);
+  std::filesystem::remove(artifact_manifest_dir, ec);
   std::filesystem::remove(artifact_root, ec);
 }
 
