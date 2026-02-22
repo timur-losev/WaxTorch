@@ -15,6 +15,8 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <mutex>
+#include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
@@ -39,6 +41,32 @@ std::atomic<std::uint32_t> g_test_commit_fail_step{0};
 
 std::runtime_error StoreError(const std::string& message) {
   return std::runtime_error("wax_store: " + message);
+}
+
+std::string NormalizeStorePathKey(const std::filesystem::path& store_path) {
+  std::error_code ec;
+  const auto absolute = std::filesystem::absolute(store_path, ec);
+  if (ec) {
+    return store_path.lexically_normal().string();
+  }
+  return absolute.lexically_normal().string();
+}
+
+std::mutex g_process_writer_leases_mutex;
+std::unordered_set<std::string> g_process_writer_leases;
+
+std::string AcquireProcessWriterLease(const std::filesystem::path& store_path) {
+  const auto key = NormalizeStorePathKey(store_path);
+  std::lock_guard<std::mutex> lock(g_process_writer_leases_mutex);
+  if (!g_process_writer_leases.insert(key).second) {
+    throw StoreError("writer lease already held: " + key);
+  }
+  return key;
+}
+
+void ReleaseProcessWriterLease(const std::string& key) {
+  std::lock_guard<std::mutex> lock(g_process_writer_leases_mutex);
+  g_process_writer_leases.erase(key);
 }
 
 std::filesystem::path WriterLeasePathForStore(const std::filesystem::path& store_path) {
@@ -73,6 +101,8 @@ std::string OsErrorMessage(int code) {
 }
 
 std::shared_ptr<void> AcquireWriterLease(const std::filesystem::path& store_path) {
+  // POSIX fcntl locks are process-scoped, so enforce same-process exclusivity explicitly.
+  const auto process_lease_key = AcquireProcessWriterLease(store_path);
   const auto lease_path = WriterLeasePathForStore(store_path);
 #ifdef _WIN32
   HANDLE handle = ::CreateFileW(lease_path.c_str(),
@@ -84,6 +114,7 @@ std::shared_ptr<void> AcquireWriterLease(const std::filesystem::path& store_path
                                 nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
     const auto code = static_cast<int>(::GetLastError());
+    ReleaseProcessWriterLease(process_lease_key);
     throw StoreError("failed to open writer lease file at " + lease_path.string() + ": " + OsErrorMessage(code));
   }
 
@@ -96,13 +127,14 @@ std::shared_ptr<void> AcquireWriterLease(const std::filesystem::path& store_path
                     &overlapped)) {
     const auto code = static_cast<int>(::GetLastError());
     ::CloseHandle(handle);
+    ReleaseProcessWriterLease(process_lease_key);
     if (code == ERROR_LOCK_VIOLATION) {
       throw StoreError("writer lease already held: " + lease_path.string());
     }
     throw StoreError("failed to acquire writer lease at " + lease_path.string() + ": " + OsErrorMessage(code));
   }
 
-  return std::shared_ptr<void>(new HANDLE(handle), [](void* raw) {
+  return std::shared_ptr<void>(new HANDLE(handle), [process_lease_key](void* raw) {
     auto* handle_ptr = static_cast<HANDLE*>(raw);
     if (handle_ptr != nullptr && *handle_ptr != INVALID_HANDLE_VALUE) {
       OVERLAPPED overlapped{};
@@ -113,12 +145,14 @@ std::shared_ptr<void> AcquireWriterLease(const std::filesystem::path& store_path
                            &overlapped);
       (void)::CloseHandle(*handle_ptr);
     }
+    ReleaseProcessWriterLease(process_lease_key);
     delete handle_ptr;
   });
 #else
   const int fd = ::open(lease_path.c_str(), O_RDWR | O_CREAT, 0666);
   if (fd < 0) {
     const int code = errno;
+    ReleaseProcessWriterLease(process_lease_key);
     throw StoreError("failed to open writer lease file at " + lease_path.string() + ": " + OsErrorMessage(code));
   }
 
@@ -131,13 +165,14 @@ std::shared_ptr<void> AcquireWriterLease(const std::filesystem::path& store_path
   if (::fcntl(fd, F_SETLK, &lock) == -1) {
     const int code = errno;
     (void)::close(fd);
+    ReleaseProcessWriterLease(process_lease_key);
     if (code == EACCES || code == EAGAIN) {
       throw StoreError("writer lease already held: " + lease_path.string());
     }
     throw StoreError("failed to acquire writer lease at " + lease_path.string() + ": " + OsErrorMessage(code));
   }
 
-  return std::shared_ptr<void>(new int(fd), [lease_path](void* raw) {
+  return std::shared_ptr<void>(new int(fd), [lease_path, process_lease_key](void* raw) {
     auto* fd_ptr = static_cast<int*>(raw);
     if (fd_ptr != nullptr && *fd_ptr >= 0) {
       struct flock unlock {};
@@ -149,6 +184,7 @@ std::shared_ptr<void> AcquireWriterLease(const std::filesystem::path& store_path
       (void)::close(*fd_ptr);
       (void)::unlink(lease_path.c_str());
     }
+    ReleaseProcessWriterLease(process_lease_key);
     delete fd_ptr;
   });
 #endif
