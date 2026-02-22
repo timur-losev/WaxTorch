@@ -74,6 +74,26 @@ void ScenarioBatchParity() {
   }
 }
 
+void ScenarioMemoizationCapacity() {
+  waxcpp::tests::Log("scenario: memoization capacity");
+  waxcpp::MiniLMEmbedderTorch cached_embedder(2);
+  const auto first_a = cached_embedder.Embed("alpha");
+  const auto second_a = cached_embedder.Embed("alpha");
+  Require(first_a == second_a, "memoized embedding must remain deterministic");
+  Require(cached_embedder.cache_size() == 1, "repeated key should not increase cache size");
+
+  (void)cached_embedder.Embed("beta");
+  Require(cached_embedder.cache_size() == 2, "second unique key should fill cache");
+  (void)cached_embedder.Embed("gamma");
+  Require(cached_embedder.cache_size() == 2, "cache should enforce capacity bound");
+  const auto third_a = cached_embedder.Embed("alpha");
+  Require(third_a == first_a, "evicted key recomputation should remain deterministic");
+
+  waxcpp::MiniLMEmbedderTorch uncached_embedder(0);
+  (void)uncached_embedder.Embed("alpha");
+  Require(uncached_embedder.cache_size() == 0, "zero-capacity embedder should not memoize");
+}
+
 }  // namespace
 
 int main() {
@@ -83,6 +103,7 @@ int main() {
     ScenarioDeterministicEmbedding();
     ScenarioNormalizationAndEmptyInput();
     ScenarioBatchParity();
+    ScenarioMemoizationCapacity();
     waxcpp::tests::Log("embeddings_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

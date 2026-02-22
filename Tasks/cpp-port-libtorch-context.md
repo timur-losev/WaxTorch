@@ -179,6 +179,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add MV2V vector-segment codec baseline (`MV2V` header detect/encode/decode for `uSearch` and `metal`) with deterministic unit coverage
 - [x] Integrate MV2V metal-segment roundtrip into `USearchVectorEngine` (`SerializeMetalSegment` / `LoadMetalSegment`) with dimension/encoding validation tests
 - [x] Extend deep `WaxStore::Verify(true)` for uncompressed vec segments: checksum + MV2V layout validation (including reserved/version/length contract checks)
+- [x] Add `MiniLMEmbedderTorch` memoization cache (capacity-bounded) and unit coverage for deterministic cache behavior
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

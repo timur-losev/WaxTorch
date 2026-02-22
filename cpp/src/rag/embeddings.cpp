@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace waxcpp {
@@ -60,7 +63,8 @@ void NormalizeL2(std::vector<float>& v) {
 
 }  // namespace
 
-MiniLMEmbedderTorch::MiniLMEmbedderTorch() = default;
+MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
+    : memoization_capacity_(memoization_capacity) {}
 
 int MiniLMEmbedderTorch::dimensions() const {
   return 384;
@@ -80,6 +84,13 @@ std::optional<EmbeddingIdentity> MiniLMEmbedderTorch::identity() const {
 }
 
 std::vector<float> MiniLMEmbedderTorch::Embed(const std::string& text) {
+  if (memoization_capacity_ > 0) {
+    const auto cached = memoized_embeddings_.find(text);
+    if (cached != memoized_embeddings_.end()) {
+      return cached->second;
+    }
+  }
+
   constexpr int kDims = 384;
   std::vector<float> embedding(static_cast<std::size_t>(kDims), 0.0F);
 
@@ -94,6 +105,17 @@ std::vector<float> MiniLMEmbedderTorch::Embed(const std::string& text) {
   if (normalize()) {
     NormalizeL2(embedding);
   }
+
+  if (memoization_capacity_ > 0) {
+    while (memoized_embeddings_.size() >= memoization_capacity_ && !memoization_order_.empty()) {
+      const auto& key = memoization_order_.front();
+      memoized_embeddings_.erase(key);
+      memoization_order_.pop_front();
+    }
+    memoization_order_.push_back(text);
+    memoized_embeddings_[text] = embedding;
+  }
+
   return embedding;
 }
 
@@ -104,6 +126,10 @@ std::vector<std::vector<float>> MiniLMEmbedderTorch::EmbedBatch(const std::vecto
     out.push_back(Embed(text));
   }
   return out;
+}
+
+std::size_t MiniLMEmbedderTorch::cache_size() const {
+  return memoized_embeddings_.size();
 }
 
 }  // namespace waxcpp
