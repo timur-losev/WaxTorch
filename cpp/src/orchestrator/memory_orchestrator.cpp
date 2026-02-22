@@ -43,6 +43,15 @@ inline constexpr std::array<std::byte, 6> kEmbeddingRecordMagic = {
     std::byte{'1'},
 };
 
+inline constexpr std::array<std::byte, 6> kEmbeddingRecordMagicV2 = {
+    std::byte{'W'},
+    std::byte{'A'},
+    std::byte{'X'},
+    std::byte{'E'},
+    std::byte{'M'},
+    std::byte{'2'},
+};
+
 enum class StructuredFactOpcode : std::uint8_t {
   kUpsert = 1,
   kRemove = 2,
@@ -59,6 +68,7 @@ struct StructuredFactRecord {
 struct EmbeddingRecord {
   std::uint64_t frame_id = 0;
   std::vector<float> embedding;
+  std::optional<std::string> identity_tag{};
 };
 
 void AppendU8(std::vector<std::byte>& out, std::uint8_t value) {
@@ -126,15 +136,54 @@ std::vector<std::byte> BuildStructuredFactRemovePayload(const std::string& entit
   return out;
 }
 
-std::vector<std::byte> BuildEmbeddingRecordPayload(std::uint64_t frame_id, const std::vector<float>& embedding) {
+std::optional<std::string> BuildEmbeddingIdentityTag(const std::optional<EmbeddingIdentity>& identity) {
+  if (!identity.has_value()) {
+    return std::nullopt;
+  }
+
+  std::string out{};
+  out.reserve(96);
+  out.append("provider=");
+  out.append(identity->provider.value_or(""));
+  out.append(";model=");
+  out.append(identity->model.value_or(""));
+  out.append(";dimensions=");
+  if (identity->dimensions.has_value()) {
+    out.append(std::to_string(*identity->dimensions));
+  }
+  out.append(";normalized=");
+  if (identity->normalized.has_value()) {
+    out.append(*identity->normalized ? "true" : "false");
+  }
+  return out;
+}
+
+std::vector<std::byte> BuildEmbeddingRecordPayload(std::uint64_t frame_id,
+                                                   const std::vector<float>& embedding,
+                                                   const std::optional<std::string>& identity_tag) {
   if (embedding.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
     throw std::runtime_error("embedding record vector length exceeds uint32");
   }
+  if (identity_tag.has_value() &&
+      identity_tag->size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+    throw std::runtime_error("embedding identity tag exceeds uint32 length");
+  }
   std::vector<std::byte> out{};
-  out.reserve(kEmbeddingRecordMagic.size() + 8 + 4 + embedding.size() * sizeof(float));
-  out.insert(out.end(), kEmbeddingRecordMagic.begin(), kEmbeddingRecordMagic.end());
+  if (identity_tag.has_value()) {
+    out.reserve(kEmbeddingRecordMagicV2.size() + 8 + 4 + 4 + identity_tag->size() + embedding.size() * sizeof(float));
+    out.insert(out.end(), kEmbeddingRecordMagicV2.begin(), kEmbeddingRecordMagicV2.end());
+  } else {
+    out.reserve(kEmbeddingRecordMagic.size() + 8 + 4 + embedding.size() * sizeof(float));
+    out.insert(out.end(), kEmbeddingRecordMagic.begin(), kEmbeddingRecordMagic.end());
+  }
   AppendU64LE(out, frame_id);
   AppendU32LE(out, static_cast<std::uint32_t>(embedding.size()));
+  if (identity_tag.has_value()) {
+    AppendU32LE(out, static_cast<std::uint32_t>(identity_tag->size()));
+    for (const char ch : *identity_tag) {
+      out.push_back(static_cast<std::byte>(static_cast<unsigned char>(ch)));
+    }
+  }
   for (const float value : embedding) {
     AppendF32LE(out, value);
   }
@@ -233,11 +282,17 @@ std::optional<EmbeddingRecord> ParseEmbeddingRecordPayload(const std::vector<std
   if (payload.size() < kEmbeddingRecordMagic.size() + 8 + 4) {
     return std::nullopt;
   }
-  if (!std::equal(kEmbeddingRecordMagic.begin(), kEmbeddingRecordMagic.end(), payload.begin())) {
+  bool is_v1 = false;
+  bool is_v2 = false;
+  if (std::equal(kEmbeddingRecordMagic.begin(), kEmbeddingRecordMagic.end(), payload.begin())) {
+    is_v1 = true;
+  } else if (std::equal(kEmbeddingRecordMagicV2.begin(), kEmbeddingRecordMagicV2.end(), payload.begin())) {
+    is_v2 = true;
+  } else {
     return std::nullopt;
   }
 
-  std::size_t cursor = kEmbeddingRecordMagic.size();
+  std::size_t cursor = is_v2 ? kEmbeddingRecordMagicV2.size() : kEmbeddingRecordMagic.size();
   auto read_u64 = [&]() -> std::optional<std::uint64_t> {
     if (cursor + 8 > payload.size()) {
       return std::nullopt;
@@ -276,6 +331,27 @@ std::optional<EmbeddingRecord> ParseEmbeddingRecordPayload(const std::vector<std
   if (!frame_id.has_value() || !count.has_value()) {
     return std::nullopt;
   }
+
+  std::optional<std::string> identity_tag{};
+  if (is_v2) {
+    const auto identity_len = read_u32();
+    if (!identity_len.has_value()) {
+      return std::nullopt;
+    }
+    if (cursor + *identity_len > payload.size()) {
+      return std::nullopt;
+    }
+    if (*identity_len > 0) {
+      std::string tag{};
+      tag.reserve(*identity_len);
+      for (std::size_t i = 0; i < *identity_len; ++i) {
+        tag.push_back(static_cast<char>(std::to_integer<std::uint8_t>(payload[cursor + i])));
+      }
+      identity_tag = std::move(tag);
+    }
+    cursor += *identity_len;
+  }
+
   std::vector<float> embedding{};
   embedding.reserve(*count);
   for (std::uint32_t i = 0; i < *count; ++i) {
@@ -292,6 +368,7 @@ std::optional<EmbeddingRecord> ParseEmbeddingRecordPayload(const std::vector<std
   EmbeddingRecord record{};
   record.frame_id = *frame_id;
   record.embedding = std::move(embedding);
+  record.identity_tag = std::move(identity_tag);
   return record;
 }
 
@@ -501,7 +578,12 @@ void RebuildTextIndexFromStore(WaxStore& store, FTS5SearchEngine& store_text_ind
 }
 
 struct PersistedEmbeddingSnapshot {
-  std::unordered_map<std::uint64_t, std::vector<float>> by_frame{};
+  struct PersistedEmbedding {
+    std::vector<float> embedding{};
+    std::optional<std::string> identity_tag{};
+  };
+
+  std::unordered_map<std::uint64_t, PersistedEmbedding> by_frame{};
   std::optional<int> dimensions{};
 };
 
@@ -520,7 +602,10 @@ PersistedEmbeddingSnapshot LoadPersistedEmbeddingsFromStore(WaxStore& store) {
     if (!snapshot.dimensions.has_value() && !embedding_record->embedding.empty()) {
       snapshot.dimensions = static_cast<int>(embedding_record->embedding.size());
     }
-    snapshot.by_frame[embedding_record->frame_id] = std::move(embedding_record->embedding);
+    PersistedEmbeddingSnapshot::PersistedEmbedding persisted{};
+    persisted.embedding = std::move(embedding_record->embedding);
+    persisted.identity_tag = std::move(embedding_record->identity_tag);
+    snapshot.by_frame[embedding_record->frame_id] = std::move(persisted);
   }
   return snapshot;
 }
@@ -636,16 +721,23 @@ void RebuildVectorIndexFromStore(WaxStore& store,
   std::vector<std::string> missing_texts{};
   missing_ids.reserve(frame_ids.size());
   missing_texts.reserve(frame_ids.size());
+  const auto current_identity_tag = embedder != nullptr ? BuildEmbeddingIdentityTag(embedder->identity()) : std::nullopt;
 
   for (std::size_t i = 0; i < frame_ids.size(); ++i) {
     const auto persisted_it = persisted_embeddings.by_frame.find(frame_ids[i]);
     if (persisted_it == persisted_embeddings.by_frame.end() ||
-        persisted_it->second.size() != static_cast<std::size_t>(vector_index.dimensions())) {
+        persisted_it->second.embedding.size() != static_cast<std::size_t>(vector_index.dimensions())) {
       missing_ids.push_back(frame_ids[i]);
       missing_texts.push_back(texts[i]);
       continue;
     }
-    vector_index.StageAdd(frame_ids[i], persisted_it->second);
+    if (current_identity_tag.has_value() && persisted_it->second.identity_tag.has_value() &&
+        *persisted_it->second.identity_tag != *current_identity_tag) {
+      missing_ids.push_back(frame_ids[i]);
+      missing_texts.push_back(texts[i]);
+      continue;
+    }
+    vector_index.StageAdd(frame_ids[i], persisted_it->second.embedding);
   }
 
   if (embedder != nullptr && !missing_ids.empty()) {
@@ -686,11 +778,12 @@ void EnsureEmbedderRequiredForRemember(const OrchestratorConfig& config,
 void StagePersistedEmbeddingRecord(WaxStore& store,
                                    std::uint64_t frame_id,
                                    const std::vector<float>& embedding,
-                                   int expected_dimensions) {
+                                   int expected_dimensions,
+                                   const std::optional<std::string>& embedder_identity_tag) {
   if (expected_dimensions <= 0 || embedding.size() != static_cast<std::size_t>(expected_dimensions)) {
     return;
   }
-  const auto payload = BuildEmbeddingRecordPayload(frame_id, embedding);
+  const auto payload = BuildEmbeddingRecordPayload(frame_id, embedding, embedder_identity_tag);
   (void)store.Put(payload, {});
 }
 
@@ -795,6 +888,9 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
   const auto chunks = ChunkContent(content, config_.chunking.target_tokens, config_.chunking.overlap_tokens);
 
   std::optional<std::vector<std::vector<float>>> chunk_embeddings{};
+  const auto embedder_identity_tag =
+      (config_.enable_vector_search && embedder_ != nullptr) ? BuildEmbeddingIdentityTag(embedder_->identity())
+                                                              : std::nullopt;
   if (config_.enable_vector_search && embedder_ != nullptr) {
     chunk_embeddings = BuildEmbeddingsForTexts(
         embedder_, chunks, config_.ingest_batch_size, config_.ingest_concurrency, "remember");
@@ -824,7 +920,7 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
       }
       StageVectorIndexEmbedding(vector_index_.get(), frame_id, embedding);
       const int vector_dims = vector_index_ != nullptr ? vector_index_->dimensions() : 0;
-      StagePersistedEmbeddingRecord(store_, frame_id, embedding, vector_dims);
+      StagePersistedEmbeddingRecord(store_, frame_id, embedding, vector_dims, embedder_identity_tag);
       if (!embedding.empty() && config_.embedding_cache_capacity > 0) {
         if (embedding_cache_.size() >= static_cast<std::size_t>(config_.embedding_cache_capacity)) {
           embedding_cache_.clear();

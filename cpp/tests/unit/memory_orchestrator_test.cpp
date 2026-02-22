@@ -14,6 +14,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -126,6 +127,59 @@ class CountingBatchEmbedder final : public waxcpp::BatchEmbeddingProvider {
     return out;
   }
 
+  int embed_calls_ = 0;
+  int batch_calls_ = 0;
+};
+
+class IdentifiedBatchEmbedder final : public waxcpp::BatchEmbeddingProvider {
+ public:
+  explicit IdentifiedBatchEmbedder(std::string model_name)
+      : model_name_(std::move(model_name)) {}
+
+  int dimensions() const override { return 4; }
+  bool normalize() const override { return true; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override {
+    return waxcpp::EmbeddingIdentity{
+        .provider = std::string("WaxCppTest"),
+        .model = model_name_,
+        .dimensions = 4,
+        .normalized = true,
+    };
+  }
+
+  std::vector<float> Embed(const std::string& text) override {
+    ++embed_calls_;
+    return BuildEmbedding(text);
+  }
+
+  std::vector<std::vector<float>> EmbedBatch(const std::vector<std::string>& texts) override {
+    ++batch_calls_;
+    std::vector<std::vector<float>> out{};
+    out.reserve(texts.size());
+    for (const auto& text : texts) {
+      out.push_back(BuildEmbedding(text));
+    }
+    return out;
+  }
+
+  void Reset() {
+    embed_calls_ = 0;
+    batch_calls_ = 0;
+  }
+
+  int embed_calls() const { return embed_calls_; }
+  int batch_calls() const { return batch_calls_; }
+
+ private:
+  static std::vector<float> BuildEmbedding(const std::string& text) {
+    std::vector<float> out(4, 0.0F);
+    for (std::size_t i = 0; i < text.size(); ++i) {
+      out[i % out.size()] += static_cast<float>(static_cast<unsigned char>(text[i])) / 255.0F;
+    }
+    return out;
+  }
+
+  std::string model_name_{};
   int embed_calls_ = 0;
   int batch_calls_ = 0;
 };
@@ -717,6 +771,60 @@ void ScenarioVectorReopenReusesPersistedEmbeddingsWithoutReembed(const std::file
   }
 }
 
+void ScenarioVectorReopenWithMatchingIdentityReusesPersistedEmbeddings(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector reopen matching identity reuses persisted embeddings");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto writer_embedder = std::make_shared<IdentifiedBatchEmbedder>("MiniLM-A");
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, writer_embedder);
+    orchestrator.Remember("identity matched apple", {});
+    orchestrator.Remember("identity matched banana", {});
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  auto reopen_embedder = std::make_shared<IdentifiedBatchEmbedder>("MiniLM-A");
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
+    Require(reopen_embedder->batch_calls() == 0, "matching identity should reuse persisted embeddings");
+    Require(reopen_embedder->embed_calls() == 0, "matching identity should avoid per-item Embed on reopen");
+    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "matching identity reopen should preserve vector recall");
+    reopened.Close();
+  }
+}
+
+void ScenarioVectorReopenWithMismatchedIdentityReembeds(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector reopen mismatched identity reembeds");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto writer_embedder = std::make_shared<IdentifiedBatchEmbedder>("MiniLM-A");
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, writer_embedder);
+    orchestrator.Remember("identity mismatch apple", {});
+    orchestrator.Remember("identity mismatch banana", {});
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  auto reopen_embedder = std::make_shared<IdentifiedBatchEmbedder>("MiniLM-B");
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
+    Require(reopen_embedder->batch_calls() == 1, "mismatched identity should trigger vector re-embed on reopen");
+    Require(reopen_embedder->embed_calls() == 0, "mismatched identity re-embed should use batch path");
+    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "mismatched identity reopen should still produce vector recall results");
+    reopened.Close();
+  }
+}
+
 void ScenarioEmbeddingJournalDoesNotLeakIntoTextRecall(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: embedding journal does not leak into text recall");
   waxcpp::OrchestratorConfig config{};
@@ -734,10 +842,10 @@ void ScenarioEmbeddingJournalDoesNotLeakIntoTextRecall(const std::filesystem::pa
 
   {
     waxcpp::MemoryOrchestrator reopened(path, config, embedder);
-    const auto marker_context = reopened.Recall("WAXEM1");
+    const auto marker_context = reopened.Recall("WAXEM");
     bool has_embedding_marker_payload = false;
     for (const auto& item : marker_context.items) {
-      if (item.text.find("WAXEM1") != std::string::npos) {
+      if (item.text.find("WAXEM1") != std::string::npos || item.text.find("WAXEM2") != std::string::npos) {
         has_embedding_marker_payload = true;
         break;
       }
@@ -1012,7 +1120,7 @@ void ScenarioRememberUsesConfiguredIngestConcurrency(const std::filesystem::path
         continue;
       }
       const auto payload = store.FrameContent(meta.id);
-      if (StartsWithMagic(payload, "WAXEM1", 6)) {
+      if (StartsWithMagic(payload, "WAXEM1", 6) || StartsWithMagic(payload, "WAXEM2", 6)) {
         continue;
       }
       ++user_payload_frames;
@@ -1507,6 +1615,8 @@ int main() {
     const auto path37 = UniquePath();
     const auto path38 = UniquePath();
     const auto path39 = UniquePath();
+    const auto path40 = UniquePath();
+    const auto path41 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -1532,6 +1642,8 @@ int main() {
     ScenarioVectorRecallVisibilityRequiresFlush(path16);
     ScenarioVectorIndexRebuildOnReopen(path17);
     ScenarioVectorReopenReusesPersistedEmbeddingsWithoutReembed(path30);
+    ScenarioVectorReopenWithMatchingIdentityReusesPersistedEmbeddings(path40);
+    ScenarioVectorReopenWithMismatchedIdentityReembeds(path41);
     ScenarioEmbeddingJournalDoesNotLeakIntoTextRecall(path31);
     ScenarioVectorCloseWithoutFlushPersistsViaStoreClose(path18);
     ScenarioVectorRecallSupportsExplicitEmbeddingWithoutQuery(path19);
@@ -1553,7 +1665,7 @@ int main() {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
         path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
-        path33, path34, path35, path36, path37, path38, path39,
+        path33, path34, path35, path36, path37, path38, path39, path40, path41,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
