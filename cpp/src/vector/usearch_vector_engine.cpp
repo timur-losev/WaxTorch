@@ -22,6 +22,15 @@ float Dot(std::span<const float> lhs, std::span<const float> rhs) {
   return dot;
 }
 
+float L2SquaredDistance(std::span<const float> lhs, std::span<const float> rhs) {
+  float sum = 0.0F;
+  for (std::size_t i = 0; i < lhs.size(); ++i) {
+    const float delta = lhs[i] - rhs[i];
+    sum += delta * delta;
+  }
+  return sum;
+}
+
 float Norm(std::span<const float> v) {
   const auto dot = Dot(v, v);
   return std::sqrt(std::max(dot, 0.0F));
@@ -50,14 +59,24 @@ void MaybeInjectCommitFailure() {
 
 }  // namespace
 
-USearchVectorEngine::USearchVectorEngine(int dimensions) : dimensions_(dimensions) {
+USearchVectorEngine::USearchVectorEngine(int dimensions, VecSimilarity similarity)
+    : dimensions_(dimensions), similarity_(similarity) {
   if (dimensions_ <= 0) {
     throw std::runtime_error("USearchVectorEngine dimensions must be positive");
+  }
+  if (similarity_ != VecSimilarity::kCosine &&
+      similarity_ != VecSimilarity::kDot &&
+      similarity_ != VecSimilarity::kL2) {
+    throw std::runtime_error("USearchVectorEngine similarity must be one of cosine/dot/l2");
   }
 }
 
 int USearchVectorEngine::dimensions() const {
   return dimensions_;
+}
+
+VecSimilarity USearchVectorEngine::similarity() const {
+  return similarity_;
 }
 
 std::vector<std::pair<std::uint64_t, float>> USearchVectorEngine::Search(const std::vector<float>& vector,
@@ -72,9 +91,22 @@ std::vector<std::pair<std::uint64_t, float>> USearchVectorEngine::Search(const s
   std::vector<std::pair<std::uint64_t, float>> results{};
   results.reserve(vectors_.size());
   for (const auto& [frame_id, candidate] : vectors_) {
-    results.emplace_back(frame_id,
-                         CosineSimilarity(std::span<const float>(vector.data(), vector.size()),
-                                          std::span<const float>(candidate.data(), candidate.size())));
+    const auto query = std::span<const float>(vector.data(), vector.size());
+    const auto doc = std::span<const float>(candidate.data(), candidate.size());
+    float score = 0.0F;
+    switch (similarity_) {
+      case VecSimilarity::kCosine:
+        score = CosineSimilarity(query, doc);
+        break;
+      case VecSimilarity::kDot:
+        score = Dot(query, doc);
+        break;
+      case VecSimilarity::kL2:
+        // Swift parity: score is negative distance; higher is better.
+        score = -L2SquaredDistance(query, doc);
+        break;
+    }
+    results.emplace_back(frame_id, score);
   }
 
   std::sort(results.begin(), results.end(), [](const auto& lhs, const auto& rhs) {
@@ -147,7 +179,7 @@ void USearchVectorEngine::Remove(std::uint64_t frame_id) {
   CommitStaged();
 }
 
-std::vector<std::byte> USearchVectorEngine::SerializeMetalSegment(VecSimilarity similarity) const {
+std::vector<std::byte> USearchVectorEngine::SerializeMetalSegment() const {
   std::vector<std::uint64_t> frame_ids{};
   frame_ids.reserve(vectors_.size());
   for (const auto& [frame_id, _] : vectors_) {
@@ -166,7 +198,7 @@ std::vector<std::byte> USearchVectorEngine::SerializeMetalSegment(VecSimilarity 
   }
 
   VecSegmentInfo info{};
-  info.similarity = similarity;
+  info.similarity = similarity_;
   info.dimension = static_cast<std::uint32_t>(dimensions_);
   info.vector_count = static_cast<std::uint64_t>(frame_ids.size());
   info.payload_length =
@@ -182,6 +214,9 @@ void USearchVectorEngine::LoadMetalSegment(std::span<const std::byte> segment_by
   const auto& metal = std::get<VecMetalPayload>(decoded);
   if (metal.info.dimension != static_cast<std::uint32_t>(dimensions_)) {
     throw std::runtime_error("USearchVectorEngine::LoadMetalSegment dimension mismatch");
+  }
+  if (metal.info.similarity != similarity_) {
+    throw std::runtime_error("USearchVectorEngine::LoadMetalSegment similarity mismatch");
   }
 
   vectors_.clear();

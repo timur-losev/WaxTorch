@@ -43,6 +43,34 @@ void ScenarioAddSearchAndTieBreak() {
   Require(results[2].first == 7, "orthogonal vector should rank lower");
 }
 
+void ScenarioMetricScoringParity() {
+  waxcpp::tests::Log("scenario: metric scoring parity");
+  {
+    waxcpp::USearchVectorEngine dot_engine(2, waxcpp::VecSimilarity::kDot);
+    dot_engine.Add(10, {2.0F, 0.0F});
+    dot_engine.Add(2, {1.0F, 1.0F});
+    dot_engine.Add(7, {0.0F, 1.0F});
+    const auto results = dot_engine.Search({1.0F, 1.0F}, 3);
+    Require(results.size() == 3, "dot metric result count mismatch");
+    Require(results[0].first == 2, "dot metric tie-break should prefer lower frame_id");
+    Require(results[1].first == 10, "dot metric second tie result mismatch");
+    Require(std::fabs(results[0].second - results[1].second) <= 1e-6F,
+            "dot metric tie scores should match");
+  }
+
+  {
+    waxcpp::USearchVectorEngine l2_engine(2, waxcpp::VecSimilarity::kL2);
+    l2_engine.Add(1, {1.0F, 0.0F});
+    l2_engine.Add(2, {2.0F, 0.0F});
+    l2_engine.Add(3, {3.0F, 0.0F});
+    const auto results = l2_engine.Search({1.0F, 0.0F}, 3);
+    Require(results.size() == 3, "l2 metric result count mismatch");
+    Require(results[0].first == 1, "l2 metric nearest vector should rank first");
+    Require(results[0].second >= results[1].second && results[1].second >= results[2].second,
+            "l2 metric scores should be monotonic descending");
+  }
+}
+
 void ScenarioBatchAndRemove() {
   waxcpp::tests::Log("scenario: batch add and remove");
   waxcpp::USearchVectorEngine engine(2);
@@ -145,8 +173,8 @@ void ScenarioMetalSegmentRoundtrip() {
   source.Add(2, {1.0F, 0.0F, 0.0F});
   source.Add(5, {0.0F, 1.0F, 0.0F});
 
-  const auto segment = source.SerializeMetalSegment(waxcpp::VecSimilarity::kCosine);
-  waxcpp::USearchVectorEngine loaded(3);
+  const auto segment = source.SerializeMetalSegment();
+  waxcpp::USearchVectorEngine loaded(3, waxcpp::VecSimilarity::kCosine);
   loaded.LoadMetalSegment(segment);
 
   const auto before = source.Search({1.0F, 0.0F, 0.0F}, 10);
@@ -179,6 +207,24 @@ void ScenarioLoadMetalSegmentValidation() {
   }
   Require(dim_threw, "LoadMetalSegment must reject dimension mismatch");
 
+  waxcpp::VecSegmentInfo wrong_similarity{};
+  wrong_similarity.similarity = waxcpp::VecSimilarity::kDot;
+  wrong_similarity.dimension = 2;
+  wrong_similarity.vector_count = 1;
+  wrong_similarity.payload_length = 2 * sizeof(float);
+  const std::vector<float> wrong_similarity_vectors = {0.1F, 0.2F};
+  const std::vector<std::uint64_t> wrong_similarity_ids = {15};
+  const auto wrong_similarity_segment =
+      waxcpp::EncodeMetalVecSegment(wrong_similarity, wrong_similarity_vectors, wrong_similarity_ids);
+
+  bool similarity_threw = false;
+  try {
+    engine.LoadMetalSegment(wrong_similarity_segment);
+  } catch (const std::exception&) {
+    similarity_threw = true;
+  }
+  Require(similarity_threw, "LoadMetalSegment must reject similarity mismatch");
+
   waxcpp::VecSegmentInfo usearch_info{};
   usearch_info.similarity = waxcpp::VecSimilarity::kCosine;
   usearch_info.dimension = 2;
@@ -203,6 +249,7 @@ int main() {
     waxcpp::tests::Log("usearch_vector_engine_test: start");
     ScenarioCtorValidation();
     ScenarioAddSearchAndTieBreak();
+    ScenarioMetricScoringParity();
     ScenarioBatchAndRemove();
     ScenarioValidationErrors();
     ScenarioTopKAndEmptyCases();
