@@ -1,0 +1,78 @@
+name: Dependency Integrity
+
+on:
+  workflow_dispatch:
+    inputs:
+      enforce_pins:
+        description: "Fail on <PIN_REQUIRED> placeholders"
+        required: false
+        default: "false"
+  pull_request:
+    paths:
+      - ".gitmodules"
+      - "cpp/submodules.lock"
+      - "cpp/scripts/verify_submodules.py"
+      - "cpp/third_party/libtorch-dist/**"
+      - ".github/workflows/dependency-integrity.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".gitmodules"
+      - "cpp/submodules.lock"
+      - "cpp/scripts/verify_submodules.py"
+      - "cpp/third_party/libtorch-dist/**"
+      - ".github/workflows/dependency-integrity.yml"
+
+jobs:
+  dependency-integrity:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        torch_runtime:
+          - cpu_only
+          - cuda_preferred
+        include:
+          - torch_runtime: cpu_only
+            cuda_available: "0"
+          - torch_runtime: cuda_preferred
+            cuda_available: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Sync submodules
+        run: git submodule sync --recursive
+
+      - name: Update submodules
+        run: git submodule update --init --recursive
+
+      - name: Verify dependency policy
+        run: |
+          args="--require-checksum-submodules-present"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.enforce_pins }}" = "true" ]; then
+            args="$args --enforce-pin-required"
+          fi
+          python3 cpp/scripts/verify_submodules.py $args
+
+      - name: Configure
+        run: cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build libtorch gate test target
+        run: cmake --build cpp/build --config Release --target waxcpp_libtorch_manifest_gate_test --parallel
+
+      - name: Run libtorch manifest gate test
+        env:
+          WAXCPP_TEST_LOG: "1"
+          WAXCPP_REQUIRE_LIBTORCH_MANIFEST: "1"
+          WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256: "1"
+          WAXCPP_LIBTORCH_MANIFEST: ${{ github.workspace }}/cpp/third_party/libtorch-dist/manifest/libtorch-manifest.json
+          WAXCPP_LIBTORCH_DIST_ROOT: ${{ github.workspace }}/cpp/third_party/libtorch-dist
+          WAXCPP_TORCH_RUNTIME: ${{ matrix.torch_runtime }}
+          WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE: ${{ matrix.cuda_available }}
+        run: |
+          echo "Dependency integrity runtime=${WAXCPP_TORCH_RUNTIME} cuda=${WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE}"
+          ctest --test-dir cpp/build --output-on-failure -R waxcpp_libtorch_manifest_gate_test
