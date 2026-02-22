@@ -83,6 +83,17 @@ std::vector<SearchSource> NormalizeSources(std::vector<SearchSource> sources) {
   return sources;
 }
 
+bool PreferPreviewText(const std::optional<std::string>& candidate, const std::optional<std::string>& current) {
+  if (!candidate.has_value()) {
+    return false;
+  }
+  if (!current.has_value()) {
+    return true;
+  }
+  // Deterministic tie-break for equal-score duplicate frame entries.
+  return *candidate < *current;
+}
+
 float ClampAlpha(float alpha) {
   return std::min(1.0F, std::max(0.0F, alpha));
 }
@@ -102,11 +113,9 @@ std::vector<SearchResult> MergeDuplicateFrameResults(std::vector<SearchResult> r
     const float normalized_score = std::isnan(result.score) ? 0.0F : result.score;
     if (!agg.seen || normalized_score > agg.best_score) {
       agg.best_score = normalized_score;
-      if (result.preview_text.has_value()) {
-        agg.preview_text = result.preview_text;
-      }
+      agg.preview_text = result.preview_text;
       agg.seen = true;
-    } else if (!agg.preview_text.has_value() && result.preview_text.has_value()) {
+    } else if (normalized_score == agg.best_score && PreferPreviewText(result.preview_text, agg.preview_text)) {
       agg.preview_text = result.preview_text;
     }
     for (const auto source : result.sources) {

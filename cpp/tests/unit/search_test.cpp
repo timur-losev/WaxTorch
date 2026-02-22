@@ -585,6 +585,47 @@ void ScenarioPermutationInvariance() {
   }
 }
 
+void ScenarioEqualScoreDuplicatePreviewTieBreakIsOrderIndependent() {
+  waxcpp::tests::Log("scenario: equal-score duplicate preview tie-break is order-independent");
+
+  waxcpp::SearchRequest request{};
+  request.mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+  request.top_k = 8;
+  request.preview_max_bytes = 256;
+  request.expansion_max_tokens = 16;
+  request.snippet_max_tokens = 16;
+  request.max_context_tokens = 64;
+
+  const std::vector<waxcpp::SearchResult> forward = {
+      {.frame_id = 42, .score = 1.0F, .preview_text = std::string("zeta"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 42, .score = 1.0F, .preview_text = std::string("alpha"), .sources = {waxcpp::SearchSource::kStructuredMemory}},
+  };
+  const std::vector<waxcpp::SearchResult> reversed = {
+      {.frame_id = 42, .score = 1.0F, .preview_text = std::string("alpha"), .sources = {waxcpp::SearchSource::kStructuredMemory}},
+      {.frame_id = 42, .score = 1.0F, .preview_text = std::string("zeta"), .sources = {waxcpp::SearchSource::kText}},
+  };
+
+  const auto response_forward = waxcpp::UnifiedSearchWithCandidates(request, forward, {});
+  const auto response_reversed = waxcpp::UnifiedSearchWithCandidates(request, reversed, {});
+  Require(response_forward.results.size() == 1 && response_reversed.results.size() == 1,
+          "duplicate tie-break scenario should collapse to one frame");
+  Require(response_forward.results[0].preview_text.has_value() && response_reversed.results[0].preview_text.has_value(),
+          "duplicate tie-break scenario should preserve preview text");
+  Require(*response_forward.results[0].preview_text == "alpha",
+          "duplicate tie-break should choose deterministic lexicographically smaller preview");
+  Require(*response_reversed.results[0].preview_text == "alpha",
+          "duplicate tie-break must be independent of input order");
+
+  waxcpp::SearchResponse context_response_forward{.results = forward};
+  waxcpp::SearchResponse context_response_reversed{.results = reversed};
+  const auto context_forward = waxcpp::BuildFastRAGContext(request, context_response_forward);
+  const auto context_reversed = waxcpp::BuildFastRAGContext(request, context_response_reversed);
+  Require(context_forward.items.size() == 1 && context_reversed.items.size() == 1,
+          "context duplicate tie-break scenario should collapse to one item");
+  Require(context_forward.items[0].text == context_reversed.items[0].text,
+          "context text should be order-independent for equal-score duplicate previews");
+}
+
 }  // namespace
 
 int main() {
@@ -608,6 +649,7 @@ int main() {
     ScenarioAsciiWhitespaceTokenization();
     ScenarioRequestClampingParity();
     ScenarioPermutationInvariance();
+    ScenarioEqualScoreDuplicatePreviewTieBreakIsOrderIndependent();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
