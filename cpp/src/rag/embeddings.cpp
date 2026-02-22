@@ -362,25 +362,75 @@ std::optional<std::string_view> ExtractJsonStringField(std::string_view object,
   return std::nullopt;
 }
 
-std::optional<std::string_view> ExtractArtifactPath(std::string_view object) {
+std::optional<std::string> DecodeJsonEscapes(std::string_view encoded) {
+  std::string decoded{};
+  decoded.reserve(encoded.size());
+  for (std::size_t i = 0; i < encoded.size(); ++i) {
+    const char ch = encoded[i];
+    if (ch != '\\') {
+      decoded.push_back(ch);
+      continue;
+    }
+    if (i + 1 >= encoded.size()) {
+      return std::nullopt;
+    }
+    const char esc = encoded[++i];
+    switch (esc) {
+      case '"':
+      case '\\':
+      case '/':
+        decoded.push_back(esc);
+        break;
+      case 'b':
+        decoded.push_back('\b');
+        break;
+      case 'f':
+        decoded.push_back('\f');
+        break;
+      case 'n':
+        decoded.push_back('\n');
+        break;
+      case 'r':
+        decoded.push_back('\r');
+        break;
+      case 't':
+        decoded.push_back('\t');
+        break;
+      default:
+        // Keep parser deterministic and strict for manifest paths.
+        return std::nullopt;
+    }
+  }
+  return decoded;
+}
+
+std::optional<std::string> ExtractArtifactPath(std::string_view object) {
   const auto path = ExtractJsonStringField(object, "\"path\"", "\"file\"");
   if (!path.has_value() || path->empty()) {
     return std::nullopt;
   }
-  return path;
+  const auto decoded = DecodeJsonEscapes(*path);
+  if (!decoded.has_value() || decoded->empty()) {
+    return std::nullopt;
+  }
+  return decoded;
 }
 
-std::optional<std::string_view> ExtractArtifactSha256(std::string_view object) {
+std::optional<std::string> ExtractArtifactSha256(std::string_view object) {
   const auto sha = ExtractJsonStringField(object, "\"sha256\"", "\"sha256sum\"");
   if (!sha.has_value() || sha->size() != 64) {
     return std::nullopt;
   }
-  for (const char ch : *sha) {
+  const auto decoded = DecodeJsonEscapes(*sha);
+  if (!decoded.has_value() || decoded->size() != 64) {
+    return std::nullopt;
+  }
+  for (const char ch : *decoded) {
     if (!IsAsciiHex(ch)) {
       return std::nullopt;
     }
   }
-  return sha;
+  return decoded;
 }
 
 bool HasValidSha256(std::string_view object) {

@@ -287,6 +287,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   const auto artifact_escape_file = artifact_root.parent_path() / "waxcpp_test_libtorch_escape.bin";
   const auto artifact_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_artifact.json";
+  const auto artifact_escaped_slash_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_escaped_slash_artifact.json";
   const auto artifact_bad_sha_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_artifact_bad_sha.json";
   const auto artifact_escape_manifest = artifact_manifest_dir / "manifest_escape.json";
@@ -463,6 +465,13 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       throw std::runtime_error("failed to create artifact manifest file");
     }
     out << R"({"artifacts":[{"path":"cpu/libtorch-cpu.zip","sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}]})";
+  }
+  {
+    std::ofstream out(artifact_escaped_slash_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create escaped-slash artifact manifest file");
+    }
+    out << R"({"artifacts":[{"path":"cpu\/libtorch-cpu.zip","sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}]})";
   }
   {
     std::ofstream out(artifact_bad_sha_manifest, std::ios::binary | std::ios::trunc);
@@ -1036,6 +1045,25 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_escaped_slash_manifest.string());
+    const ScopedEnvVar set_dist_root("WAXCPP_LIBTORCH_DIST_ROOT", artifact_root.string());
+    const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::string("1"));
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.libtorch_manifest_valid, "escaped-slash artifact manifest should pass validation");
+    Require(info.libtorch_selected_artifact_path.has_value(),
+            "escaped-slash artifact manifest should select artifact path");
+    Require(*info.libtorch_selected_artifact_path == "cpu/libtorch-cpu.zip",
+            "escaped-slash artifact manifest selected path mismatch");
+    Require(info.libtorch_selected_artifact_resolved_path.has_value(),
+            "escaped-slash artifact manifest should resolve selected artifact path");
+    Require(info.libtorch_selected_artifact_sha256_verified,
+            "escaped-slash artifact manifest should pass checksum gate");
+    Require(*info.libtorch_selected_artifact_resolved_path == std::filesystem::absolute(artifact_file).string(),
+            "escaped-slash artifact manifest resolved path mismatch");
+  }
+
+  {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_manifest.string());
     const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::string("1"));
     bool threw = false;
@@ -1180,6 +1208,7 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(duplicate_path_manifest_b, ec);
   std::filesystem::remove(root_array_manifest, ec);
   std::filesystem::remove(artifact_manifest, ec);
+  std::filesystem::remove(artifact_escaped_slash_manifest, ec);
   std::filesystem::remove(artifact_bad_sha_manifest, ec);
   std::filesystem::remove(artifact_escape_manifest, ec);
   std::filesystem::remove(artifact_absolute_manifest, ec);
