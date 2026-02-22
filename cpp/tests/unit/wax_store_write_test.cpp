@@ -479,6 +479,72 @@ void RunScenarioRecoveredPendingEmbeddingPlusLocalMutationCloseCommit(const std:
   }
 }
 
+void RunScenarioRecoveredPendingDeletePlusLocalMutationCloseCommit(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: recovered pending delete plus local mutation close-commit");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    (void)store.Put({std::byte{0xA1}});
+    (void)store.Put({std::byte{0xA2}});
+    store.Commit();
+    store.Delete(0);
+    // Simulate crash: recovered pending delete stays in WAL.
+  }
+
+  waxcpp::WaxWALStats closed_wal{};
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto stats_before = reopened.Stats();
+    Require(stats_before.frame_count == 2, "expected committed frame_count before local mutation");
+    const auto local_id = reopened.Put({std::byte{0xA3}});
+    Require(local_id == 2, "local put should continue dense ids with recovered non-put pending mutations");
+    reopened.Close();
+    closed_wal = reopened.WalStats();
+  }
+  Require(closed_wal.auto_commit_count == 1,
+          "Close() should auto-commit when local mutation is mixed with recovered pending delete");
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  const auto toc = ReadCommittedToc(path);
+  Require(toc.frames.size() == 3, "expected three committed frames after mixed delete+put close-commit");
+  Require(toc.frames[0].status == 1, "recovered pending delete must be applied during mixed close-commit");
+  Require(toc.frames[1].status == 0, "unrelated frame status should remain active");
+  Require(toc.frames[2].status == 0, "new local frame should be active");
+  reopened.Close();
+}
+
+void RunScenarioRecoveredPendingSupersedePlusLocalMutationCloseCommit(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: recovered pending supersede plus local mutation close-commit");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    (void)store.Put({std::byte{0xB1}});
+    (void)store.Put({std::byte{0xB2}});
+    store.Commit();
+    store.Supersede(0, 1);
+    // Simulate crash: recovered pending supersede stays in WAL.
+  }
+
+  waxcpp::WaxWALStats closed_wal{};
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto local_id = reopened.Put({std::byte{0xB3}});
+    Require(local_id == 2, "local put should continue dense ids after recovered pending supersede");
+    reopened.Close();
+    closed_wal = reopened.WalStats();
+  }
+  Require(closed_wal.auto_commit_count == 1,
+          "Close() should auto-commit when local mutation is mixed with recovered pending supersede");
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  const auto toc = ReadCommittedToc(path);
+  Require(toc.frames.size() == 3, "expected three committed frames after mixed supersede+put close-commit");
+  Require(toc.frames[0].superseded_by.has_value() && *toc.frames[0].superseded_by == 1,
+          "recovered pending supersede must set superseded_by edge");
+  Require(toc.frames[1].supersedes.has_value() && *toc.frames[1].supersedes == 0,
+          "recovered pending supersede must set supersedes edge");
+  Require(toc.frames[2].status == 0, "new local frame should be active");
+  reopened.Close();
+}
+
 void RunScenarioPutEmbeddingUnknownFrameRejected(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: putEmbedding unknown frame rejected at commit");
   {
@@ -1469,6 +1535,8 @@ int main(int argc, char** argv) {
     RunScenarioPendingEmbeddingSnapshotReopenRecovery(path);
     RunScenarioCloseAutoCommitsLocalEmbeddingMutations(path);
     RunScenarioRecoveredPendingEmbeddingPlusLocalMutationCloseCommit(path);
+    RunScenarioRecoveredPendingDeletePlusLocalMutationCloseCommit(path);
+    RunScenarioRecoveredPendingSupersedePlusLocalMutationCloseCommit(path);
     RunScenarioPutEmbeddingUnknownFrameRejected(path);
     RunScenarioPutEmbeddingBatchUnknownFrameRejected(path);
     RunScenarioPutEmbeddingForwardReferenceRejected(path);

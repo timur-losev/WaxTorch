@@ -240,6 +240,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add manual workflow dispatch release gate job that runs strict dependency verification (`verify_submodules.py --enforce-pin-required`) and can be triggered independently from normal PR/push CI
 - [x] Extend runtime diagnostics with selected artifact class (`cpu|cuda|any`) and add regressions to lock deterministic class assignment + runtime-info stability across embed calls
 - [x] Add deterministic MV2V decode fuzz regression (`512` seeded mutations over valid USearch/Metal segments) with decode-invariant checks for successful paths
+- [x] Extend WAL recovery/apply parity regressions for recovered non-put mutations: recovered `delete`/`supersede` + local `put` must auto-commit together on `Close()` and persist expected TOC lifecycle state
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -483,6 +484,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added negative regression: `putEmbedding` with unknown `frame_id` must fail commit without advancing committed frame state | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added negative regression: mixed-validity `putEmbeddingBatch` (known + unknown `frame_id`) must fail atomically at commit | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added negative regression: forward-reference order (`putEmbedding(frame)` before `putFrame(frame)`) must fail commit deterministically | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added mixed close-auto-commit regressions for recovered non-put WAL mutations (`delete`/`supersede`) combined with local `put`, asserting replay/apply parity and TOC edge/status persistence | Codex |
 | `cpp/include/waxcpp/wax_store.hpp` | Extended `WaxWALStats` with `pending_embedding_mutations` runtime counter | Codex |
 | `cpp/src/core/wax_store.cpp` | Wired `pending_embedding_mutations` updates in open/write/commit paths and surfaced it via `WalStats()` | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added assertions that `pending_embedding_mutations` tracks pending embedding snapshot size and resets on commit/recovery transitions | Codex |
