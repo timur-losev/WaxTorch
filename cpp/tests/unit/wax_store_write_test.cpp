@@ -779,6 +779,60 @@ void RunScenarioPendingLifecycleRecoverySkipsUndecodableTail(const std::filesyst
   reopened.Close();
 }
 
+void RunScenarioPendingMixedLifecycleReplayDeterminism(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: pending mixed lifecycle replay determinism");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    (void)store.Put({std::byte{0x91}});
+    (void)store.Put({std::byte{0x92}});
+    store.Commit();
+
+    // Stage a deterministic mixed sequence in WAL without committing:
+    // put(2), delete(0), supersede(1->2), putEmbedding(1), put(3), supersede(2->3), delete(3)
+    const auto id2 = store.Put({std::byte{0x93}});
+    Require(id2 == 2, "expected dense id for first pending put");
+    store.Delete(0);
+    store.Supersede(1, 2);
+    store.PutEmbedding(1, {0.25F, 0.5F, 0.75F});
+    const auto id3 = store.Put({std::byte{0x94}});
+    Require(id3 == 3, "expected dense id for second pending put");
+    store.Supersede(2, 3);
+    store.Delete(3);
+    // Simulate crash: no Close()/Commit().
+  }
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto stats = reopened.Stats();
+    const auto wal = reopened.WalStats();
+    Require(stats.frame_count == 2, "reopen should keep committed frame_count before replay commit");
+    Require(stats.pending_frames == 2, "reopen should detect two pending put mutations");
+    Require(wal.pending_delete_mutations == 2, "reopen should detect two pending delete mutations");
+    Require(wal.pending_supersede_mutations == 2, "reopen should detect two pending supersede mutations");
+    Require(wal.pending_embedding_mutations == 1, "reopen should detect one pending embedding mutation");
+    reopened.Commit();
+
+    const auto after_wal = reopened.WalStats();
+    Require(after_wal.pending_delete_mutations == 0, "commit should clear pending delete counter");
+    Require(after_wal.pending_supersede_mutations == 0, "commit should clear pending supersede counter");
+    Require(after_wal.pending_embedding_mutations == 0, "commit should clear pending embedding counter");
+
+    const auto toc = ReadCommittedToc(path);
+    Require(toc.frames.size() == 4, "commit should apply both pending put mutations");
+    Require(toc.frames[0].status == 1, "frame 0 should be deleted");
+    Require(toc.frames[3].status == 1, "frame 3 should be deleted");
+    Require(toc.frames[1].superseded_by.has_value() && *toc.frames[1].superseded_by == 2,
+            "frame 1 superseded_by edge mismatch");
+    Require(toc.frames[2].supersedes.has_value() && *toc.frames[2].supersedes == 1,
+            "frame 2 supersedes edge mismatch");
+    Require(toc.frames[2].superseded_by.has_value() && *toc.frames[2].superseded_by == 3,
+            "frame 2 superseded_by edge mismatch");
+    Require(toc.frames[3].supersedes.has_value() && *toc.frames[3].supersedes == 2,
+            "frame 3 supersedes edge mismatch");
+    reopened.Close();
+  }
+}
+
 void RunScenarioDeleteAndSupersedePersist(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: delete/supersede persist in TOC");
   auto store = waxcpp::WaxStore::Create(path);
@@ -1694,6 +1748,7 @@ int main(int argc, char** argv) {
     RunScenarioPendingRecoverySkipsUndecodableTail(path);
     RunScenarioPendingRecoveryIgnoresPartialTail(path);
     RunScenarioPendingLifecycleRecoverySkipsUndecodableTail(path);
+    RunScenarioPendingMixedLifecycleReplayDeterminism(path);
     RunScenarioDeleteAndSupersedePersist(path);
     RunScenarioPendingLifecycleMutationCountersLocal(path);
     RunScenarioPendingLifecycleMutationCountersRecovered(path);
