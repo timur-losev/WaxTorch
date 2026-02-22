@@ -1,6 +1,12 @@
 name: C++ Port CI
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_gate:
+        description: 'Run strict dependency release gate (fails on <PIN_REQUIRED>)'
+        required: false
+        default: 'false'
   pull_request:
     paths:
       - '.gitmodules'
@@ -17,7 +23,19 @@ on:
 
 jobs:
   cpp-build:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.release_gate != 'true' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        torch_runtime:
+          - cpu_only
+          - cuda_preferred
+        include:
+          - torch_runtime: cpu_only
+            cuda_available: '0'
+          - torch_runtime: cuda_preferred
+            cuda_available: '1'
 
     steps:
       - name: Checkout
@@ -44,4 +62,28 @@ jobs:
         run: ./cpp/build/waxcpp_mv2s_fixture_generator
 
       - name: Test
-        run: WAXCPP_TEST_LOG=1 ctest --test-dir cpp/build --output-on-failure
+        env:
+          WAXCPP_TEST_LOG: '1'
+          WAXCPP_TORCH_RUNTIME: ${{ matrix.torch_runtime }}
+          WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE: ${{ matrix.cuda_available }}
+        run: |
+          echo "Running C++ tests with WAXCPP_TORCH_RUNTIME=${WAXCPP_TORCH_RUNTIME}, WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE=${WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE}"
+          ctest --test-dir cpp/build --output-on-failure
+
+  dependency-release-gate:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_gate == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Sync submodules
+        run: git submodule sync --recursive
+
+      - name: Update submodules
+        run: git submodule update --init --recursive
+
+      - name: Verify dependency policy (strict pins)
+        run: python3 cpp/scripts/verify_submodules.py --enforce-pin-required

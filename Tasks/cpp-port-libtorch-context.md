@@ -236,6 +236,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add CPU-vs-CUDA policy parity regression for fallback embeddings: routing/artifact selection may differ, but embedding vectors remain deterministic and identical across `cpu_only` and `cuda_preferred`
 - [x] Add deterministic MV2S TOC fuzz regression (`512` seeded mutations: flip/truncate/append/field-corrupt + optional resign) to harden decoder crash/exception behavior on corrupted binary inputs
 - [x] Add duplicate-path manifest regression for deterministic `path+sha` tie-break (`same path, different sha`), ensuring stable selected artifact hash across entry-order permutations
+- [x] Expand C++ CI with torch runtime matrix (`cpu_only`, `cuda_preferred` + simulated CUDA availability) to continuously validate runtime-policy diagnostics paths
+- [x] Add manual workflow dispatch release gate job that runs strict dependency verification (`verify_submodules.py --enforce-pin-required`) and can be triggered independently from normal PR/push CI
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -245,6 +247,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `.gitmodules` | Added required submodule declarations | Codex |
 | `.gitignore` | Added C++ build artifact ignores | Codex |
 | `.github/workflows/cpp-ci.yml` | Added C++ CI job with submodule sync/update/verify; strict parity config now enables `WAXCPP_REQUIRE_SWIFT_FIXTURES=ON` | Codex |
+| `.github/workflows/cpp-ci.yml` | Added torch runtime matrix test execution (`cpu_only`/`cuda_preferred`) and manual strict dependency release-gate job (`workflow_dispatch` + `--enforce-pin-required`) | Codex |
 | `Tasks/cpp-port-libtorch-plan.md` | Saved implementation roadmap | Codex |
 | `cpp/CMakeLists.txt` | Added C++ build/test scaffold | Codex |
 | `cpp/README.md` | Added workspace purpose/build docs | Codex |
@@ -509,6 +512,5 @@ M1 and M2 are complete. M3 baseline is in place: C++ parses WAL headers, detects
 ## Open Questions
 1. Final remote for `cpp/third_party/libtorch-dist` should be replaced with dedicated artifact mirror before release.
 2. Pin commits in `cpp/submodules.lock` are placeholders and must be resolved in dependency PR.
-3. Decide when to enforce failure on `<PIN_REQUIRED>` in dependency lock checks (currently warning-only policy path).
-4. Implement full WAL replay apply path (materialize decoded pending mutations into store/index state and commit/checkpoint transitions).
+3. Implement full WAL replay apply path (materialize decoded pending mutations into store/index state and commit/checkpoint transitions).
 
