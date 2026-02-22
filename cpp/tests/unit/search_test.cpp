@@ -275,6 +275,35 @@ void ScenarioRagItemKindPolicy() {
   Require(context.items[1].text == "x y", "snippet token clamp mismatch");
 }
 
+void ScenarioMaxSnippetsCapsSnippetsOnly() {
+  waxcpp::tests::Log("scenario: max_snippets caps snippets only");
+  waxcpp::SearchRequest request{};
+  request.query = "snippets";
+  request.top_k = 10;
+  request.max_snippets = 1;
+  request.preview_max_bytes = 256;
+  request.expansion_max_tokens = 8;
+  request.snippet_max_tokens = 8;
+  request.max_context_tokens = 64;
+
+  waxcpp::SearchResponse response{};
+  response.results = {
+      {.frame_id = 1, .score = 3.0F, .preview_text = std::string("one two"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 2, .score = 2.0F, .preview_text = std::string("three four"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 3, .score = 1.0F, .preview_text = std::string("five six"), .sources = {waxcpp::SearchSource::kText}},
+  };
+
+  const auto context = waxcpp::BuildFastRAGContext(request, response);
+  Require(context.items.size() == 2, "max_snippets should allow expansion plus one snippet");
+  Require(context.items[0].kind == waxcpp::RAGItemKind::kExpanded, "first item should be expanded");
+  Require(context.items[1].kind == waxcpp::RAGItemKind::kSnippet, "second item should be the single allowed snippet");
+
+  request.max_snippets = 0;
+  const auto context_zero = waxcpp::BuildFastRAGContext(request, response);
+  Require(context_zero.items.size() == 1, "max_snippets=0 should suppress snippets but keep expansion");
+  Require(context_zero.items[0].kind == waxcpp::RAGItemKind::kExpanded, "expansion must remain when snippets are disabled");
+}
+
 void ScenarioSurrogateFallback() {
   waxcpp::tests::Log("scenario: surrogate fallback");
   waxcpp::SearchRequest request{};
@@ -417,6 +446,7 @@ int main() {
     ScenarioRrfKClampMatchesSwiftParity();
     ScenarioContextTokenBudgetClamp();
     ScenarioRagItemKindPolicy();
+    ScenarioMaxSnippetsCapsSnippetsOnly();
     ScenarioSurrogateFallback();
     ScenarioContextDeduplicatesDuplicateFrames();
     ScenarioAsciiWhitespaceTokenization();

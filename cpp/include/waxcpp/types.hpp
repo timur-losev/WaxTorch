@@ -40,6 +40,7 @@ struct SearchRequest {
   VectorEnginePreference vector_preference = VectorEnginePreference::kAuto;
   SearchMode mode{};
   int top_k = 10;
+  int max_snippets = 24;
   int rrf_k = 60;
   int preview_max_bytes = 512;
   int expansion_max_tokens = 600;

@@ -203,6 +203,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Align C++ hybrid RRF `rrf_k` handling with Swift parity: clamp `rrf_k` to `>=0` (no implicit fallback-to-60 when non-positive) and add regression for `rrf_k=0`/negative cases
 - [x] Fix orchestrator recall `max_snippets` clamp parity: `max_snippets<=0` no longer falls back to `search_top_k`; `Recall` now clamps `search_top_k/max_snippets` to non-negative and applies strict `min` limit with regression for `max_snippets=0`
 - [x] Fix hybrid alpha clamp parity for non-finite input in C++ unified search: switch to Swift-equivalent clamp order `min(1,max(0,alpha))` and add `alpha=NaN` regression
+- [x] Restore Swift-equivalent `max_snippets` semantics in C++ FastRAG path: `search_top_k` controls candidate window, `max_snippets` caps only snippet items (expansion unaffected), with regressions in search/orchestrator suites
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

@@ -654,13 +654,15 @@ void ScenarioMaxSnippetsClamp(const std::filesystem::path& path) {
     orchestrator.Flush();
 
     const auto context = orchestrator.Recall("apple");
-    Require(context.items.size() == 1, "max_snippets should clamp recall item count");
+    Require(context.items.size() == 2, "max_snippets should cap snippet count, not total context items");
+    Require(context.items[0].kind == waxcpp::RAGItemKind::kExpanded, "first item should remain expanded");
+    Require(context.items[1].kind == waxcpp::RAGItemKind::kSnippet, "second item should be the single allowed snippet");
     orchestrator.Close();
   }
 }
 
-void ScenarioMaxSnippetsZeroSuppressesRecallItems(const std::filesystem::path& path) {
-  waxcpp::tests::Log("scenario: max_snippets zero suppresses recall items");
+void ScenarioMaxSnippetsZeroSuppressesSnippetsOnly(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: max_snippets zero suppresses snippets only");
   waxcpp::OrchestratorConfig config{};
   config.enable_text_search = true;
   config.enable_vector_search = false;
@@ -674,8 +676,9 @@ void ScenarioMaxSnippetsZeroSuppressesRecallItems(const std::filesystem::path& p
     orchestrator.Flush();
 
     const auto context = orchestrator.Recall("apple");
-    Require(context.items.empty(), "max_snippets=0 should suppress recall items");
-    Require(context.total_tokens == 0, "max_snippets=0 should produce zero tokens");
+    Require(context.items.size() == 1, "max_snippets=0 should still allow expansion item");
+    Require(context.items[0].kind == waxcpp::RAGItemKind::kExpanded,
+            "max_snippets=0 should suppress snippet items but keep expansion");
     orchestrator.Close();
   }
 }
@@ -1843,7 +1846,7 @@ int main() {
     ScenarioEmbeddingMemoizationInRecall(path4);
     ScenarioBatchProviderUsedForVectorRecall(path5);
     ScenarioMaxSnippetsClamp(path6);
-    ScenarioMaxSnippetsZeroSuppressesRecallItems(path45);
+    ScenarioMaxSnippetsZeroSuppressesSnippetsOnly(path45);
     ScenarioRememberChunking(path7);
     ScenarioBatchProviderUsedForRemember(path8);
     ScenarioRememberRespectsIngestBatchSize(path9);

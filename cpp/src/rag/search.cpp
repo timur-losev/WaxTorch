@@ -224,6 +224,7 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
   }
 
   const int clamped_top_k = std::max(0, request.top_k);
+  const int clamped_max_snippets = std::max(0, request.max_snippets);
   const int clamped_max_context_tokens = std::max(0, request.max_context_tokens);
   const int clamped_snippet_max_tokens = std::max(0, request.snippet_max_tokens);
   const int clamped_expansion_max_tokens =
@@ -242,9 +243,14 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
 
   context.total_tokens = 0;
   context.items.reserve(sorted_results.size());
+  int emitted_snippets = 0;
   for (const auto& result : sorted_results) {
     const bool is_first_item = context.items.empty();
     auto item_kind = is_first_item ? RAGItemKind::kExpanded : RAGItemKind::kSnippet;
+
+    if (item_kind == RAGItemKind::kSnippet && emitted_snippets >= clamped_max_snippets) {
+      continue;
+    }
 
     std::string candidate_text{};
     if (result.preview_text.has_value()) {
@@ -284,6 +290,9 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
     item.sources = result.sources;
     item.text = JoinPrefixTokens(tokens, emit_tokens);
     context.total_tokens += static_cast<int>(emit_tokens);
+    if (item_kind == RAGItemKind::kSnippet) {
+      ++emitted_snippets;
+    }
     context.items.push_back(std::move(item));
     if (context.total_tokens >= clamped_max_context_tokens) {
       break;
