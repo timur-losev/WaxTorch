@@ -186,6 +186,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_malformed.json";
   const auto bad_sha_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_bad_sha.json";
+  const auto split_fields_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_split_fields.json";
   {
     std::ofstream out(temp_manifest, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
@@ -212,6 +214,13 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       throw std::runtime_error("failed to create bad-sha manifest file");
     }
     out << R"({"artifacts":[{"path":"libtorch-cpu.zip","sha256":"1234"}]})";
+  }
+  {
+    std::ofstream out(split_fields_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create split-fields manifest file");
+    }
+    out << R"({"artifacts":[{"path":"libtorch-cpu.zip"},{"sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]})";
   }
 
   {
@@ -263,6 +272,18 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", split_fields_manifest.string());
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "manifest must reject artifacts where path and sha are split across different objects");
+  }
+
+  {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", temp_manifest.string() + ".missing");
     const ScopedEnvVar require_manifest("WAXCPP_REQUIRE_LIBTORCH_MANIFEST", std::string("1"));
     bool threw = false;
@@ -280,6 +301,7 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(empty_manifest, ec);
   std::filesystem::remove(malformed_manifest, ec);
   std::filesystem::remove(bad_sha_manifest, ec);
+  std::filesystem::remove(split_fields_manifest, ec);
 }
 
 void ScenarioConcurrentEmbedThreadSafety() {

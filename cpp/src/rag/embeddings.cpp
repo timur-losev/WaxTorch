@@ -1,6 +1,7 @@
 #include "waxcpp/embeddings.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <cmath>
 #include <cstddef>
@@ -125,97 +126,223 @@ std::string_view TrimAsciiWhitespace(std::string_view text) {
   return text.substr(begin, end - begin);
 }
 
-std::size_t CountObjectFieldWithNonEmptyStringValue(std::string_view text,
-                                                    std::string_view key_a,
-                                                    std::string_view key_b) {
-  std::size_t count = 0;
-  std::size_t cursor = 0;
-  while (cursor < text.size()) {
-    const auto next_a = text.find(key_a, cursor);
-    const auto next_b = text.find(key_b, cursor);
-
-    std::size_t key_pos = std::string_view::npos;
-    if (next_a != std::string_view::npos && next_b != std::string_view::npos) {
-      key_pos = std::min(next_a, next_b);
-    } else if (next_a != std::string_view::npos) {
-      key_pos = next_a;
-    } else if (next_b != std::string_view::npos) {
-      key_pos = next_b;
-    } else {
-      break;
-    }
-
-    const auto colon = text.find(':', key_pos);
-    if (colon == std::string_view::npos) {
-      break;
-    }
-    const auto open_quote = text.find('"', colon + 1);
-    if (open_quote == std::string_view::npos) {
-      cursor = colon + 1;
-      continue;
-    }
-    const auto close_quote = text.find('"', open_quote + 1);
-    if (close_quote == std::string_view::npos) {
-      cursor = open_quote + 1;
-      continue;
-    }
-    if (close_quote > open_quote + 1) {
-      ++count;
-    }
-    cursor = close_quote + 1;
+std::optional<std::pair<std::size_t, std::size_t>> FindDelimitedRange(
+    std::string_view text,
+    std::size_t open_index,
+    char open_char,
+    char close_char) {
+  if (open_index >= text.size() || text[open_index] != open_char) {
+    return std::nullopt;
   }
-  return count;
+
+  bool in_string = false;
+  bool escaped = false;
+  int depth = 0;
+  for (std::size_t i = open_index; i < text.size(); ++i) {
+    const char ch = text[i];
+    if (in_string) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (ch == '"') {
+        in_string = false;
+      }
+      continue;
+    }
+
+    if (ch == '"') {
+      in_string = true;
+      continue;
+    }
+    if (ch == open_char) {
+      ++depth;
+      continue;
+    }
+    if (ch == close_char) {
+      --depth;
+      if (depth == 0) {
+        return std::make_pair(open_index, i);
+      }
+      if (depth < 0) {
+        return std::nullopt;
+      }
+    }
+  }
+  return std::nullopt;
 }
 
-std::size_t CountValidSha256Values(std::string_view text) {
-  std::size_t count = 0;
-  std::size_t cursor = 0;
-  while (cursor < text.size()) {
-    const auto next_sha256 = text.find("\"sha256\"", cursor);
-    const auto next_sha256sum = text.find("\"sha256sum\"", cursor);
+std::optional<std::pair<std::size_t, std::size_t>> FindArtifactArrayRange(std::string_view json) {
+  if (json.empty()) {
+    return std::nullopt;
+  }
+  if (json.front() == '[') {
+    return FindDelimitedRange(json, 0, '[', ']');
+  }
 
-    std::size_t key_pos = std::string_view::npos;
-    if (next_sha256 != std::string_view::npos && next_sha256sum != std::string_view::npos) {
-      key_pos = std::min(next_sha256, next_sha256sum);
-    } else if (next_sha256 != std::string_view::npos) {
-      key_pos = next_sha256;
-    } else if (next_sha256sum != std::string_view::npos) {
-      key_pos = next_sha256sum;
-    } else {
-      break;
-    }
+  constexpr std::array<std::string_view, 3> kArtifactKeys = {
+      "\"artifacts\"",
+      "\"files\"",
+      "\"entries\"",
+  };
 
-    const auto colon = text.find(':', key_pos);
-    if (colon == std::string_view::npos) {
-      break;
+  for (const auto key : kArtifactKeys) {
+    std::size_t cursor = 0;
+    while (cursor < json.size()) {
+      const auto key_pos = json.find(key, cursor);
+      if (key_pos == std::string_view::npos) {
+        break;
+      }
+      const auto colon = json.find(':', key_pos + key.size());
+      if (colon == std::string_view::npos) {
+        break;
+      }
+      const auto array_open = json.find('[', colon + 1);
+      if (array_open == std::string_view::npos) {
+        break;
+      }
+      if (const auto range = FindDelimitedRange(json, array_open, '[', ']'); range.has_value()) {
+        return range;
+      }
+      cursor = key_pos + key.size();
     }
-    const auto open_quote = text.find('"', colon + 1);
-    if (open_quote == std::string_view::npos) {
-      cursor = colon + 1;
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string_view> ExtractJsonStringField(std::string_view object,
+                                                       std::string_view key_a,
+                                                       std::string_view key_b) {
+  const auto next_a = object.find(key_a);
+  const auto next_b = object.find(key_b);
+
+  std::size_t key_pos = std::string_view::npos;
+  if (next_a != std::string_view::npos && next_b != std::string_view::npos) {
+    key_pos = std::min(next_a, next_b);
+  } else if (next_a != std::string_view::npos) {
+    key_pos = next_a;
+  } else if (next_b != std::string_view::npos) {
+    key_pos = next_b;
+  } else {
+    return std::nullopt;
+  }
+
+  const auto colon = object.find(':', key_pos);
+  if (colon == std::string_view::npos) {
+    return std::nullopt;
+  }
+  std::size_t value_pos = colon + 1;
+  while (value_pos < object.size()) {
+    const char ch = object[value_pos];
+    if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+      ++value_pos;
       continue;
     }
-    const auto close_quote = text.find('"', open_quote + 1);
-    if (close_quote == std::string_view::npos) {
-      cursor = open_quote + 1;
+    break;
+  }
+  if (value_pos >= object.size() || object[value_pos] != '"') {
+    return std::nullopt;
+  }
+
+  const auto open_quote = value_pos;
+  bool escaped = false;
+  for (std::size_t i = open_quote + 1; i < object.size(); ++i) {
+    const char ch = object[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch == '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch == '"') {
+      if (i == open_quote + 1) {
+        return std::nullopt;
+      }
+      return object.substr(open_quote + 1, i - open_quote - 1);
+    }
+  }
+  return std::nullopt;
+}
+
+bool HasNonEmptyArtifactPath(std::string_view object) {
+  const auto path = ExtractJsonStringField(object, "\"path\"", "\"file\"");
+  return path.has_value() && !path->empty();
+}
+
+bool HasValidSha256(std::string_view object) {
+  const auto sha = ExtractJsonStringField(object, "\"sha256\"", "\"sha256sum\"");
+  if (!sha.has_value() || sha->size() != 64) {
+    return false;
+  }
+  for (const char ch : *sha) {
+    if (!IsAsciiHex(ch)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::size_t CountValidArtifactObjects(std::string_view json,
+                                      const std::pair<std::size_t, std::size_t>& array_range) {
+  const std::size_t begin = array_range.first + 1;
+  const std::size_t end = array_range.second;
+  if (begin >= end || end > json.size()) {
+    return 0;
+  }
+
+  std::size_t valid = 0;
+  bool in_string = false;
+  bool escaped = false;
+  int brace_depth = 0;
+  std::size_t object_begin = std::string_view::npos;
+  for (std::size_t i = begin; i < end; ++i) {
+    const char ch = json[i];
+    if (in_string) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (ch == '"') {
+        in_string = false;
+      }
       continue;
     }
 
-    const auto value = text.substr(open_quote + 1, close_quote - open_quote - 1);
-    if (value.size() == 64) {
-      bool hex_only = true;
-      for (const char ch : value) {
-        if (!IsAsciiHex(ch)) {
-          hex_only = false;
-          break;
+    if (ch == '"') {
+      in_string = true;
+      continue;
+    }
+    if (ch == '{') {
+      if (brace_depth == 0) {
+        object_begin = i;
+      }
+      ++brace_depth;
+      continue;
+    }
+    if (ch == '}') {
+      if (brace_depth <= 0) {
+        continue;
+      }
+      --brace_depth;
+      if (brace_depth == 0 && object_begin != std::string_view::npos && i > object_begin) {
+        const auto object = json.substr(object_begin, i - object_begin + 1);
+        if (HasNonEmptyArtifactPath(object) && HasValidSha256(object)) {
+          ++valid;
         }
       }
-      if (hex_only) {
-        ++count;
-      }
     }
-    cursor = close_quote + 1;
   }
-  return count;
+  return valid;
 }
 
 std::size_t ValidateManifestFile(const std::filesystem::path& manifest_path) {
@@ -273,17 +400,17 @@ std::size_t ValidateManifestFile(const std::filesystem::path& manifest_path) {
     throw std::runtime_error("libtorch manifest does not contain sha256 keys");
   }
 
-  const auto path_entries = CountObjectFieldWithNonEmptyStringValue(trimmed, "\"path\"", "\"file\"");
-  if (path_entries == 0) {
-    throw std::runtime_error("libtorch manifest does not contain non-empty artifact paths");
+  const auto artifacts_range = FindArtifactArrayRange(trimmed);
+  if (!artifacts_range.has_value()) {
+    throw std::runtime_error("libtorch manifest does not contain a parseable artifact array");
   }
 
-  const auto valid_sha_entries = CountValidSha256Values(trimmed);
-  if (valid_sha_entries == 0) {
-    throw std::runtime_error("libtorch manifest does not contain valid sha256 values");
+  const auto valid_artifacts = CountValidArtifactObjects(trimmed, *artifacts_range);
+  if (valid_artifacts == 0) {
+    throw std::runtime_error("libtorch manifest does not contain artifact objects with path and valid sha256");
   }
 
-  return std::min(path_entries, valid_sha_entries);
+  return valid_artifacts;
 }
 
 bool IsAsciiAlphaNum(unsigned char ch) {
