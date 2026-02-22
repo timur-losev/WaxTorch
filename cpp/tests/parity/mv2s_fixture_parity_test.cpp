@@ -49,6 +49,7 @@ struct FixtureExpectation {
   std::optional<std::uint64_t> wal_pending_bytes;
   std::optional<std::uint64_t> wal_last_seq;
   std::optional<std::uint64_t> wal_committed_seq;
+  std::optional<std::uint64_t> wal_pending_embedding_mutations;
   std::optional<std::uint64_t> wal_pending_delete_mutations;
   std::optional<std::uint64_t> wal_pending_supersede_mutations;
 
@@ -170,6 +171,8 @@ FixtureExpectation LoadExpectation(const std::filesystem::path& mv2s_path) {
       expected.wal_last_seq = ParseUInt64(value, key);
     } else if (key == "wal_committed_seq") {
       expected.wal_committed_seq = ParseUInt64(value, key);
+    } else if (key == "wal_pending_embedding_mutations") {
+      expected.wal_pending_embedding_mutations = ParseUInt64(value, key);
     } else if (key == "wal_pending_delete_mutations") {
       expected.wal_pending_delete_mutations = ParseUInt64(value, key);
     } else if (key == "wal_pending_supersede_mutations") {
@@ -198,7 +201,8 @@ FixtureExpectation LoadExpectation(const std::filesystem::path& mv2s_path) {
       (expected.frame_count.has_value() || expected.generation.has_value() ||
        expected.wal_write_pos.has_value() || expected.wal_checkpoint_pos.has_value() ||
        expected.wal_pending_bytes.has_value() || expected.wal_last_seq.has_value() ||
-       expected.wal_committed_seq.has_value() || expected.wal_pending_delete_mutations.has_value() ||
+       expected.wal_committed_seq.has_value() || expected.wal_pending_embedding_mutations.has_value() ||
+       expected.wal_pending_delete_mutations.has_value() ||
        expected.wal_pending_supersede_mutations.has_value() || !expected.frame_payload_len.empty() ||
        !expected.frame_status.empty() || !expected.frame_payload_utf8.empty())) {
     throw std::runtime_error("state expectations are only valid for mode=pass");
@@ -284,6 +288,10 @@ void AssertExpected(const std::filesystem::path& fixture_path,
   }
   if (expected.wal_committed_seq.has_value() && wal_stats.committed_seq != *expected.wal_committed_seq) {
     throw std::runtime_error("wal_committed_seq mismatch for " + fixture_path.string());
+  }
+  if (expected.wal_pending_embedding_mutations.has_value() &&
+      wal_stats.pending_embedding_mutations != *expected.wal_pending_embedding_mutations) {
+    throw std::runtime_error("wal_pending_embedding_mutations mismatch for " + fixture_path.string());
   }
   if (expected.wal_pending_delete_mutations.has_value() &&
       wal_stats.pending_delete_mutations != *expected.wal_pending_delete_mutations) {
@@ -508,6 +516,9 @@ int main() {
       waxcpp::tests::LogKV("fixture_wal_pending_bytes", wal_stats.pending_bytes);
       waxcpp::tests::LogKV("fixture_wal_last_seq", wal_stats.last_seq);
       waxcpp::tests::LogKV("fixture_wal_committed_seq", wal_stats.committed_seq);
+      waxcpp::tests::LogKV("fixture_wal_pending_embedding_mutations", wal_stats.pending_embedding_mutations);
+      waxcpp::tests::LogKV("fixture_wal_pending_delete_mutations", wal_stats.pending_delete_mutations);
+      waxcpp::tests::LogKV("fixture_wal_pending_supersede_mutations", wal_stats.pending_supersede_mutations);
 
       AssertExpected(fixture, stats, wal_stats, expected);
       AssertPassInvariants(fixture, store, stats, wal_stats, expected);

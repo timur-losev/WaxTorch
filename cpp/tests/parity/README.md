@@ -23,6 +23,7 @@ wal_checkpoint_pos=0
 wal_pending_bytes=0
 wal_last_seq=9
 wal_committed_seq=9
+wal_pending_embedding_mutations=0
 wal_pending_delete_mutations=0
 wal_pending_supersede_mutations=0
 frame_payload_len.0=28

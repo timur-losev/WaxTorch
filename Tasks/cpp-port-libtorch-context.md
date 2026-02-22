@@ -504,6 +504,11 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/include/waxcpp/wax_store.hpp` | Extended `WaxWALStats` with `pending_embedding_mutations` runtime counter | Codex |
 | `cpp/src/core/wax_store.cpp` | Wired `pending_embedding_mutations` updates in open/write/commit paths and surfaced it via `WalStats()` | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added assertions that `pending_embedding_mutations` tracks pending embedding snapshot size and resets on commit/recovery transitions | Codex |
+| `cpp/tests/parity/mv2s_fixture_parity_test.cpp` | Extended parity sidecar/WAL assertions with `wal_pending_embedding_mutations` and added corresponding fixture logs | Codex |
+| `cpp/tests/parity/mv2s_fixture_generator.cpp` | Updated synthetic valid-payload sidecar generation to emit all pending WAL mutation counters (embedding/delete/supersede) | Codex |
+| `fixtures/parity/synthetic/synthetic_valid_payload.mv2s.expected` | Added `wal_pending_embedding_mutations=0` expectation for synthetic pass fixture parity | Codex |
+| `cpp/tests/parity/README.md` | Documented `wal_pending_embedding_mutations` sidecar key in parity test format reference | Codex |
+| `fixtures/parity/README.md` | Documented `wal_pending_embedding_mutations` as supported shared fixture sidecar key | Codex |
 | `cpp/src/core/wax_store.cpp` | Refactored `PutBatch` to a single `WalRingWriter` append path (no per-item `Put()` calls) while preserving dense IDs and existing commit semantics | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added regression for `Close()` auto-commit of local embedding-only mutations (pending embedding count clears and no pending snapshot after reopen) | Codex |
 | `cpp/src/core/wal_ring.hpp` | Added `WalRingWriter::AppendBatch` API for batched WAL appends | Codex |

@@ -324,6 +324,9 @@ int main() {
                 "wal_pending_bytes=0\n"
                 "wal_last_seq=9\n"
                 "wal_committed_seq=9\n"
+                "wal_pending_embedding_mutations=0\n"
+                "wal_pending_delete_mutations=0\n"
+                "wal_pending_supersede_mutations=0\n"
                 "frame_payload_len.0=8\n"
                 "frame_status.0=0\n"
                 "frame_payload_utf8.0=WaxCPP!!\n");
