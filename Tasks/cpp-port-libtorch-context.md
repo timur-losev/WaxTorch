@@ -530,6 +530,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added regression for malformed persisted embedding record (`WAXEM1` with `NaN`) asserting reopen rebuild re-embeds document instead of trusting corrupted persisted vector | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Enforced finite-only embedding invariants across remember/recall/rebuild paths (reject non-finite query embeddings and non-finite embedder outputs) | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added non-finite embedding regressions: `Remember` rejects non-finite embedder output, `Recall(query, embedding)` rejects non-finite explicit vectors, and `Recall(query)` rejects non-finite query embeddings from embedder | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Hardened embedding-record parser against pathological payloads: bounded max value count and strict remaining-bytes check before vector allocation | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Reserved internal magic namespace (`WAXSM1/WAXEM1/WAXEM2`) for channel filtering so malformed internal records never leak into user text/vector channels | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added malformed persisted embedding regression (`WAXEM1` huge count) asserting record is ignored and reopen rebuild re-embeds committed user frame | Codex |
 | `cpp/src/core/wax_store.cpp` | Switched `PutBatch` WAL path to `AppendBatch` for parity with batched write semantics and lower writer overhead | Codex |
 | `cpp/src/core/wal_ring.cpp` | Hardened `AppendBatch` with dry-run capacity preflight so overflow rejects atomically before any WAL writes | Codex |
 | `cpp/tests/unit/wal_ring_writer_test.cpp` | Added overflow atomicity regression ensuring failed `AppendBatch` preserves WAL cursor/state and does not append partial records | Codex |

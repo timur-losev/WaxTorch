@@ -89,6 +89,23 @@ std::vector<std::byte> BuildEmbeddingRecordPayloadV1(std::uint64_t frame_id, con
   return payload;
 }
 
+std::vector<std::byte> BuildMalformedEmbeddingRecordPayloadV1(std::uint64_t frame_id, std::uint32_t count) {
+  constexpr std::array<std::byte, 6> kMagic = {
+      std::byte{'W'},
+      std::byte{'A'},
+      std::byte{'X'},
+      std::byte{'E'},
+      std::byte{'M'},
+      std::byte{'1'},
+  };
+  std::vector<std::byte> payload{};
+  payload.reserve(kMagic.size() + 8 + 4);
+  payload.insert(payload.end(), kMagic.begin(), kMagic.end());
+  AppendU64LE(payload, frame_id);
+  AppendU32LE(payload, count);
+  return payload;
+}
+
 bool StartsWithMagic(const std::vector<std::byte>& bytes, const char* magic, std::size_t size) {
   if (bytes.size() < size) {
     return false;
@@ -2331,6 +2348,35 @@ void ScenarioVectorReopenWithNonFinitePersistedEmbeddingReembeds(const std::file
   }
 }
 
+void ScenarioVectorReopenWithMalformedPersistedEmbeddingCountSkipsRecord(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector reopen with malformed persisted embedding count skips record");
+  std::uint64_t user_frame_id = 0;
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    user_frame_id = store.Put(StringToBytes("malformed persisted count apple"), {});
+    const auto malformed_payload = BuildMalformedEmbeddingRecordPayloadV1(user_frame_id, 0xFFFFFFFFU);
+    (void)store.Put(malformed_payload, {});
+    store.Commit();
+    store.Close();
+  }
+
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    // Malformed persisted record should be ignored; rebuild must embed the user frame once.
+    Require(embedder->batch_calls() == 0, "single-frame rebuild should not use EmbedBatch");
+    Require(embedder->embed_calls() == 1, "malformed persisted record should be ignored and re-embedded");
+    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "vector recall should succeed after ignoring malformed persisted record");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: remember ingest_concurrency propagates embed errors");
   waxcpp::OrchestratorConfig config{};
@@ -2976,6 +3022,7 @@ int main() {
     const auto path80 = UniquePath();
     const auto path81 = UniquePath();
     const auto path82 = UniquePath();
+    const auto path83 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -2996,6 +3043,7 @@ int main() {
     ScenarioRememberUsesConfiguredIngestConcurrency(path37);
     ScenarioVectorRebuildUsesConfiguredIngestConcurrency(path38);
     ScenarioVectorReopenWithNonFinitePersistedEmbeddingReembeds(path79);
+    ScenarioVectorReopenWithMalformedPersistedEmbeddingCountSkipsRecord(path83);
     ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(path39);
     ScenarioRememberRejectsNonFiniteEmbeddings(path80);
     ScenarioRecallExplicitEmbeddingRejectsNonFinite(path81);
@@ -3070,6 +3118,7 @@ int main() {
         path55, path56, path57, path58, path59, path60, path61, path62, path63, path64, path65,
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
+        path83,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

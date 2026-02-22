@@ -77,6 +77,8 @@ inline constexpr std::array<std::byte, 6> kEmbeddingRecordMagicV2 = {
     std::byte{'2'},
 };
 
+constexpr std::uint32_t kMaxEmbeddingRecordValues = 16384;
+
 enum class StructuredFactOpcode : std::uint8_t {
   kUpsert = 1,
   kRemove = 2,
@@ -356,6 +358,9 @@ std::optional<EmbeddingRecord> ParseEmbeddingRecordPayload(const std::vector<std
   if (!frame_id.has_value() || !count.has_value()) {
     return std::nullopt;
   }
+  if (*count > kMaxEmbeddingRecordValues) {
+    return std::nullopt;
+  }
 
   std::optional<std::string> identity_tag{};
   if (is_v2) {
@@ -375,6 +380,11 @@ std::optional<EmbeddingRecord> ParseEmbeddingRecordPayload(const std::vector<std
       identity_tag = std::move(tag);
     }
     cursor += *identity_len;
+  }
+
+  const auto remaining_bytes = payload.size() - cursor;
+  if (remaining_bytes / sizeof(std::uint32_t) < *count) {
+    return std::nullopt;
   }
 
   std::vector<float> embedding{};
@@ -406,10 +416,6 @@ std::string BytesToString(const std::vector<std::byte>& payload) {
   return out;
 }
 
-bool IsInternalOrchestratorPayload(const std::vector<std::byte>& payload) {
-  return ParseStructuredFactPayload(payload).has_value() || ParseEmbeddingRecordPayload(payload).has_value();
-}
-
 bool AllFinite(const std::vector<float>& values) {
   for (const float value : values) {
     if (!std::isfinite(value)) {
@@ -417,6 +423,23 @@ bool AllFinite(const std::vector<float>& values) {
     }
   }
   return true;
+}
+
+bool StartsWithMagic(std::span<const std::byte> payload, std::span<const std::byte> magic) {
+  if (payload.size() < magic.size()) {
+    return false;
+  }
+  return std::equal(magic.begin(), magic.end(), payload.begin());
+}
+
+bool IsInternalOrchestratorPayload(const std::vector<std::byte>& payload) {
+  if (StartsWithMagic(payload, kStructuredFactMagic) ||
+      StartsWithMagic(payload, kEmbeddingRecordMagic) ||
+      StartsWithMagic(payload, kEmbeddingRecordMagicV2)) {
+    // Reserved internal payload namespace: malformed internal records must never leak to user channels.
+    return true;
+  }
+  return false;
 }
 
 std::vector<std::string> TokenizeWhitespace(std::string_view text) {
