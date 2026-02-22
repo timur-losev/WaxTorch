@@ -226,6 +226,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_nested_fields.json";
   const auto nested_plus_top_level_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_nested_plus_top_level.json";
+  const auto cpu_cuda_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_cpu_cuda.json";
   {
     std::ofstream out(temp_manifest, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
@@ -274,6 +276,13 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     }
     out << R"({"artifacts":[{"meta":{"path":"ignored-nested.zip","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},"path":"libtorch-cpu.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]})";
   }
+  {
+    std::ofstream out(cpu_cuda_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create cpu-cuda manifest file");
+    }
+    out << R"({"artifacts":[{"path":"libtorch-cpu.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000"},{"path":"libtorch-cuda121.zip","sha256":"1111111111111111111111111111111111111111111111111111111111111111"}]})";
+  }
 
   {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", temp_manifest.string());
@@ -282,9 +291,25 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     Require(info.libtorch_manifest_detected, "manifest override should be detected");
     Require(info.libtorch_manifest_valid, "valid manifest override should pass validation");
     Require(info.libtorch_manifest_artifact_count > 0, "valid manifest should report artifact count");
+    Require(info.libtorch_manifest_cpu_artifact_count == 1, "single cpu manifest should report one cpu artifact");
+    Require(info.libtorch_manifest_cuda_artifact_count == 0, "single cpu manifest should report zero cuda artifacts");
     Require(info.libtorch_manifest_path.has_value(), "manifest override path should be preserved");
     Require(*info.libtorch_manifest_path == std::filesystem::absolute(temp_manifest).string(),
             "manifest override absolute path mismatch");
+  }
+
+  {
+    const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", cpu_cuda_manifest.string());
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.libtorch_manifest_valid, "cpu-cuda manifest should pass validation");
+    Require(info.libtorch_manifest_artifact_count == 2, "cpu-cuda manifest should report two valid artifacts");
+    Require(info.libtorch_manifest_cpu_artifact_count == 1, "cpu-cuda manifest should report one cpu artifact");
+    Require(info.libtorch_manifest_cuda_artifact_count == 1, "cpu-cuda manifest should report one cuda artifact");
+    Require(info.cuda_preferred_requested, "cuda-preferred runtime should remain requested with mixed manifest");
+    Require(info.selected_backend == "fallback_cpu",
+            "fallback build should stay on fallback_cpu even when cuda artifacts are present");
   }
 
   {
@@ -376,6 +401,7 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(split_fields_manifest, ec);
   std::filesystem::remove(nested_fields_manifest, ec);
   std::filesystem::remove(nested_plus_top_level_manifest, ec);
+  std::filesystem::remove(cpu_cuda_manifest, ec);
 }
 
 void ScenarioConcurrentEmbedThreadSafety() {

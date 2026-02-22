@@ -353,9 +353,12 @@ std::optional<std::string_view> ExtractJsonStringField(std::string_view object,
   return std::nullopt;
 }
 
-bool HasNonEmptyArtifactPath(std::string_view object) {
+std::optional<std::string_view> ExtractArtifactPath(std::string_view object) {
   const auto path = ExtractJsonStringField(object, "\"path\"", "\"file\"");
-  return path.has_value() && !path->empty();
+  if (!path.has_value() || path->empty()) {
+    return std::nullopt;
+  }
+  return path;
 }
 
 bool HasValidSha256(std::string_view object) {
@@ -371,15 +374,31 @@ bool HasValidSha256(std::string_view object) {
   return true;
 }
 
-std::size_t CountValidArtifactObjects(std::string_view json,
-                                      const std::pair<std::size_t, std::size_t>& array_range) {
+struct ManifestValidationSummary {
+  std::size_t valid_artifact_count = 0;
+  std::size_t cpu_artifact_count = 0;
+  std::size_t cuda_artifact_count = 0;
+};
+
+bool ArtifactPathLooksCuda(std::string_view path) {
+  const auto lower = ToAsciiLowerString(path);
+  return lower.find("cuda") != std::string::npos;
+}
+
+bool ArtifactPathLooksCpu(std::string_view path) {
+  const auto lower = ToAsciiLowerString(path);
+  return lower.find("cpu") != std::string::npos;
+}
+
+ManifestValidationSummary CountValidArtifactObjects(std::string_view json,
+                                                    const std::pair<std::size_t, std::size_t>& array_range) {
   const std::size_t begin = array_range.first + 1;
   const std::size_t end = array_range.second;
   if (begin >= end || end > json.size()) {
-    return 0;
+    return {};
   }
 
-  std::size_t valid = 0;
+  ManifestValidationSummary summary{};
   bool in_string = false;
   bool escaped = false;
   int brace_depth = 0;
@@ -419,16 +438,23 @@ std::size_t CountValidArtifactObjects(std::string_view json,
       --brace_depth;
       if (brace_depth == 0 && object_begin != std::string_view::npos && i > object_begin) {
         const auto artifact_object = json.substr(object_begin, i - object_begin + 1);
-        if (HasNonEmptyArtifactPath(artifact_object) && HasValidSha256(artifact_object)) {
-          ++valid;
+        const auto path = ExtractArtifactPath(artifact_object);
+        if (path.has_value() && HasValidSha256(artifact_object)) {
+          ++summary.valid_artifact_count;
+          if (ArtifactPathLooksCuda(*path)) {
+            ++summary.cuda_artifact_count;
+          }
+          if (ArtifactPathLooksCpu(*path)) {
+            ++summary.cpu_artifact_count;
+          }
         }
       }
     }
   }
-  return valid;
+  return summary;
 }
 
-std::size_t ValidateManifestFile(const std::filesystem::path& manifest_path) {
+ManifestValidationSummary ValidateManifestFile(const std::filesystem::path& manifest_path) {
   constexpr std::uintmax_t kMaxManifestBytes = 8U * 1024U * 1024U;
   std::error_code ec{};
   const auto size = std::filesystem::file_size(manifest_path, ec);
@@ -488,12 +514,12 @@ std::size_t ValidateManifestFile(const std::filesystem::path& manifest_path) {
     throw std::runtime_error("libtorch manifest does not contain a parseable artifact array");
   }
 
-  const auto valid_artifacts = CountValidArtifactObjects(trimmed, *artifacts_range);
-  if (valid_artifacts == 0) {
+  const auto summary = CountValidArtifactObjects(trimmed, *artifacts_range);
+  if (summary.valid_artifact_count == 0) {
     throw std::runtime_error("libtorch manifest does not contain artifact objects with path and valid sha256");
   }
 
-  return valid_artifacts;
+  return summary;
 }
 
 bool IsAsciiAlphaNum(unsigned char ch) {
@@ -568,7 +594,10 @@ MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
     runtime_info_.libtorch_manifest_detected = true;
     runtime_info_.libtorch_manifest_path = manifest_path->string();
     try {
-      runtime_info_.libtorch_manifest_artifact_count = ValidateManifestFile(*manifest_path);
+      const auto manifest_summary = ValidateManifestFile(*manifest_path);
+      runtime_info_.libtorch_manifest_artifact_count = manifest_summary.valid_artifact_count;
+      runtime_info_.libtorch_manifest_cpu_artifact_count = manifest_summary.cpu_artifact_count;
+      runtime_info_.libtorch_manifest_cuda_artifact_count = manifest_summary.cuda_artifact_count;
       runtime_info_.libtorch_manifest_valid = true;
     } catch (const std::exception& ex) {
       throw std::runtime_error(std::string("MiniLMEmbedderTorch libtorch manifest is invalid: ") + ex.what());
