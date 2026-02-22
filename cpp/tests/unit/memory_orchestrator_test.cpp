@@ -1004,6 +1004,39 @@ void ScenarioRememberUsesConfiguredIngestConcurrency(const std::filesystem::path
   }
 }
 
+void ScenarioVectorRebuildUsesConfiguredIngestConcurrency(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector rebuild uses configured ingest_concurrency");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    for (int i = 0; i < 8; ++i) {
+      const std::string text = "seed-doc-" + std::to_string(i) + " apple";
+      (void)store.Put(StringToBytes(text), {});
+    }
+    store.Commit();
+    store.Close();
+  }
+
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+  config.ingest_concurrency = 4;
+
+  auto embedder = std::make_shared<ThreadTrackingEmbedder>(std::this_thread::get_id());
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "vector rebuild should make seeded docs searchable");
+    orchestrator.Close();
+  }
+
+  Require(embedder->calls() == 8, "rebuild ingest_concurrency scenario should embed each seeded doc exactly once");
+  Require(!embedder->called_from_caller_thread(),
+          "rebuild ingest_concurrency>1 should run non-batch embed calls on worker threads");
+  Require(embedder->distinct_thread_count() >= 2,
+          "rebuild ingest_concurrency>1 should utilize more than one worker thread");
+}
+
 void ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: flush failure does not expose staged structured fact until retry");
   waxcpp::OrchestratorConfig config{};
@@ -1420,6 +1453,7 @@ int main() {
     const auto path35 = UniquePath();
     const auto path36 = UniquePath();
     const auto path37 = UniquePath();
+    const auto path38 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -1434,6 +1468,7 @@ int main() {
     ScenarioBatchProviderUsedForRemember(path8);
     ScenarioRememberRespectsIngestBatchSize(path9);
     ScenarioRememberUsesConfiguredIngestConcurrency(path37);
+    ScenarioVectorRebuildUsesConfiguredIngestConcurrency(path38);
     ScenarioTextOnlyRecallSkipsVectorEmbedding(path10);
     ScenarioStructuredMemoryFacts(path11);
     ScenarioRecallIncludesStructuredMemory(path12);
@@ -1464,7 +1499,7 @@ int main() {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
         path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
-        path33, path34, path35, path36, path37,
+        path33, path34, path35, path36, path37, path38,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
