@@ -342,6 +342,29 @@ void RunScenarioPutEmbeddingBatchUnknownFrameRejected(const std::filesystem::pat
   reopened.Close();
 }
 
+void RunScenarioPutEmbeddingForwardReferenceRejected(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: putEmbedding forward reference rejected at commit");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    // Sequence order is important: putEmbedding(frame=0) comes before putFrame(frame=0).
+    store.PutEmbedding(0, {0.7F, 0.9F});
+    (void)store.Put({std::byte{0xE4}});
+    bool threw = false;
+    try {
+      store.Commit();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "commit must reject forward-reference putEmbedding that precedes putFrame");
+    // Simulate abrupt stop; avoid Close() auto-commit retry path.
+  }
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  const auto stats = reopened.Stats();
+  Require(stats.frame_count == 0, "forward-reference reject must keep committed frame_count unchanged");
+  reopened.Close();
+}
+
 void RunScenarioPendingRecoveryCommit(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: pending WAL recovery then commit");
   {
@@ -788,6 +811,7 @@ int main() {
     RunScenarioPendingEmbeddingSnapshotReopenRecovery(path);
     RunScenarioPutEmbeddingUnknownFrameRejected(path);
     RunScenarioPutEmbeddingBatchUnknownFrameRejected(path);
+    RunScenarioPutEmbeddingForwardReferenceRejected(path);
     RunScenarioPendingRecoveryCommit(path);
     RunScenarioPendingRecoverySkipsUndecodableTail(path);
     RunScenarioDeleteAndSupersedePersist(path);
