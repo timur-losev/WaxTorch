@@ -118,6 +118,44 @@ void ScenarioUnifiedSearchModesAndHybridRrf() {
   }
 }
 
+void ScenarioDuplicateFrameIdsAreDeduplicated() {
+  waxcpp::tests::Log("scenario: duplicate frame ids are deduplicated");
+
+  {
+    waxcpp::SearchRequest request{};
+    request.mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+    request.top_k = 10;
+    const std::vector<waxcpp::SearchResult> text_results = {
+        {.frame_id = 1, .score = 1.0F, .preview_text = std::string("first"), .sources = {waxcpp::SearchSource::kText}},
+        {.frame_id = 1, .score = 0.5F, .preview_text = std::string("second"), .sources = {waxcpp::SearchSource::kStructuredMemory}},
+        {.frame_id = 2, .score = 0.9F, .preview_text = std::string("two"), .sources = {waxcpp::SearchSource::kText}},
+    };
+
+    const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, {});
+    Require(response.results.size() == 2, "single-channel duplicate frame ids should collapse");
+    Require(response.results[0].frame_id == 1, "deduped result should keep best-scoring frame entry");
+  }
+
+  {
+    waxcpp::SearchRequest request{};
+    request.mode = {waxcpp::SearchModeKind::kHybrid, 0.5F};
+    request.top_k = 10;
+    request.rrf_k = 60;
+    const std::vector<waxcpp::SearchResult> text_results = {
+        {.frame_id = 100, .score = 4.0F, .preview_text = std::string("dup-a"), .sources = {waxcpp::SearchSource::kText}},
+        {.frame_id = 100, .score = 3.0F, .preview_text = std::string("dup-b"), .sources = {waxcpp::SearchSource::kText}},
+    };
+    const std::vector<waxcpp::SearchResult> vector_results = {
+        {.frame_id = 50, .score = 5.0F, .preview_text = std::string("vec"), .sources = {waxcpp::SearchSource::kVector}},
+    };
+
+    const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, vector_results);
+    Require(!response.results.empty(), "hybrid dedup scenario should produce results");
+    Require(response.results[0].frame_id == 50,
+            "duplicate entries in one channel must not double-count RRF contribution");
+  }
+}
+
 void ScenarioHybridAlphaClamp() {
   waxcpp::tests::Log("scenario: hybrid alpha clamp");
   const std::vector<waxcpp::SearchResult> text_results = {
@@ -225,6 +263,7 @@ int main() {
     ScenarioPreviewClampAndTokenCount();
     ScenarioNaNScoreNormalization();
     ScenarioUnifiedSearchModesAndHybridRrf();
+    ScenarioDuplicateFrameIdsAreDeduplicated();
     ScenarioHybridAlphaClamp();
     ScenarioContextTokenBudgetClamp();
     ScenarioRagItemKindPolicy();

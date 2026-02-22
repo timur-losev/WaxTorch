@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -76,6 +77,46 @@ float ClampAlpha(float alpha) {
 }
 
 std::vector<SearchResult> SortedChannel(std::vector<SearchResult> results, int top_k) {
+  struct ChannelAggregate {
+    float best_score = 0.0F;
+    std::optional<std::string> preview_text{};
+    std::unordered_set<SearchSource> sources{};
+    bool seen = false;
+  };
+
+  std::unordered_map<std::uint64_t, ChannelAggregate> by_frame{};
+  by_frame.reserve(results.size());
+  for (const auto& result : results) {
+    auto& agg = by_frame[result.frame_id];
+    const float normalized_score = std::isnan(result.score) ? 0.0F : result.score;
+    if (!agg.seen || normalized_score > agg.best_score) {
+      agg.best_score = normalized_score;
+      if (result.preview_text.has_value()) {
+        agg.preview_text = result.preview_text;
+      }
+      agg.seen = true;
+    } else if (!agg.preview_text.has_value() && result.preview_text.has_value()) {
+      agg.preview_text = result.preview_text;
+    }
+    for (const auto source : result.sources) {
+      agg.sources.insert(source);
+    }
+  }
+
+  results.clear();
+  results.reserve(by_frame.size());
+  for (auto& [frame_id, agg] : by_frame) {
+    SearchResult merged{};
+    merged.frame_id = frame_id;
+    merged.score = agg.best_score;
+    merged.preview_text = std::move(agg.preview_text);
+    merged.sources.assign(agg.sources.begin(), agg.sources.end());
+    std::sort(merged.sources.begin(), merged.sources.end(), [](const auto lhs, const auto rhs) {
+      return static_cast<int>(lhs) < static_cast<int>(rhs);
+    });
+    results.push_back(std::move(merged));
+  }
+
   std::sort(results.begin(), results.end(), ScoreLess);
   if (top_k > 0 && results.size() > static_cast<std::size_t>(top_k)) {
     results.resize(static_cast<std::size_t>(top_k));
