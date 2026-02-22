@@ -8,6 +8,7 @@
 #include "waxcpp/wax_store.hpp"
 
 #include <filesystem>
+#include <mutex>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -44,6 +45,7 @@ class MemoryOrchestrator {
   FTS5SearchEngine structured_text_index_;
   std::unique_ptr<USearchVectorEngine> vector_index_;
   bool closed_ = false;
+  mutable std::mutex mutex_{};
 };
 
 }  // namespace waxcpp

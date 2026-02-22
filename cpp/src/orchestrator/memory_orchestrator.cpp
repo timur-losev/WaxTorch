@@ -735,6 +735,7 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
 }
 
 void MemoryOrchestrator::Remember(const std::string& content, const Metadata& metadata) {
+  std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
   EnsureEmbedderRequiredForRemember(config_, embedder_);
   const auto chunks = ChunkContent(content, config_.chunking.target_tokens, config_.chunking.overlap_tokens);
@@ -781,6 +782,7 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
 }
 
 RAGContext MemoryOrchestrator::Recall(const std::string& query) {
+  std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
   SearchRequest req;
   req.query = query;
@@ -806,6 +808,7 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
 }
 
 RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vector<float>& embedding) {
+  std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
   if (!config_.enable_vector_search) {
     throw std::runtime_error("Recall(query, embedding) requires vector search to be enabled");
@@ -841,6 +844,7 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
                                       const std::string& attribute,
                                       const std::string& value,
                                       const Metadata& metadata) {
+  std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
   const auto fact_id = structured_memory_.StageUpsert(entity, attribute, value, metadata);
   if (config_.enable_text_search) {
@@ -856,6 +860,7 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
 }
 
 bool MemoryOrchestrator::ForgetFact(const std::string& entity, const std::string& attribute) {
+  std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
   const auto removed_id = structured_memory_.StageRemove(entity, attribute);
   if (!removed_id.has_value()) {
@@ -871,11 +876,13 @@ bool MemoryOrchestrator::ForgetFact(const std::string& entity, const std::string
 
 std::vector<StructuredMemoryEntry> MemoryOrchestrator::RecallFactsByEntityPrefix(const std::string& entity_prefix,
                                                                                   int limit) {
+  std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
   return structured_memory_.QueryByEntityPrefix(entity_prefix, limit);
 }
 
 void MemoryOrchestrator::Flush() {
+  std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
   store_.Commit();
   try {
@@ -901,6 +908,7 @@ void MemoryOrchestrator::Flush() {
 }
 
 void MemoryOrchestrator::Close() {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (closed_) {
     return;
   }

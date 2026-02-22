@@ -10,6 +10,8 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -1197,6 +1199,76 @@ void ScenarioStructuredMemoryRemovePersists(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioConcurrentRememberIsSerialized(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: concurrent remember is serialized");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  constexpr int kThreadCount = 4;
+  constexpr int kDocsPerThread = 12;
+  std::unordered_set<std::string> expected_payloads{};
+  expected_payloads.reserve(static_cast<std::size_t>(kThreadCount * kDocsPerThread));
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    std::vector<std::thread> workers{};
+    workers.reserve(kThreadCount);
+
+    for (int thread_index = 0; thread_index < kThreadCount; ++thread_index) {
+      workers.emplace_back([&, thread_index]() {
+        for (int doc_index = 0; doc_index < kDocsPerThread; ++doc_index) {
+          const std::string text =
+              "thread-" + std::to_string(thread_index) + " doc-" + std::to_string(doc_index) + " apple";
+          orchestrator.Remember(text, {});
+        }
+      });
+    }
+
+    for (auto& worker : workers) {
+      worker.join();
+    }
+
+    for (int thread_index = 0; thread_index < kThreadCount; ++thread_index) {
+      for (int doc_index = 0; doc_index < kDocsPerThread; ++doc_index) {
+        expected_payloads.insert("thread-" + std::to_string(thread_index) + " doc-" +
+                                 std::to_string(doc_index) + " apple");
+      }
+    }
+
+    orchestrator.Flush();
+    const auto context = orchestrator.Recall("apple");
+    Require(!context.items.empty(), "concurrent remember should leave searchable text context after flush");
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    const auto stats = store.Stats();
+    const std::uint64_t expected_count = static_cast<std::uint64_t>(kThreadCount * kDocsPerThread);
+    Require(stats.frame_count == expected_count, "concurrent remember should persist every document exactly once");
+
+    std::unordered_set<std::string> persisted_payloads{};
+    persisted_payloads.reserve(static_cast<std::size_t>(stats.frame_count));
+    const auto metas = store.FrameMetas();
+    for (const auto& meta : metas) {
+      if (meta.status != 0) {
+        continue;
+      }
+      persisted_payloads.insert(BytesToString(store.FrameContent(meta.id)));
+    }
+
+    Require(persisted_payloads.size() == expected_payloads.size(),
+            "persisted payload set size mismatch after concurrent remember");
+    for (const auto& expected : expected_payloads) {
+      Require(persisted_payloads.find(expected) != persisted_payloads.end(),
+              "missing payload after concurrent remember");
+    }
+    store.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -1238,6 +1310,7 @@ int main() {
     const auto path33 = UniquePath();
     const auto path34 = UniquePath();
     const auto path35 = UniquePath();
+    const auto path36 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -1275,12 +1348,13 @@ int main() {
     ScenarioStructuredFactStagedOrderBeforeFlush(path27);
     ScenarioStructuredFactCloseWithoutFlushPersistsViaStoreClose(path28);
     ScenarioStructuredFactForgetWithoutFlushPersistsViaStoreClose(path35);
+    ScenarioConcurrentRememberIsSerialized(path36);
 
     const std::vector<std::filesystem::path> cleanup_paths = {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
         path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
-        path33, path34, path35,
+        path33, path34, path35, path36,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
