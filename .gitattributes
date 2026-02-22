@@ -1,0 +1,2 @@
+fixtures/parity/**/*.expected text eol=lf
+fixtures/parity/**/*.mv2s binary
