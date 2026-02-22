@@ -185,6 +185,17 @@ void ScenarioHybridAlphaClamp() {
     Require(!response.results.empty(), "hybrid alpha>1 should still produce response");
     Require(response.results[0].frame_id == 10, "alpha>1 clamp should prioritize text channel");
   }
+
+  {
+    waxcpp::SearchRequest request{};
+    request.mode = {waxcpp::SearchModeKind::kHybrid, std::numeric_limits<float>::quiet_NaN()};
+    request.top_k = 10;
+    request.rrf_k = 60;
+    const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, vector_results);
+    Require(!response.results.empty(), "hybrid alpha=NaN should still produce response");
+    Require(response.results[0].frame_id == 20,
+            "alpha=NaN should clamp via Swift parity path (min(1,max(0,alpha))) to vector-prioritized");
+  }
 }
 
 void ScenarioRrfKClampMatchesSwiftParity() {

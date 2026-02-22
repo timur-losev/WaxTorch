@@ -76,7 +76,7 @@ bool ScoreLess(const SearchResult& lhs, const SearchResult& rhs) {
 }
 
 float ClampAlpha(float alpha) {
-  return std::max(0.0F, std::min(1.0F, alpha));
+  return std::min(1.0F, std::max(0.0F, alpha));
 }
 
 std::vector<SearchResult> MergeDuplicateFrameResults(std::vector<SearchResult> results) {
