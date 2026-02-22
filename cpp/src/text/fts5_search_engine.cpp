@@ -272,6 +272,15 @@ struct FTS5SearchEngine::SQLiteState {
 #ifdef WAXCPP_HAS_SQLITE
   sqlite3* db = nullptr;
 #endif
+
+  ~SQLiteState() {
+#ifdef WAXCPP_HAS_SQLITE
+    if (db != nullptr) {
+      sqlite3_close(db);
+      db = nullptr;
+    }
+#endif
+  }
 };
 
 FTS5SearchEngine::FTS5SearchEngine() {
@@ -312,23 +321,13 @@ FTS5SearchEngine::FTS5SearchEngine() {
                  "END;");
       sqlite_ = std::move(sqlite_state);
     } catch (...) {
-      if (sqlite_state->db != nullptr) {
-        sqlite3_close(sqlite_state->db);
-      }
       sqlite_state.reset();
     }
   }
 #endif
 }
 
-FTS5SearchEngine::~FTS5SearchEngine() {
-#ifdef WAXCPP_HAS_SQLITE
-  if (sqlite_ != nullptr && sqlite_->db != nullptr) {
-    sqlite3_close(sqlite_->db);
-    sqlite_->db = nullptr;
-  }
-#endif
-}
+FTS5SearchEngine::~FTS5SearchEngine() = default;
 
 FTS5SearchEngine::FTS5SearchEngine(FTS5SearchEngine&&) noexcept = default;
 
