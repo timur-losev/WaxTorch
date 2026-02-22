@@ -291,6 +291,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_escaped_slash_artifact.json";
   const auto artifact_unicode_slash_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_unicode_slash_artifact.json";
+  const auto artifact_bad_unicode_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_bad_unicode_artifact.json";
   const auto artifact_bad_sha_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_artifact_bad_sha.json";
   const auto artifact_escape_manifest = artifact_manifest_dir / "manifest_escape.json";
@@ -481,6 +483,13 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       throw std::runtime_error("failed to create unicode-slash artifact manifest file");
     }
     out << R"({"artifacts":[{"path":"cpu\u002flibtorch-cpu.zip","sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}]})";
+  }
+  {
+    std::ofstream out(artifact_bad_unicode_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create bad-unicode artifact manifest file");
+    }
+    out << R"({"artifacts":[{"path":"cpu\u00ZZlibtorch-cpu.zip","sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}]})";
   }
   {
     std::ofstream out(artifact_bad_sha_manifest, std::ios::binary | std::ios::trunc);
@@ -1092,6 +1101,18 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_bad_unicode_manifest.string());
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "manifest with malformed unicode escape in artifact path should be rejected");
+  }
+
+  {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_manifest.string());
     const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::string("1"));
     bool threw = false;
@@ -1238,6 +1259,7 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(artifact_manifest, ec);
   std::filesystem::remove(artifact_escaped_slash_manifest, ec);
   std::filesystem::remove(artifact_unicode_slash_manifest, ec);
+  std::filesystem::remove(artifact_bad_unicode_manifest, ec);
   std::filesystem::remove(artifact_bad_sha_manifest, ec);
   std::filesystem::remove(artifact_escape_manifest, ec);
   std::filesystem::remove(artifact_absolute_manifest, ec);
