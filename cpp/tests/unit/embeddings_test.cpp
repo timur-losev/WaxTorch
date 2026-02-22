@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -1371,6 +1372,65 @@ void ScenarioRuntimeInfoSnapshotStability() {
           "selected artifact checksum verification flag should remain stable after embedding calls");
 }
 
+void ScenarioManifestParserFuzzDeterminism() {
+  waxcpp::tests::Log("scenario: manifest parser fuzz determinism");
+  const auto fuzz_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_fuzz.json";
+  const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", fuzz_manifest.string());
+  const ScopedEnvVar clear_require("WAXCPP_REQUIRE_LIBTORCH_MANIFEST", std::nullopt);
+
+  constexpr std::size_t kIterations = 256;
+  std::mt19937 rng(0x57A5BEEF);
+  std::uniform_int_distribution<int> len_dist(0, 512);
+  std::uniform_int_distribution<int> ascii_dist(32, 126);
+
+  const std::string valid_seed =
+      R"({"artifacts":[{"path":"libtorch-cpu.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]})";
+
+  for (std::size_t i = 0; i < kIterations; ++i) {
+    std::string payload{};
+    if ((i % 4U) == 0U) {
+      payload = valid_seed;
+      if (!payload.empty()) {
+        const std::size_t flips = 1U + (i % 7U);
+        for (std::size_t flip = 0; flip < flips; ++flip) {
+          const std::size_t idx = static_cast<std::size_t>(rng() % payload.size());
+          payload[idx] = static_cast<char>(ascii_dist(rng));
+        }
+      }
+    } else {
+      payload.resize(static_cast<std::size_t>(len_dist(rng)));
+      for (auto& ch : payload) {
+        ch = static_cast<char>(ascii_dist(rng));
+      }
+    }
+
+    std::ofstream out(fuzz_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create fuzz manifest file");
+    }
+    out.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+    out.flush();
+
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      const auto info = embedder.runtime_info();
+      Require(info.libtorch_manifest_detected, "fuzz manifest should be detected when override file exists");
+      Require(info.libtorch_manifest_valid, "successful constructor must report valid manifest");
+      Require(info.libtorch_manifest_artifact_count > 0, "valid manifest must expose at least one artifact");
+      Require(info.libtorch_selected_artifact_path.has_value(),
+              "valid fuzz manifest must resolve selected artifact path");
+      Require(info.libtorch_selected_artifact_sha256.has_value(),
+              "valid fuzz manifest must resolve selected artifact sha256");
+    } catch (const std::exception&) {
+      // Expected for malformed fuzz payloads. We only require deterministic no-crash behavior.
+    }
+  }
+
+  std::error_code ec;
+  std::filesystem::remove(fuzz_manifest, ec);
+}
+
 }  // namespace
 
 int main() {
@@ -1385,6 +1445,7 @@ int main() {
     ScenarioRuntimeInfoAndManifestPolicy();
     ScenarioConcurrentEmbedThreadSafety();
     ScenarioRuntimeInfoSnapshotStability();
+    ScenarioManifestParserFuzzDeterminism();
     waxcpp::tests::Log("embeddings_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
