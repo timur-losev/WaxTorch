@@ -315,6 +315,33 @@ void RunScenarioPendingEmbeddingSnapshotReopenRecovery(const std::filesystem::pa
   }
 }
 
+void RunScenarioCloseAutoCommitsLocalEmbeddingMutations(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: close auto-commits local embedding mutations");
+  std::uint64_t frame_id = 0;
+  waxcpp::WaxWALStats closed_wal_stats{};
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    frame_id = store.Put({std::byte{0xE5}});
+    store.Commit();
+    store.PutEmbedding(frame_id, {0.11F, 0.22F});
+    Require(store.WalStats().pending_embedding_mutations == 1,
+            "expected one local pending embedding before close");
+    store.Close();
+    closed_wal_stats = store.WalStats();
+  }
+  Require(closed_wal_stats.auto_commit_count == 1,
+          "Close() should auto-commit local embedding mutation");
+  Require(closed_wal_stats.pending_embedding_mutations == 0,
+          "Close() auto-commit should clear pending embedding count");
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto snapshot = reopened.PendingEmbeddingMutations();
+    Require(snapshot.embeddings.empty(), "reopen after close auto-commit should have no pending embeddings");
+    reopened.Close();
+  }
+}
+
 void RunScenarioPutEmbeddingUnknownFrameRejected(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: putEmbedding unknown frame rejected at commit");
   {
@@ -825,6 +852,7 @@ int main() {
     RunScenarioPutEmbeddingContracts(path);
     RunScenarioPendingEmbeddingSnapshot(path);
     RunScenarioPendingEmbeddingSnapshotReopenRecovery(path);
+    RunScenarioCloseAutoCommitsLocalEmbeddingMutations(path);
     RunScenarioPutEmbeddingUnknownFrameRejected(path);
     RunScenarioPutEmbeddingBatchUnknownFrameRejected(path);
     RunScenarioPutEmbeddingForwardReferenceRejected(path);
