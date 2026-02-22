@@ -217,56 +217,130 @@ std::optional<std::pair<std::size_t, std::size_t>> FindArtifactArrayRange(std::s
 std::optional<std::string_view> ExtractJsonStringField(std::string_view object,
                                                        std::string_view key_a,
                                                        std::string_view key_b) {
-  const auto next_a = object.find(key_a);
-  const auto next_b = object.find(key_b);
-
-  std::size_t key_pos = std::string_view::npos;
-  if (next_a != std::string_view::npos && next_b != std::string_view::npos) {
-    key_pos = std::min(next_a, next_b);
-  } else if (next_a != std::string_view::npos) {
-    key_pos = next_a;
-  } else if (next_b != std::string_view::npos) {
-    key_pos = next_b;
-  } else {
+  if (object.size() < 2 || object.front() != '{' || object.back() != '}') {
     return std::nullopt;
   }
 
-  const auto colon = object.find(':', key_pos);
-  if (colon == std::string_view::npos) {
-    return std::nullopt;
-  }
-  std::size_t value_pos = colon + 1;
-  while (value_pos < object.size()) {
-    const char ch = object[value_pos];
-    if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
-      ++value_pos;
-      continue;
+  auto parse_string = [&](std::size_t open_quote_index) -> std::optional<std::pair<std::string_view, std::size_t>> {
+    if (open_quote_index >= object.size() || object[open_quote_index] != '"') {
+      return std::nullopt;
     }
-    break;
-  }
-  if (value_pos >= object.size() || object[value_pos] != '"') {
+    const auto open_quote = open_quote_index;
+    bool escaped_inner = false;
+    for (std::size_t i = open_quote + 1; i < object.size(); ++i) {
+      const char ch = object[i];
+      if (escaped_inner) {
+        escaped_inner = false;
+        continue;
+      }
+      if (ch == '\\') {
+        escaped_inner = true;
+        continue;
+      }
+      if (ch == '"') {
+        if (i == open_quote + 1) {
+          return std::nullopt;
+        }
+        return std::make_pair(object.substr(open_quote + 1, i - open_quote - 1), i);
+      }
+    }
     return std::nullopt;
-  }
+  };
 
-  const auto open_quote = value_pos;
+  auto key_matches = [&](std::string_view parsed_key) -> bool {
+    const auto quoted = std::string("\"") + std::string(parsed_key) + std::string("\"");
+    return quoted == key_a || quoted == key_b;
+  };
+
+  int nested_depth = 0;
+  std::size_t i = 1;
   bool escaped = false;
-  for (std::size_t i = open_quote + 1; i < object.size(); ++i) {
+  bool in_string = false;
+  while (i + 1 < object.size()) {
     const char ch = object[i];
-    if (escaped) {
-      escaped = false;
+    if (in_string) {
+      if (escaped) {
+        escaped = false;
+        ++i;
+        continue;
+      }
+      if (ch == '\\') {
+        escaped = true;
+        ++i;
+        continue;
+      }
+      if (ch == '"') {
+        in_string = false;
+      }
+      ++i;
       continue;
     }
-    if (ch == '\\') {
-      escaped = true;
-      continue;
-    }
+
     if (ch == '"') {
-      if (i == open_quote + 1) {
+      if (nested_depth != 0) {
+        in_string = true;
+        ++i;
+        continue;
+      }
+
+      const auto key = parse_string(i);
+      if (!key.has_value()) {
+        ++i;
+        continue;
+      }
+      const auto [parsed_key, key_end] = *key;
+      i = key_end + 1;
+      while (i < object.size()) {
+        const char ws = object[i];
+        if (ws == ' ' || ws == '\t' || ws == '\r' || ws == '\n') {
+          ++i;
+          continue;
+        }
+        break;
+      }
+      if (i >= object.size() || object[i] != ':') {
+        continue;
+      }
+      ++i;
+      while (i < object.size()) {
+        const char ws = object[i];
+        if (ws == ' ' || ws == '\t' || ws == '\r' || ws == '\n') {
+          ++i;
+          continue;
+        }
+        break;
+      }
+      if (!key_matches(parsed_key)) {
+        if (i < object.size() && (object[i] == '{' || object[i] == '[')) {
+          ++nested_depth;
+        }
+        continue;
+      }
+      if (i >= object.size() || object[i] != '"') {
         return std::nullopt;
       }
-      return object.substr(open_quote + 1, i - open_quote - 1);
+      const auto value = parse_string(i);
+      if (!value.has_value() || value->first.empty()) {
+        return std::nullopt;
+      }
+      return value->first;
     }
+
+    if (ch == '{' || ch == '[') {
+      ++nested_depth;
+      ++i;
+      continue;
+    }
+    if (ch == '}' || ch == ']') {
+      if (nested_depth > 0) {
+        --nested_depth;
+      }
+      ++i;
+      continue;
+    }
+    ++i;
   }
+
   return std::nullopt;
 }
 
@@ -335,8 +409,8 @@ std::size_t CountValidArtifactObjects(std::string_view json,
       }
       --brace_depth;
       if (brace_depth == 0 && object_begin != std::string_view::npos && i > object_begin) {
-        const auto object = json.substr(object_begin, i - object_begin + 1);
-        if (HasNonEmptyArtifactPath(object) && HasValidSha256(object)) {
+        const auto artifact_object = json.substr(object_begin, i - object_begin + 1);
+        if (HasNonEmptyArtifactPath(artifact_object) && HasValidSha256(artifact_object)) {
           ++valid;
         }
       }
