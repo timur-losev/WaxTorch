@@ -249,6 +249,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add deterministic mixed replay regression for pending WAL (`put + delete + supersede + putEmbedding`) validating reopen counters and final TOC lifecycle edges after commit
 - [x] Harden structured-fact journal replay against invalid keys: reject empty `entity/attribute` in `WAXSM1` payload decode, validate remove-path key contracts, and add malformed-journal reopen regression coverage
 - [x] Add deterministic malformed-structured-journal fuzz replay regression (`128` mutated invalid `WAXSM1` payloads) ensuring reopen resilience and preservation of previously committed valid facts
+- [x] Add malformed `WAXEM2` persisted-embedding identity-length regression: invalid identity payloads are skipped on reopen and trigger deterministic single-frame re-embed fallback
 - [x] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
