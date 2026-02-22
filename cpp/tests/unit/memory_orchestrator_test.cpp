@@ -888,6 +888,50 @@ void ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(const std::filesy
   }
 }
 
+void ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: flush failure does not expose staged structured fact until retry");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:retry", "city", "rome");
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(1);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw when failpoint is enabled");
+
+    const auto before_retry_context = orchestrator.Recall("rome");
+    Require(before_retry_context.items.empty(), "failed flush must keep staged structured fact hidden");
+    const auto before_retry_facts = orchestrator.RecallFactsByEntityPrefix("user:retry", 10);
+    Require(before_retry_facts.empty(), "failed flush must keep staged structured fact out of fact query");
+
+    orchestrator.Flush();
+    const auto after_retry_facts = orchestrator.RecallFactsByEntityPrefix("user:retry", 10);
+    Require(after_retry_facts.size() == 1, "successful retry flush must publish structured fact");
+    const auto after_retry_context = orchestrator.Recall("rome");
+    bool has_structured = false;
+    for (const auto& item : after_retry_context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          has_structured = true;
+          break;
+        }
+      }
+    }
+    Require(has_structured, "successful retry flush must publish structured fact to recall");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioUseAfterCloseThrows(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: use-after-close throws");
   waxcpp::OrchestratorConfig config{};
@@ -1085,6 +1129,7 @@ int main() {
     const auto path29 = UniquePath();
     const auto path30 = UniquePath();
     const auto path31 = UniquePath();
+    const auto path32 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -1115,75 +1160,78 @@ int main() {
     ScenarioFlushFailureThenCloseReopenRecoversText(path23);
     ScenarioFlushFailureThenCloseReopenRecoversVector(path24);
     ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(path25);
+    ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(path32);
     ScenarioUseAfterCloseThrows(path26);
     ScenarioStructuredFactStagedOrderBeforeFlush(path27);
     ScenarioStructuredFactCloseWithoutFlushPersistsViaStoreClose(path28);
 
     std::error_code ec;
     std::filesystem::remove(path0, ec);
-    std::filesystem::remove(path0.string() + ".writer.lock", ec);
+    std::filesystem::remove(path0.string() + ".writer.lease", ec);
     std::filesystem::remove(path1, ec);
-    std::filesystem::remove(path1.string() + ".writer.lock", ec);
+    std::filesystem::remove(path1.string() + ".writer.lease", ec);
     std::filesystem::remove(path2, ec);
-    std::filesystem::remove(path2.string() + ".writer.lock", ec);
+    std::filesystem::remove(path2.string() + ".writer.lease", ec);
     std::filesystem::remove(path3, ec);
-    std::filesystem::remove(path3.string() + ".writer.lock", ec);
+    std::filesystem::remove(path3.string() + ".writer.lease", ec);
     std::filesystem::remove(path4, ec);
-    std::filesystem::remove(path4.string() + ".writer.lock", ec);
+    std::filesystem::remove(path4.string() + ".writer.lease", ec);
     std::filesystem::remove(path5, ec);
-    std::filesystem::remove(path5.string() + ".writer.lock", ec);
+    std::filesystem::remove(path5.string() + ".writer.lease", ec);
     std::filesystem::remove(path6, ec);
-    std::filesystem::remove(path6.string() + ".writer.lock", ec);
+    std::filesystem::remove(path6.string() + ".writer.lease", ec);
     std::filesystem::remove(path7, ec);
-    std::filesystem::remove(path7.string() + ".writer.lock", ec);
+    std::filesystem::remove(path7.string() + ".writer.lease", ec);
     std::filesystem::remove(path8, ec);
-    std::filesystem::remove(path8.string() + ".writer.lock", ec);
+    std::filesystem::remove(path8.string() + ".writer.lease", ec);
     std::filesystem::remove(path9, ec);
-    std::filesystem::remove(path9.string() + ".writer.lock", ec);
+    std::filesystem::remove(path9.string() + ".writer.lease", ec);
     std::filesystem::remove(path10, ec);
-    std::filesystem::remove(path10.string() + ".writer.lock", ec);
+    std::filesystem::remove(path10.string() + ".writer.lease", ec);
     std::filesystem::remove(path11, ec);
-    std::filesystem::remove(path11.string() + ".writer.lock", ec);
+    std::filesystem::remove(path11.string() + ".writer.lease", ec);
     std::filesystem::remove(path12, ec);
-    std::filesystem::remove(path12.string() + ".writer.lock", ec);
+    std::filesystem::remove(path12.string() + ".writer.lease", ec);
     std::filesystem::remove(path13, ec);
-    std::filesystem::remove(path13.string() + ".writer.lock", ec);
+    std::filesystem::remove(path13.string() + ".writer.lease", ec);
     std::filesystem::remove(path14, ec);
-    std::filesystem::remove(path14.string() + ".writer.lock", ec);
+    std::filesystem::remove(path14.string() + ".writer.lease", ec);
     std::filesystem::remove(path15, ec);
-    std::filesystem::remove(path15.string() + ".writer.lock", ec);
+    std::filesystem::remove(path15.string() + ".writer.lease", ec);
     std::filesystem::remove(path16, ec);
-    std::filesystem::remove(path16.string() + ".writer.lock", ec);
+    std::filesystem::remove(path16.string() + ".writer.lease", ec);
     std::filesystem::remove(path17, ec);
-    std::filesystem::remove(path17.string() + ".writer.lock", ec);
+    std::filesystem::remove(path17.string() + ".writer.lease", ec);
     std::filesystem::remove(path18, ec);
-    std::filesystem::remove(path18.string() + ".writer.lock", ec);
+    std::filesystem::remove(path18.string() + ".writer.lease", ec);
     std::filesystem::remove(path19, ec);
-    std::filesystem::remove(path19.string() + ".writer.lock", ec);
+    std::filesystem::remove(path19.string() + ".writer.lease", ec);
     std::filesystem::remove(path20, ec);
-    std::filesystem::remove(path20.string() + ".writer.lock", ec);
+    std::filesystem::remove(path20.string() + ".writer.lease", ec);
     std::filesystem::remove(path21, ec);
-    std::filesystem::remove(path21.string() + ".writer.lock", ec);
+    std::filesystem::remove(path21.string() + ".writer.lease", ec);
     std::filesystem::remove(path22, ec);
-    std::filesystem::remove(path22.string() + ".writer.lock", ec);
+    std::filesystem::remove(path22.string() + ".writer.lease", ec);
     std::filesystem::remove(path23, ec);
-    std::filesystem::remove(path23.string() + ".writer.lock", ec);
+    std::filesystem::remove(path23.string() + ".writer.lease", ec);
     std::filesystem::remove(path24, ec);
-    std::filesystem::remove(path24.string() + ".writer.lock", ec);
+    std::filesystem::remove(path24.string() + ".writer.lease", ec);
     std::filesystem::remove(path25, ec);
-    std::filesystem::remove(path25.string() + ".writer.lock", ec);
+    std::filesystem::remove(path25.string() + ".writer.lease", ec);
     std::filesystem::remove(path26, ec);
-    std::filesystem::remove(path26.string() + ".writer.lock", ec);
+    std::filesystem::remove(path26.string() + ".writer.lease", ec);
     std::filesystem::remove(path27, ec);
-    std::filesystem::remove(path27.string() + ".writer.lock", ec);
+    std::filesystem::remove(path27.string() + ".writer.lease", ec);
     std::filesystem::remove(path28, ec);
-    std::filesystem::remove(path28.string() + ".writer.lock", ec);
+    std::filesystem::remove(path28.string() + ".writer.lease", ec);
     std::filesystem::remove(path29, ec);
-    std::filesystem::remove(path29.string() + ".writer.lock", ec);
+    std::filesystem::remove(path29.string() + ".writer.lease", ec);
     std::filesystem::remove(path30, ec);
-    std::filesystem::remove(path30.string() + ".writer.lock", ec);
+    std::filesystem::remove(path30.string() + ".writer.lease", ec);
     std::filesystem::remove(path31, ec);
-    std::filesystem::remove(path31.string() + ".writer.lock", ec);
+    std::filesystem::remove(path31.string() + ".writer.lease", ec);
+    std::filesystem::remove(path32, ec);
+    std::filesystem::remove(path32.string() + ".writer.lease", ec);
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

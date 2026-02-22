@@ -310,6 +310,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Extended structured-memory scenarios to validate persistence across reopen and absence of leaked text-source hits from internal fact journal frames | Codex |
 | `cpp/include/waxcpp/memory_orchestrator.hpp` | Added `ForgetFact(entity, attribute)` API for structured-memory delete parity | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Switched structured-memory path to staged mutations (`RememberFact/ForgetFact`) with flush-time `CommitStaged` parity | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added regression for structured-fact flush-failure retry: staged fact remains hidden after failed flush and becomes visible only after successful retry flush | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Extended structured fact journal format with remove opcode; replay now applies upsert/remove deterministically | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added persisted remove scenario (`remove -> flush -> reopen`) and recall exclusion checks | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Replaced local text-overlap scoring with `FTS5SearchEngine`-backed text channel construction for store docs and structured facts | Codex |
