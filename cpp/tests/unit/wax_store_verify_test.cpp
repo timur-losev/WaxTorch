@@ -1,4 +1,5 @@
 #include "waxcpp/wax_store.hpp"
+#include "waxcpp/mv2v_format.hpp"
 
 #include "../../src/core/mv2s_format.hpp"
 #include "../../src/core/sha256.hpp"
@@ -545,6 +546,82 @@ int main() {
       auto reopened = waxcpp::WaxStore::Open(path);
       reopened.Verify(true);
     });
+
+    // Recreate clean file for vec segment deep-verify layout checks.
+    {
+      waxcpp::tests::Log("scenario: deep verify validates mv2v vec segment layout");
+      auto recreated = waxcpp::WaxStore::Create(path);
+      recreated.Verify(false);
+      recreated.Close();
+    }
+
+    {
+      const std::uint64_t vec_data_start = waxcpp::core::mv2s::kWalOffset + waxcpp::core::mv2s::kDefaultWalSize;
+      const std::vector<float> metal_vectors = {0.125F, -0.250F};
+      const std::vector<std::uint64_t> metal_ids = {123};
+      waxcpp::VecSegmentInfo vec_info{};
+      vec_info.similarity = waxcpp::VecSimilarity::kCosine;
+      vec_info.dimension = 2;
+      vec_info.vector_count = 1;
+      vec_info.payload_length = static_cast<std::uint64_t>(metal_vectors.size() * sizeof(float));
+
+      auto vec_segment = waxcpp::EncodeMetalVecSegment(vec_info, metal_vectors, metal_ids);
+      WriteBytesAt(path, vec_data_start, vec_segment);
+
+      waxcpp::core::mv2s::SegmentSummary vec_summary{};
+      vec_summary.id = 0;
+      vec_summary.bytes_offset = vec_data_start;
+      vec_summary.bytes_length = vec_segment.size();
+      vec_summary.checksum = waxcpp::core::Sha256Digest(vec_segment);
+      vec_summary.compression = 0;
+      vec_summary.kind = 1;  // vec
+
+      const std::array<waxcpp::core::mv2s::SegmentSummary, 1> vec_segments = {vec_summary};
+      auto vec_toc = waxcpp::core::mv2s::EncodeTocV1({}, vec_segments);
+      const auto vec_footer_offset = vec_data_start + vec_segment.size() + vec_toc.size();
+      waxcpp::core::mv2s::Footer vec_footer{};
+      vec_footer.toc_len = vec_toc.size();
+      std::copy(vec_toc.end() - 32, vec_toc.end(), vec_footer.toc_hash.begin());
+      vec_footer.generation = 44;
+      vec_footer.wal_committed_seq = 0;
+
+      WriteBytesAt(path, vec_data_start + vec_segment.size(), vec_toc);
+      const auto vec_footer_bytes = waxcpp::core::mv2s::EncodeFooter(vec_footer);
+      WriteBytesAt(path,
+                   vec_footer_offset,
+                   std::vector<std::byte>(vec_footer_bytes.begin(), vec_footer_bytes.end()));
+
+      {
+        auto reopened = waxcpp::WaxStore::Open(path);
+        reopened.Verify(true);
+        reopened.Close();
+      }
+
+      // Corrupt MV2V reserved byte and refresh segment checksum/TOC so deep verify fails on layout validation.
+      vec_segment[28] = std::byte{0x01};
+      WriteBytesAt(path, vec_data_start, vec_segment);
+      vec_summary.checksum = waxcpp::core::Sha256Digest(vec_segment);
+
+      const std::array<waxcpp::core::mv2s::SegmentSummary, 1> bad_vec_segments = {vec_summary};
+      auto bad_vec_toc = waxcpp::core::mv2s::EncodeTocV1({}, bad_vec_segments);
+      const auto bad_vec_footer_offset = vec_data_start + vec_segment.size() + bad_vec_toc.size();
+      waxcpp::core::mv2s::Footer bad_vec_footer{};
+      bad_vec_footer.toc_len = bad_vec_toc.size();
+      std::copy(bad_vec_toc.end() - 32, bad_vec_toc.end(), bad_vec_footer.toc_hash.begin());
+      bad_vec_footer.generation = 45;
+      bad_vec_footer.wal_committed_seq = 0;
+
+      WriteBytesAt(path, vec_data_start + vec_segment.size(), bad_vec_toc);
+      const auto bad_vec_footer_bytes = waxcpp::core::mv2s::EncodeFooter(bad_vec_footer);
+      WriteBytesAt(path,
+                   bad_vec_footer_offset,
+                   std::vector<std::byte>(bad_vec_footer_bytes.begin(), bad_vec_footer_bytes.end()));
+
+      ExpectThrowContains("verify_deep_detects_invalid_vec_segment_layout", [&]() {
+        auto reopened = waxcpp::WaxStore::Open(path);
+        reopened.Verify(true);
+      }, "vec segment decode failed");
+    }
 
     // Recreate clean file for replay snapshot footer lookup test.
     {

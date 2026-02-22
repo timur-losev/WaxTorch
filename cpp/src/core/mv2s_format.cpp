@@ -437,7 +437,8 @@ std::array<std::byte, kFooterSize> EncodeFooter(const Footer& footer) {
   return bytes;
 }
 
-std::vector<std::byte> EncodeTocV1(std::span<const FrameSummary> frames) {
+std::vector<std::byte> EncodeTocV1(std::span<const FrameSummary> frames,
+                                   std::span<const SegmentSummary> segments) {
   BinaryBuilder builder;
   builder.AppendU64(1);  // toc_version
   if (frames.size() > std::numeric_limits<std::uint32_t>::max()) {
@@ -529,7 +530,38 @@ std::vector<std::byte> EncodeTocV1(std::span<const FrameSummary> frames) {
   builder.AppendU8(0);  // logic_mesh absent
   builder.AppendU8(0);  // sketch_track absent
 
-  builder.AppendU32(0);  // segment catalog entries count
+  if (segments.size() > std::numeric_limits<std::uint32_t>::max()) {
+    throw FormatError("too many segments for TOC v1");
+  }
+  builder.AppendU32(static_cast<std::uint32_t>(segments.size()));
+  std::optional<std::uint64_t> previous_offset;
+  std::optional<std::uint64_t> previous_end;
+  for (const auto& segment : segments) {
+    if (segment.compression > 3 || segment.kind > 3) {
+      throw FormatError("invalid segment enum value in segment summary");
+    }
+    if (segment.bytes_offset > std::numeric_limits<std::uint64_t>::max() - segment.bytes_length) {
+      throw FormatError("segment range overflow in segment summary");
+    }
+    const auto end = segment.bytes_offset + segment.bytes_length;
+    if (previous_offset.has_value() && previous_end.has_value()) {
+      if (segment.bytes_offset <= *previous_offset) {
+        throw FormatError("segment offsets are not strictly increasing in segment summary");
+      }
+      if (*previous_end > segment.bytes_offset) {
+        throw FormatError("segment ranges overlap in segment summary");
+      }
+    }
+    previous_offset = segment.bytes_offset;
+    previous_end = end;
+
+    builder.AppendU64(segment.id);
+    builder.AppendU64(segment.bytes_offset);
+    builder.AppendU64(segment.bytes_length);
+    builder.AppendFixed(segment.checksum);
+    builder.AppendU8(segment.compression);
+    builder.AppendU8(segment.kind);
+  }
 
   builder.AppendString("");  // ticket issuer
   builder.AppendU64(0);      // ticket seq_no
@@ -554,7 +586,11 @@ std::vector<std::byte> EncodeTocV1(std::span<const FrameSummary> frames) {
 }
 
 std::vector<std::byte> EncodeEmptyTocV1() {
-  return EncodeTocV1({});
+  return EncodeTocV1({}, {});
+}
+
+std::vector<std::byte> EncodeTocV1(std::span<const FrameSummary> frames) {
+  return EncodeTocV1(frames, {});
 }
 
 TocSummary DecodeToc(std::span<const std::byte> toc_bytes) {

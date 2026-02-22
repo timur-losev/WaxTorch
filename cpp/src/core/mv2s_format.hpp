@@ -150,6 +150,8 @@ struct TocSummary {
 [[nodiscard]] Footer DecodeFooter(std::span<const std::byte> footer_bytes);
 [[nodiscard]] std::array<std::byte, kFooterSize> EncodeFooter(const Footer& footer);
 [[nodiscard]] std::vector<std::byte> EncodeTocV1(std::span<const FrameSummary> frames);
+[[nodiscard]] std::vector<std::byte> EncodeTocV1(std::span<const FrameSummary> frames,
+                                                 std::span<const SegmentSummary> segments);
 [[nodiscard]] std::vector<std::byte> EncodeEmptyTocV1();
 [[nodiscard]] TocSummary DecodeToc(std::span<const std::byte> toc_bytes);
 

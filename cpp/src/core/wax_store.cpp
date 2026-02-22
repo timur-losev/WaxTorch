@@ -4,6 +4,7 @@
 #include "sha256.hpp"
 #include "wal_ring.hpp"
 #include "wax_store_test_hooks.hpp"
+#include "waxcpp/mv2v_format.hpp"
 
 #include <algorithm>
 #include <array>
@@ -542,6 +543,19 @@ void DeepVerifySegments(const std::filesystem::path& path, const std::vector<cor
     const auto computed = ComputePayloadHash(path, segment.bytes_offset, segment.bytes_length);
     if (!std::equal(computed.begin(), computed.end(), segment.checksum.begin())) {
       throw StoreError("segment checksum mismatch");
+    }
+    // M6 parity: validate uncompressed vec segment layout against MV2V contract.
+    if (segment.kind == 1 && segment.compression == 0) {
+      if (segment.bytes_length > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        throw StoreError("vec segment length exceeds addressable memory");
+      }
+      const auto bytes =
+          ReadExactly(path, segment.bytes_offset, static_cast<std::size_t>(segment.bytes_length));
+      try {
+        (void)DecodeVecSegment(bytes);
+      } catch (const std::exception& ex) {
+        throw StoreError(std::string("vec segment decode failed: ") + ex.what());
+      }
     }
   }
 }
