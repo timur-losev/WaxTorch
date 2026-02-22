@@ -1871,6 +1871,69 @@ void ScenarioFlushCrashWindowTocOnlyRetryFlushPublishesOnSecondAttemptVector(con
   }
 }
 
+void ScenarioFlushCrashWindowStructuredFactRebuildsAtStep(const std::filesystem::path& path,
+                                                          std::uint32_t fail_step,
+                                                          const std::string& scenario_suffix) {
+  waxcpp::tests::Log("scenario: flush crash-window structured fact rebuilds in-process " + scenario_suffix);
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  const std::string entity = "user:step" + std::to_string(fail_step);
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact(entity, "city", "rome");
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(fail_step);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw on injected crash-window step");
+
+    const auto facts = orchestrator.RecallFactsByEntityPrefix(entity, 10);
+    Require(facts.size() == 1,
+            "externally visible crash-window step should rebuild structured facts in-process");
+
+    const auto context = orchestrator.Recall("rome");
+    bool has_structured = false;
+    for (const auto& item : context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          has_structured = true;
+          break;
+        }
+      }
+      if (has_structured) {
+        break;
+      }
+    }
+    Require(has_structured,
+            "externally visible crash-window step should rebuild structured-text recall in-process");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioFlushCrashWindowStructuredFactRebuildsStep2(const std::filesystem::path& path) {
+  ScenarioFlushCrashWindowStructuredFactRebuildsAtStep(path, 2, "step2");
+}
+
+void ScenarioFlushCrashWindowStructuredFactRebuildsStep3(const std::filesystem::path& path) {
+  ScenarioFlushCrashWindowStructuredFactRebuildsAtStep(path, 3, "step3");
+}
+
+void ScenarioFlushCrashWindowStructuredFactRebuildsStep4(const std::filesystem::path& path) {
+  ScenarioFlushCrashWindowStructuredFactRebuildsAtStep(path, 4, "step4");
+}
+
+void ScenarioFlushCrashWindowStructuredFactRebuildsStep5(const std::filesystem::path& path) {
+  ScenarioFlushCrashWindowStructuredFactRebuildsAtStep(path, 5, "step5");
+}
+
 void ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: flush failure then close/reopen recovers structured fact");
   waxcpp::OrchestratorConfig config{};
@@ -2468,6 +2531,10 @@ int main() {
     const auto path62 = UniquePath();
     const auto path63 = UniquePath();
     const auto path64 = UniquePath();
+    const auto path65 = UniquePath();
+    const auto path66 = UniquePath();
+    const auto path67 = UniquePath();
+    const auto path68 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -2525,6 +2592,10 @@ int main() {
     ScenarioFlushCrashWindowHeaderBPublishRetryFlushIsNoOpVector(path62);
     ScenarioFlushCrashWindowTocOnlyRetryFlushPublishesOnSecondAttempt(path63);
     ScenarioFlushCrashWindowTocOnlyRetryFlushPublishesOnSecondAttemptVector(path64);
+    ScenarioFlushCrashWindowStructuredFactRebuildsStep2(path65);
+    ScenarioFlushCrashWindowStructuredFactRebuildsStep3(path66);
+    ScenarioFlushCrashWindowStructuredFactRebuildsStep4(path67);
+    ScenarioFlushCrashWindowStructuredFactRebuildsStep5(path68);
     ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(path25);
     ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(path32);
     ScenarioTextIndexCommitFailureRecoversFromCommittedStore(path33);
@@ -2541,7 +2612,8 @@ int main() {
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
         path33, path34, path35, path36, path37, path38, path39, path40, path41, path42, path43,
         path44, path45, path46, path47, path48, path49, path50, path51, path52, path53, path54,
-        path55, path56, path57, path58, path59, path60, path61, path62, path63, path64,
+        path55, path56, path57, path58, path59, path60, path61, path62, path63, path64, path65,
+        path66, path67, path68,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
