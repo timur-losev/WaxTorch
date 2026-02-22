@@ -537,6 +537,34 @@ void ScenarioConcurrentEmbedThreadSafety() {
   Require(embedder.cache_size() <= 32, "concurrent memoization must respect capacity bound");
 }
 
+void ScenarioRuntimeInfoSnapshotStability() {
+  waxcpp::tests::Log("scenario: runtime info snapshot stability");
+  const ScopedEnvVar clear_override("WAXCPP_LIBTORCH_MANIFEST", std::nullopt);
+  const ScopedEnvVar clear_require("WAXCPP_REQUIRE_LIBTORCH_MANIFEST", std::nullopt);
+  const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+  const ScopedEnvVar set_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
+
+  waxcpp::MiniLMEmbedderTorch embedder;
+  const auto before = embedder.runtime_info();
+  (void)embedder.Embed("runtime info stability text");
+  const auto after_single = embedder.runtime_info();
+  (void)embedder.EmbedBatch({"runtime", "info", "stability"});
+  const auto after_batch = embedder.runtime_info();
+
+  Require(before.runtime_policy == after_single.runtime_policy &&
+              after_single.runtime_policy == after_batch.runtime_policy,
+          "runtime policy should remain stable after embedding calls");
+  Require(before.selected_backend == after_single.selected_backend &&
+              after_single.selected_backend == after_batch.selected_backend,
+          "selected backend should remain stable after embedding calls");
+  Require(before.libtorch_manifest_detected == after_single.libtorch_manifest_detected &&
+              after_single.libtorch_manifest_detected == after_batch.libtorch_manifest_detected,
+          "manifest detection flag should remain stable after embedding calls");
+  Require(before.libtorch_manifest_artifact_count == after_single.libtorch_manifest_artifact_count &&
+              after_single.libtorch_manifest_artifact_count == after_batch.libtorch_manifest_artifact_count,
+          "manifest artifact count should remain stable after embedding calls");
+}
+
 }  // namespace
 
 int main() {
@@ -550,6 +578,7 @@ int main() {
     ScenarioAsciiTokenizationDeterminism();
     ScenarioRuntimeInfoAndManifestPolicy();
     ScenarioConcurrentEmbedThreadSafety();
+    ScenarioRuntimeInfoSnapshotStability();
     waxcpp::tests::Log("embeddings_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
