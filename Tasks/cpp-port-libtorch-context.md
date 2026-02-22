@@ -195,6 +195,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Enforce `require_on_device_providers` policy in orchestrator constructor: reject cloud-like embedder providers when on-device enforcement is enabled; allow explicit opt-out (`require_on_device_providers=false`)
 - [x] Enforce embedding-dimension integrity in vector paths: `Remember` now rejects mismatched embedding vectors before writes, and reopen vector-rebuild throws on provider dimension mismatch instead of silently skipping vectors
 - [x] Add `MiniLMEmbedderTorch` runtime manifest introspection (`runtime_info`) and env-driven policy gate (`WAXCPP_REQUIRE_LIBTORCH_MANIFEST` + `WAXCPP_LIBTORCH_MANIFEST`) while keeping deterministic fallback backend as default
+- [x] Validate `MiniLMEmbedderTorch` manifest content when detected (non-empty JSON + artifact/path/sha key presence) and add malformed/empty manifest regressions in embedding unit tests
 - [x] Add mixed WAL lifecycle regression for embeddings: recovered pending `putEmbedding` + local mutation + `Close()` must auto-commit once and clear pending embedding state on reopen
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 

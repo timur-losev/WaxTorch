@@ -180,12 +180,29 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
 
   const auto temp_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_runtime_info.json";
+  const auto empty_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_empty.json";
+  const auto malformed_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_malformed.json";
   {
     std::ofstream out(temp_manifest, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
       throw std::runtime_error("failed to create temp manifest file");
     }
-    out << "{}";
+    out << R"({"artifacts":[{"path":"libtorch-cpu.zip","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]})";
+  }
+  {
+    std::ofstream out(empty_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create empty manifest file");
+    }
+  }
+  {
+    std::ofstream out(malformed_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create malformed manifest file");
+    }
+    out << "not-a-json-manifest";
   }
 
   {
@@ -193,9 +210,34 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     waxcpp::MiniLMEmbedderTorch embedder;
     const auto info = embedder.runtime_info();
     Require(info.libtorch_manifest_detected, "manifest override should be detected");
+    Require(info.libtorch_manifest_valid, "valid manifest override should pass validation");
     Require(info.libtorch_manifest_path.has_value(), "manifest override path should be preserved");
     Require(*info.libtorch_manifest_path == std::filesystem::absolute(temp_manifest).string(),
             "manifest override absolute path mismatch");
+  }
+
+  {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", empty_manifest.string());
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "empty manifest should be rejected");
+  }
+
+  {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", malformed_manifest.string());
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "malformed manifest should be rejected");
   }
 
   {
@@ -213,6 +255,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
 
   std::error_code ec;
   std::filesystem::remove(temp_manifest, ec);
+  std::filesystem::remove(empty_manifest, ec);
+  std::filesystem::remove(malformed_manifest, ec);
 }
 
 void ScenarioConcurrentEmbedThreadSafety() {

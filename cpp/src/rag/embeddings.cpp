@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -96,6 +97,86 @@ std::optional<std::filesystem::path> ResolveLibTorchManifestPath(bool* override_
   return std::nullopt;
 }
 
+std::string_view TrimAsciiWhitespace(std::string_view text) {
+  std::size_t begin = 0;
+  while (begin < text.size()) {
+    const char ch = text[begin];
+    if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+      ++begin;
+      continue;
+    }
+    break;
+  }
+
+  std::size_t end = text.size();
+  while (end > begin) {
+    const char ch = text[end - 1];
+    if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+      --end;
+      continue;
+    }
+    break;
+  }
+
+  return text.substr(begin, end - begin);
+}
+
+void ValidateManifestFile(const std::filesystem::path& manifest_path) {
+  constexpr std::uintmax_t kMaxManifestBytes = 8U * 1024U * 1024U;
+  std::error_code ec{};
+  const auto size = std::filesystem::file_size(manifest_path, ec);
+  if (ec) {
+    throw std::runtime_error("failed to read libtorch manifest size");
+  }
+  if (size == 0) {
+    throw std::runtime_error("libtorch manifest is empty");
+  }
+  if (size > kMaxManifestBytes) {
+    throw std::runtime_error("libtorch manifest exceeds size limit");
+  }
+
+  std::ifstream input(manifest_path, std::ios::binary);
+  if (!input.is_open()) {
+    throw std::runtime_error("failed to open libtorch manifest");
+  }
+  std::string content(static_cast<std::size_t>(size), '\0');
+  if (!input.read(content.data(), static_cast<std::streamsize>(content.size()))) {
+    throw std::runtime_error("failed to read libtorch manifest");
+  }
+
+  const auto trimmed = TrimAsciiWhitespace(content);
+  if (trimmed.empty()) {
+    throw std::runtime_error("libtorch manifest is blank");
+  }
+  const char first = trimmed.front();
+  if (first != '{' && first != '[') {
+    throw std::runtime_error("libtorch manifest does not look like JSON");
+  }
+
+  const bool has_artifact_list =
+      trimmed.find("\"artifacts\"") != std::string_view::npos ||
+      trimmed.find("\"files\"") != std::string_view::npos ||
+      trimmed.find("\"entries\"") != std::string_view::npos ||
+      first == '[';
+  if (!has_artifact_list) {
+    throw std::runtime_error("libtorch manifest does not define artifact list keys");
+  }
+
+  const bool has_path_key =
+      trimmed.find("\"path\"") != std::string_view::npos ||
+      trimmed.find("\"file\"") != std::string_view::npos;
+  if (!has_path_key) {
+    throw std::runtime_error("libtorch manifest does not contain artifact path keys");
+  }
+
+  const bool has_sha_key =
+      trimmed.find("\"sha256\"") != std::string_view::npos ||
+      trimmed.find("\"sha256sum\"") != std::string_view::npos;
+  if (!has_sha_key) {
+    throw std::runtime_error("libtorch manifest does not contain sha256 keys");
+  }
+}
+
 bool IsAsciiAlphaNum(unsigned char ch) {
   return (ch >= static_cast<unsigned char>('0') && ch <= static_cast<unsigned char>('9')) ||
          (ch >= static_cast<unsigned char>('A') && ch <= static_cast<unsigned char>('Z')) ||
@@ -162,12 +243,23 @@ MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
   if (manifest_path.has_value()) {
     runtime_info_.libtorch_manifest_detected = true;
     runtime_info_.libtorch_manifest_path = manifest_path->string();
-  }
-  if (EnvIsTruthy("WAXCPP_REQUIRE_LIBTORCH_MANIFEST") && !runtime_info_.libtorch_manifest_detected) {
-    if (override_was_set) {
-      throw std::runtime_error("MiniLMEmbedderTorch required libtorch manifest is missing at WAXCPP_LIBTORCH_MANIFEST");
+    try {
+      ValidateManifestFile(*manifest_path);
+      runtime_info_.libtorch_manifest_valid = true;
+    } catch (const std::exception& ex) {
+      throw std::runtime_error(std::string("MiniLMEmbedderTorch libtorch manifest is invalid: ") + ex.what());
     }
-    throw std::runtime_error("MiniLMEmbedderTorch required libtorch manifest was not found");
+  }
+  if (EnvIsTruthy("WAXCPP_REQUIRE_LIBTORCH_MANIFEST")) {
+    if (!runtime_info_.libtorch_manifest_detected) {
+      if (override_was_set) {
+        throw std::runtime_error("MiniLMEmbedderTorch required libtorch manifest is missing at WAXCPP_LIBTORCH_MANIFEST");
+      }
+      throw std::runtime_error("MiniLMEmbedderTorch required libtorch manifest was not found");
+    }
+    if (!runtime_info_.libtorch_manifest_valid) {
+      throw std::runtime_error("MiniLMEmbedderTorch required libtorch manifest is invalid");
+    }
   }
 }
 

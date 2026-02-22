@@ -22,6 +22,7 @@ struct EmbeddingIdentity {
 struct MiniLMRuntimeInfo {
   bool fallback_active = true;
   bool libtorch_manifest_detected = false;
+  bool libtorch_manifest_valid = false;
   std::optional<std::string> libtorch_manifest_path;
 };
 
