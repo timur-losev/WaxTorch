@@ -223,6 +223,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Extend manifest runtime introspection with CPU/CUDA artifact counters (`libtorch_manifest_cpu_artifact_count`, `libtorch_manifest_cuda_artifact_count`) and mixed-manifest regression under `cuda_preferred` policy
 - [x] Extend torch runtime policy selection with explicit CUDA-runtime signal (`WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE`) and deterministic backend routing (`fallback_cpu|fallback_cuda`) gated by policy + manifest CUDA artifact availability
 - [x] Add manifest-format compatibility regressions for alias fields (`files[]`, `file`, `sha256sum`) and root-array artifact manifests
+- [x] Add backend-selection policy regressions for `cpu_only|cuda_preferred` across CUDA runtime availability and missing-manifest override paths
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

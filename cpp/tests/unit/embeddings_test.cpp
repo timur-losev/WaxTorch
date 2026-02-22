@@ -343,6 +343,41 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cpu_only"));
+    const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", cpu_cuda_manifest.string());
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.cuda_runtime_available, "assumed CUDA runtime should be reflected in runtime info");
+    Require(info.libtorch_manifest_cuda_artifact_count == 1, "cpu-cuda manifest should still report cuda artifacts");
+    Require(info.selected_backend == "fallback_cpu",
+            "cpu_only runtime policy must keep fallback_cpu even when CUDA is available");
+  }
+
+  {
+    const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", cpu_cuda_manifest.string());
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.libtorch_manifest_valid, "cpu-cuda manifest should pass validation");
+    Require(!info.cuda_runtime_available, "default runtime should not assume CUDA availability");
+    Require(info.selected_backend == "fallback_cpu",
+            "cuda-preferred runtime without available CUDA must keep fallback_cpu backend");
+  }
+
+  {
+    const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+    const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST",
+                                    temp_manifest.string() + ".definitely-missing-runtime-manifest");
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(!info.libtorch_manifest_detected, "missing override path should not mark manifest as detected");
+    Require(info.selected_backend == "fallback_cuda",
+            "cuda-preferred runtime with CUDA availability and no detected manifest should use fallback_cuda");
+  }
+
+  {
     const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", temp_manifest.string());
     const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
