@@ -248,6 +248,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Harden commit crash-window safety for metadata-only mutations by enforcing append-only TOC placement (never overwrite previous committed TOC region), with probe regression for lifecycle pending counters across step1 failure + retry commit
 - [x] Add deterministic mixed replay regression for pending WAL (`put + delete + supersede + putEmbedding`) validating reopen counters and final TOC lifecycle edges after commit
 - [x] Harden structured-fact journal replay against invalid keys: reject empty `entity/attribute` in `WAXSM1` payload decode, validate remove-path key contracts, and add malformed-journal reopen regression coverage
+- [x] Add deterministic malformed-structured-journal fuzz replay regression (`128` mutated invalid `WAXSM1` payloads) ensuring reopen resilience and preservation of previously committed valid facts
 - [x] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

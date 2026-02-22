@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <cstring>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -2927,6 +2928,66 @@ void ScenarioMalformedStructuredJournalPayloadsAreIgnored(const std::filesystem:
   }
 }
 
+void ScenarioStructuredJournalMalformedFuzzKeepsValidFacts(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: structured journal malformed fuzz keeps valid facts");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:ok", "city", "rome");
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  std::mt19937 rng(0xA11CEBEEU);
+  std::uniform_int_distribution<int> mutate_kind_dist(0, 2);
+  std::uniform_int_distribution<int> index_dist(0, 23);
+  std::uniform_int_distribution<int> byte_dist(0, 255);
+  std::uniform_int_distribution<int> tail_len_dist(0, 18);
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    constexpr int kMalformedRecords = 128;
+    for (int i = 0; i < kMalformedRecords; ++i) {
+      std::vector<std::byte> payload =
+          (i % 2 == 0) ? BuildMalformedStructuredFactRemovePayloadEmptyEntity()
+                       : BuildMalformedStructuredFactUpsertPayloadEmptyAttribute();
+      const int mutate_kind = mutate_kind_dist(rng);
+      if (mutate_kind == 0 && payload.size() > 6) {
+        const std::size_t pos = 6 + static_cast<std::size_t>(index_dist(rng)) % (payload.size() - 6);
+        payload[pos] = static_cast<std::byte>(static_cast<unsigned char>(byte_dist(rng)));
+      } else if (mutate_kind == 1) {
+        const int tail_len = tail_len_dist(rng);
+        for (int j = 0; j < tail_len; ++j) {
+          payload.push_back(static_cast<std::byte>(static_cast<unsigned char>(byte_dist(rng))));
+        }
+      } else if (mutate_kind == 2 && payload.size() > 10) {
+        payload.resize(payload.size() - 3);
+      }
+      (void)store.Put(payload, {});
+    }
+    store.Commit();
+    store.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto facts = reopened.RecallFactsByEntityPrefix("user:ok", 32);
+    bool found_valid_fact = false;
+    for (const auto& fact : facts) {
+      if (fact.entity == "user:ok" && fact.attribute == "city" && fact.value == "rome") {
+        found_valid_fact = true;
+        break;
+      }
+    }
+    Require(found_valid_fact, "valid structured fact must survive malformed structured journal replay");
+    reopened.Close();
+  }
+}
+
 void ScenarioConcurrentRememberIsSerialized(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: concurrent remember is serialized");
   waxcpp::OrchestratorConfig config{};
@@ -3143,6 +3204,7 @@ int main() {
     const auto path83 = UniquePath();
     const auto path84 = UniquePath();
     const auto path85 = UniquePath();
+    const auto path86 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -3175,6 +3237,7 @@ int main() {
     ScenarioRecallTextChannelUsesTextSource(path13);
     ScenarioStructuredMemoryRemovePersists(path14);
     ScenarioMalformedStructuredJournalPayloadsAreIgnored(path85);
+    ScenarioStructuredJournalMalformedFuzzKeepsValidFacts(path86);
     ScenarioRecallVisibilityRequiresFlush(path15);
     ScenarioVectorRecallVisibilityRequiresFlush(path16);
     ScenarioVectorIndexRebuildOnReopen(path17);
@@ -3240,7 +3303,7 @@ int main() {
         path55, path56, path57, path58, path59, path60, path61, path62, path63, path64, path65,
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
-        path83, path84, path85,
+        path83, path84, path85, path86,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
