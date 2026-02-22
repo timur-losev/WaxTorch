@@ -9,13 +9,23 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace {
 
@@ -81,6 +91,75 @@ void WriteBytesAt(const std::filesystem::path& path, std::uint64_t offset, std::
   io.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
   if (!io) {
     throw std::runtime_error("failed to write bytes");
+  }
+}
+
+std::string QuoteShellArg(const std::string& raw) {
+  std::string quoted{};
+  quoted.reserve(raw.size() + 2);
+  quoted.push_back('"');
+  for (const char ch : raw) {
+    if (ch == '"') {
+      quoted.push_back('\\');
+    }
+    quoted.push_back(ch);
+  }
+  quoted.push_back('"');
+  return quoted;
+}
+
+std::filesystem::path CrossProcessLeaseReadyPath(const std::filesystem::path& store_path) {
+  auto ready = store_path;
+  ready += ".cross-process-lease.ready";
+  return ready;
+}
+
+#ifdef _WIN32
+HANDLE LaunchHoldWriterLeaseHelper(const std::filesystem::path& executable,
+                                   const std::filesystem::path& store_path,
+                                   const std::filesystem::path& ready_path) {
+  std::wstring command_line = L"\"" + executable.wstring() + L"\" --hold-writer-lease \"" + store_path.wstring() +
+                              L"\" \"" + ready_path.wstring() + L"\"";
+  std::vector<wchar_t> mutable_command(command_line.begin(), command_line.end());
+  mutable_command.push_back(L'\0');
+
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process_info{};
+  const BOOL created = ::CreateProcessW(nullptr,
+                                        mutable_command.data(),
+                                        nullptr,
+                                        nullptr,
+                                        FALSE,
+                                        CREATE_NO_WINDOW,
+                                        nullptr,
+                                        nullptr,
+                                        &startup,
+                                        &process_info);
+  if (created == FALSE) {
+    throw std::runtime_error("failed to launch cross-process writer lease helper");
+  }
+  ::CloseHandle(process_info.hThread);
+  return process_info.hProcess;
+}
+#endif
+
+int RunHoldWriterLeaseHelper(const std::filesystem::path& store_path, const std::filesystem::path& ready_path) {
+  try {
+    auto store = waxcpp::WaxStore::Open(store_path);
+    {
+      std::ofstream out(ready_path, std::ios::binary | std::ios::trunc);
+      Require(static_cast<bool>(out), "failed to create cross-process lease ready file");
+      const char marker[] = "ready";
+      out.write(marker, static_cast<std::streamsize>(sizeof(marker) - 1));
+      Require(static_cast<bool>(out), "failed to write cross-process lease ready file");
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    store.Close();
+    return EXIT_SUCCESS;
+  } catch (const std::exception& ex) {
+    waxcpp::tests::LogError(std::string("cross-process lease helper failed: ") + ex.what());
+    return EXIT_FAILURE;
   }
 }
 
@@ -1254,10 +1333,101 @@ void RunScenarioWriterLeaseCleansUpArtifactOnClose(const std::filesystem::path& 
   Require(!std::filesystem::exists(lease_path), "writer lease artifact should not remain after reopen close");
 }
 
+void RunScenarioWriterLeaseCrossProcessExclusion(const std::filesystem::path& path,
+                                                 const std::filesystem::path& test_executable) {
+  waxcpp::tests::Log("scenario: writer lease excludes cross-process open on same store path");
+  if (test_executable.empty()) {
+    throw std::runtime_error("test executable path is empty");
+  }
+
+  {
+    auto seed_store = waxcpp::WaxStore::Create(path);
+    seed_store.Close();
+  }
+
+  const auto ready_path = CrossProcessLeaseReadyPath(path);
+  std::error_code ec;
+  std::filesystem::remove(ready_path, ec);
+
+#ifdef _WIN32
+  HANDLE helper_process = LaunchHoldWriterLeaseHelper(test_executable, path, ready_path);
+#else
+  const auto command = QuoteShellArg(test_executable.string()) + " --hold-writer-lease " +
+                       QuoteShellArg(path.string()) + " " + QuoteShellArg(ready_path.string());
+  auto helper = std::async(std::launch::async, [command]() { return std::system(command.c_str()); });
+#endif
+
+  bool helper_ready = false;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (std::filesystem::exists(ready_path)) {
+      helper_ready = true;
+      break;
+    }
+#ifdef _WIN32
+    const auto wait_status = ::WaitForSingleObject(helper_process, 0);
+    if (wait_status == WAIT_OBJECT_0) {
+      break;
+    }
+#else
+    if (helper.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+      break;
+    }
+#endif
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  Require(helper_ready, "cross-process writer lease helper did not signal readiness");
+
+  bool threw = false;
+  try {
+    auto competing = waxcpp::WaxStore::Open(path);
+    competing.Close();
+  } catch (const std::exception& ex) {
+    threw = true;
+    waxcpp::tests::Log(std::string("expected cross-process competing-open rejection: ") + ex.what());
+  }
+  Require(threw, "cross-process competing open must fail while helper writer lease is held");
+
+#ifdef _WIN32
+  const auto wait_exit = ::WaitForSingleObject(helper_process, 15000);
+  Require(wait_exit == WAIT_OBJECT_0, "cross-process writer lease helper timed out");
+  DWORD helper_exit = 1;
+  const auto got_exit = ::GetExitCodeProcess(helper_process, &helper_exit);
+  ::CloseHandle(helper_process);
+  Require(got_exit != FALSE, "failed to read cross-process writer lease helper exit code");
+#else
+  const auto helper_exit = helper.get();
+#endif
+  Require(helper_exit == 0, "cross-process writer lease helper process must exit successfully");
+  std::filesystem::remove(ready_path, ec);
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  reopened.Close();
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc >= 2 && std::string(argv[1]) == "--hold-writer-lease") {
+    if (argc != 4) {
+      waxcpp::tests::LogError("helper mode expects: --hold-writer-lease <store-path> <ready-path>");
+      return EXIT_FAILURE;
+    }
+    return RunHoldWriterLeaseHelper(std::filesystem::path(argv[2]), std::filesystem::path(argv[3]));
+  }
+
   const auto path = UniquePath();
+  std::filesystem::path executable_path{};
+  if (argc > 0 && argv[0] != nullptr) {
+    executable_path = std::filesystem::path(argv[0]);
+    if (!executable_path.empty() && !executable_path.is_absolute()) {
+      std::error_code ec;
+      const auto abs = std::filesystem::absolute(executable_path, ec);
+      if (!ec) {
+        executable_path = abs;
+      }
+    }
+  }
   try {
     waxcpp::tests::Log("wax_store_write_test: start");
     waxcpp::tests::LogKV("wax_store_write_test_path", path.string());
@@ -1300,6 +1470,7 @@ int main() {
     RunScenarioWriterLeaseExclusion(path);
     RunScenarioWriterLeaseArtifactDoesNotBlock(path);
     RunScenarioWriterLeaseCleansUpArtifactOnClose(path);
+    RunScenarioWriterLeaseCrossProcessExclusion(path, executable_path);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);
