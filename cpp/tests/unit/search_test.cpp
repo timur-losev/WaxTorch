@@ -331,6 +331,29 @@ void ScenarioMaxSnippetsCapsSurrogateFallbackItems() {
           "second item surrogate should consume the single snippet slot");
 }
 
+void ScenarioExpansionDisabledStillYieldsSnippets() {
+  waxcpp::tests::Log("scenario: expansion disabled still yields snippets");
+  waxcpp::SearchRequest request{};
+  request.query = "no-expansion";
+  request.top_k = 10;
+  request.max_snippets = 2;
+  request.preview_max_bytes = 256;
+  request.expansion_max_tokens = 0;
+  request.snippet_max_tokens = 4;
+  request.max_context_tokens = 64;
+
+  waxcpp::SearchResponse response{};
+  response.results = {
+      {.frame_id = 1, .score = 2.0F, .preview_text = std::string("alpha beta gamma"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 2, .score = 1.0F, .preview_text = std::string("delta epsilon"), .sources = {waxcpp::SearchSource::kText}},
+  };
+
+  const auto context = waxcpp::BuildFastRAGContext(request, response);
+  Require(context.items.size() == 2, "expansion disabled should still emit snippet-tier context items");
+  Require(context.items[0].kind == waxcpp::RAGItemKind::kSnippet, "first item should be snippet when expansion is disabled");
+  Require(context.items[1].kind == waxcpp::RAGItemKind::kSnippet, "second item should be snippet when expansion is disabled");
+}
+
 void ScenarioSurrogateFallback() {
   waxcpp::tests::Log("scenario: surrogate fallback");
   waxcpp::SearchRequest request{};
@@ -475,6 +498,7 @@ int main() {
     ScenarioRagItemKindPolicy();
     ScenarioMaxSnippetsCapsSnippetsOnly();
     ScenarioMaxSnippetsCapsSurrogateFallbackItems();
+    ScenarioExpansionDisabledStillYieldsSnippets();
     ScenarioSurrogateFallback();
     ScenarioContextDeduplicatesDuplicateFrames();
     ScenarioAsciiWhitespaceTokenization();

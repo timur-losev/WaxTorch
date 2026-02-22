@@ -244,10 +244,12 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
   context.total_tokens = 0;
   context.items.reserve(sorted_results.size());
   int emitted_snippets = 0;
+  const bool expansion_enabled = clamped_expansion_max_tokens > 0;
   for (const auto& result : sorted_results) {
     const bool is_first_item = context.items.empty();
-    auto item_kind = is_first_item ? RAGItemKind::kExpanded : RAGItemKind::kSnippet;
-    const bool counts_towards_snippet_cap = !is_first_item;
+    const bool use_expanded_tier = expansion_enabled && is_first_item;
+    auto item_kind = use_expanded_tier ? RAGItemKind::kExpanded : RAGItemKind::kSnippet;
+    const bool counts_towards_snippet_cap = !use_expanded_tier;
 
     if (counts_towards_snippet_cap && emitted_snippets >= clamped_max_snippets) {
       continue;
@@ -266,8 +268,7 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
     if (tokens.empty()) {
       continue;
     }
-    const int configured_limit =
-        (item_kind == RAGItemKind::kExpanded) ? clamped_expansion_max_tokens : clamped_snippet_max_tokens;
+    const int configured_limit = use_expanded_tier ? clamped_expansion_max_tokens : clamped_snippet_max_tokens;
     if (configured_limit == 0) {
       continue;
     }
