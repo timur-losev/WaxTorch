@@ -193,6 +193,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Deduplicate duplicate `frame_id` results in `BuildFastRAGContext` input path (best-score merge + source union) to keep context materialization deterministic with external/non-unified response producers
 - [x] Replace locale-dependent tokenization primitives with ASCII-stable classification in embeddings/search/orchestrator paths (`isalnum/tolower/isspace` -> deterministic ASCII helpers), with regressions for mixed delimiters and non-ASCII bytes
 - [x] Enforce `require_on_device_providers` policy in orchestrator constructor: reject cloud-like embedder providers when on-device enforcement is enabled; allow explicit opt-out (`require_on_device_providers=false`)
+- [x] Enforce embedding-dimension integrity in vector paths: `Remember` now rejects mismatched embedding vectors before writes, and reopen vector-rebuild throws on provider dimension mismatch instead of silently skipping vectors
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

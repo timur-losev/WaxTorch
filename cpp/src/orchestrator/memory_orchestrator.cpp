@@ -764,7 +764,7 @@ void RebuildVectorIndexFromStore(WaxStore& store,
     }
     for (std::size_t i = 0; i < missing_ids.size(); ++i) {
       if (embeddings[i].size() != static_cast<std::size_t>(vector_index.dimensions())) {
-        continue;
+        throw std::runtime_error("rebuild vector index: embedding dimension mismatch");
       }
       vector_index.StageAdd(missing_ids[i], embeddings[i]);
     }
@@ -915,6 +915,9 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
     throw std::runtime_error("vector-enabled config requires embedder");
   }
   EnsureOnDeviceProviderPolicy(config_, embedder_);
+  if (config_.enable_vector_search && embedder_->dimensions() <= 0) {
+    throw std::runtime_error("vector-enabled config requires positive embedder dimensions");
+  }
   RebuildRuntimeStateFromStore(store_,
                                config_,
                                embedder_,
@@ -923,6 +926,9 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
                                structured_text_index_,
                                vector_index_,
                                embedding_cache_);
+  if (config_.enable_vector_search && vector_index_ == nullptr) {
+    throw std::runtime_error("vector-enabled config requires initialized vector index");
+  }
 }
 
 void MemoryOrchestrator::Remember(const std::string& content, const Metadata& metadata) {
@@ -940,6 +946,15 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
         embedder_, chunks, config_.ingest_batch_size, config_.ingest_concurrency, "remember");
     if (chunk_embeddings->size() != chunks.size()) {
       throw std::runtime_error("remember: embedding count mismatch");
+    }
+    if (vector_index_ == nullptr) {
+      throw std::runtime_error("remember: vector index is not initialized");
+    }
+    const auto expected_dims = static_cast<std::size_t>(vector_index_->dimensions());
+    for (const auto& embedding : *chunk_embeddings) {
+      if (embedding.size() != expected_dims) {
+        throw std::runtime_error("remember: embedding dimension mismatch");
+      }
     }
   }
 

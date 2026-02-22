@@ -304,6 +304,37 @@ class CloudIdentityEmbedder final : public waxcpp::EmbeddingProvider {
   }
 };
 
+class WrongDimensionBatchEmbedder final : public waxcpp::BatchEmbeddingProvider {
+ public:
+  int dimensions() const override { return 4; }
+  bool normalize() const override { return true; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override {
+    return waxcpp::EmbeddingIdentity{
+        .provider = std::string("WaxCppTest"),
+        .model = std::string("WrongDimensionBatchEmbedder"),
+        .dimensions = 4,
+        .normalized = true,
+    };
+  }
+
+  std::vector<float> Embed(const std::string& text) override {
+    std::vector<float> out(3, 0.0F);
+    for (std::size_t i = 0; i < text.size(); ++i) {
+      out[i % out.size()] += static_cast<float>(static_cast<unsigned char>(text[i])) / 255.0F;
+    }
+    return out;
+  }
+
+  std::vector<std::vector<float>> EmbedBatch(const std::vector<std::string>& texts) override {
+    std::vector<std::vector<float>> out{};
+    out.reserve(texts.size());
+    for (const auto& text : texts) {
+      out.push_back(Embed(text));
+    }
+    return out;
+  }
+};
+
 void ScenarioVectorPolicyValidation(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: vector policy validation");
   waxcpp::OrchestratorConfig config{};
@@ -353,6 +384,56 @@ void ScenarioOnDeviceProviderPolicyValidation(const std::filesystem::path& path)
     orchestrator.Flush();
     orchestrator.Close();
   }
+}
+
+void ScenarioEmbeddingDimensionPolicyValidation(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: embedding dimension policy validation");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+  config.require_on_device_providers = true;
+
+  {
+    auto embedder = std::make_shared<WrongDimensionBatchEmbedder>();
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+
+    bool remember_threw = false;
+    try {
+      orchestrator.Remember("dimension mismatch remember path", {});
+    } catch (const std::exception&) {
+      remember_threw = true;
+    }
+    Require(remember_threw, "remember should reject embedding dimension mismatch");
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    const auto stats = store.Stats();
+    Require(stats.frame_count == 0, "dimension mismatch on remember should not persist frames");
+    store.Close();
+  }
+
+  const auto rebuild_path = UniquePath();
+  {
+    auto store = waxcpp::WaxStore::Create(rebuild_path);
+    (void)store.Put(StringToBytes("seed for rebuild mismatch"), {});
+    store.Commit();
+    store.Close();
+  }
+  {
+    auto embedder = std::make_shared<WrongDimensionBatchEmbedder>();
+    bool ctor_threw = false;
+    try {
+      waxcpp::MemoryOrchestrator orchestrator(rebuild_path, config, embedder);
+      orchestrator.Close();
+    } catch (const std::exception&) {
+      ctor_threw = true;
+    }
+    Require(ctor_threw, "constructor should reject rebuild-time embedding dimension mismatch");
+  }
+  CleanupPath(rebuild_path);
 }
 
 void ScenarioSearchModePolicyValidation(const std::filesystem::path& path) {
@@ -1704,9 +1785,11 @@ int main() {
     const auto path40 = UniquePath();
     const auto path41 = UniquePath();
     const auto path42 = UniquePath();
+    const auto path43 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
+    ScenarioEmbeddingDimensionPolicyValidation(path43);
     ScenarioSearchModePolicyValidation(path22);
     ScenarioRecallEmbeddingPolicyValidation(path29);
     ScenarioRememberFlushPersistsFrame(path1);
@@ -1753,7 +1836,7 @@ int main() {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
         path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
-        path33, path34, path35, path36, path37, path38, path39, path40, path41, path42,
+        path33, path34, path35, path36, path37, path38, path39, path40, path41, path42, path43,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
