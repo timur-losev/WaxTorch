@@ -278,6 +278,27 @@ void ScenarioContextDeduplicatesDuplicateFrames() {
   Require(context.items[0].sources.size() == 2, "duplicate merge should union sources");
 }
 
+void ScenarioAsciiWhitespaceTokenization() {
+  waxcpp::tests::Log("scenario: ascii whitespace tokenization");
+  waxcpp::SearchRequest request{};
+  request.query = "ws";
+  request.top_k = 10;
+  request.preview_max_bytes = 256;
+  request.expansion_max_tokens = 10;
+  request.snippet_max_tokens = 10;
+  request.max_context_tokens = 100;
+
+  waxcpp::SearchResponse response{};
+  response.results = {
+      {.frame_id = 1, .score = 1.0F, .preview_text = std::string("a\tb\nc\r\nd"), .sources = {waxcpp::SearchSource::kText}},
+  };
+
+  const auto context = waxcpp::BuildFastRAGContext(request, response);
+  Require(context.items.size() == 1, "expected single context item");
+  Require(context.items[0].text == "a b c d", "ascii whitespace tokenization must normalize tabs/newlines");
+  Require(context.total_tokens == 4, "ascii whitespace tokenization token count mismatch");
+}
+
 }  // namespace
 
 int main() {
@@ -293,6 +314,7 @@ int main() {
     ScenarioRagItemKindPolicy();
     ScenarioSurrogateFallback();
     ScenarioContextDeduplicatesDuplicateFrames();
+    ScenarioAsciiWhitespaceTokenization();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

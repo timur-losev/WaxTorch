@@ -95,6 +95,18 @@ void ScenarioMemoizationCapacity() {
   Require(uncached_embedder.cache_size() == 0, "zero-capacity embedder should not memoize");
 }
 
+void ScenarioAsciiTokenizationDeterminism() {
+  waxcpp::tests::Log("scenario: ascii tokenization determinism");
+  waxcpp::MiniLMEmbedderTorch embedder;
+  const auto a = embedder.Embed("Alpha-42");
+  const auto b = embedder.Embed("alpha 42");
+  Require(a == b, "ASCII case-fold + delimiter tokenization should be deterministic");
+
+  const auto c = embedder.Embed("alpha \xC3\xA9 42");
+  const auto d = embedder.Embed("alpha 42");
+  Require(c == d, "non-ASCII bytes should not perturb ASCII tokenization path");
+}
+
 void ScenarioConcurrentEmbedThreadSafety() {
   waxcpp::tests::Log("scenario: concurrent embed thread safety");
   waxcpp::MiniLMEmbedderTorch embedder(32);
@@ -135,6 +147,7 @@ int main() {
     ScenarioNormalizationAndEmptyInput();
     ScenarioBatchParity();
     ScenarioMemoizationCapacity();
+    ScenarioAsciiTokenizationDeterminism();
     ScenarioConcurrentEmbedThreadSafety();
     waxcpp::tests::Log("embeddings_test: finished");
     return EXIT_SUCCESS;

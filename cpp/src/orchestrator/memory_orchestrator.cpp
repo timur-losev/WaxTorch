@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <atomic>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -24,6 +23,10 @@
 
 namespace waxcpp {
 namespace {
+
+bool IsAsciiWhitespace(char ch) {
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v';
+}
 
 inline constexpr std::array<std::byte, 6> kStructuredFactMagic = {
     std::byte{'W'},
@@ -389,14 +392,14 @@ std::vector<std::string> TokenizeWhitespace(std::string_view text) {
   std::vector<std::string> tokens{};
   std::size_t start = 0;
   while (start < text.size()) {
-    while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start])) != 0) {
+    while (start < text.size() && IsAsciiWhitespace(text[start])) {
       ++start;
     }
     if (start >= text.size()) {
       break;
     }
     std::size_t end = start;
-    while (end < text.size() && std::isspace(static_cast<unsigned char>(text[end])) == 0) {
+    while (end < text.size() && !IsAsciiWhitespace(text[end])) {
       ++end;
     }
     tokens.emplace_back(text.substr(start, end - start));

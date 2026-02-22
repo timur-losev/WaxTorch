@@ -1,7 +1,6 @@
 #include "waxcpp/embeddings.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -18,14 +17,27 @@ namespace {
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
+bool IsAsciiAlphaNum(unsigned char ch) {
+  return (ch >= static_cast<unsigned char>('0') && ch <= static_cast<unsigned char>('9')) ||
+         (ch >= static_cast<unsigned char>('A') && ch <= static_cast<unsigned char>('Z')) ||
+         (ch >= static_cast<unsigned char>('a') && ch <= static_cast<unsigned char>('z'));
+}
+
+char ToAsciiLower(unsigned char ch) {
+  if (ch >= static_cast<unsigned char>('A') && ch <= static_cast<unsigned char>('Z')) {
+    return static_cast<char>(ch - static_cast<unsigned char>('A') + static_cast<unsigned char>('a'));
+  }
+  return static_cast<char>(ch);
+}
+
 std::vector<std::string> Tokenize(std::string_view text) {
   std::vector<std::string> tokens{};
   std::string current{};
   current.reserve(32);
 
   for (const unsigned char ch : text) {
-    if (std::isalnum(ch) != 0) {
-      current.push_back(static_cast<char>(std::tolower(ch)));
+    if (IsAsciiAlphaNum(ch)) {
+      current.push_back(ToAsciiLower(ch));
       continue;
     }
     if (!current.empty()) {
