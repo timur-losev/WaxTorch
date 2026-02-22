@@ -648,15 +648,66 @@ std::uint64_t WaxStore::Put(const std::vector<std::byte>& content, const Metadat
 
 std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std::byte>>& contents,
                                               const std::vector<Metadata>& metadatas) {
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
   if (!metadatas.empty() && metadatas.size() != contents.size()) {
     throw StoreError("PutBatch metadatas size must be zero or match contents size");
   }
+  if (contents.empty()) {
+    return {};
+  }
+
+  core::wal::WalRingWriter writer(path_,
+                                  wal_offset_,
+                                  wal_size_,
+                                  wal_write_pos_,
+                                  wal_checkpoint_pos_,
+                                  wal_pending_bytes_,
+                                  wal_last_sequence_,
+                                  wal_wrap_count_,
+                                  wal_checkpoint_count_,
+                                  wal_sentinel_write_count_,
+                                  wal_write_call_count_);
+
   std::vector<std::uint64_t> ids{};
   ids.reserve(contents.size());
   for (std::size_t i = 0; i < contents.size(); ++i) {
-    const Metadata* metadata = metadatas.empty() ? nullptr : &metadatas[i];
-    ids.push_back(Put(contents[i], metadata ? *metadata : Metadata{}));
+    const auto frame_id = next_frame_id_ + static_cast<std::uint64_t>(i);
+    const auto payload_offset = FileSize(path_);
+    const auto payload_length = static_cast<std::uint64_t>(contents[i].size());
+    const auto stored_checksum = core::Sha256Digest(contents[i]);
+    const auto canonical_checksum = stored_checksum;
+    const std::uint8_t canonical_encoding = 0;  // plain
+    const auto canonical_length = payload_length;
+
+    if (!contents[i].empty()) {
+      WriteBytesAt(path_, payload_offset, contents[i]);
+    }
+    const auto wal_payload = BuildWalPutFramePayload(frame_id,
+                                                     payload_offset,
+                                                     payload_length,
+                                                     canonical_encoding,
+                                                     canonical_length,
+                                                     canonical_checksum,
+                                                     stored_checksum);
+    (void)writer.Append(wal_payload);
+    ids.push_back(frame_id);
   }
+
+  wal_write_pos_ = writer.write_pos();
+  wal_checkpoint_pos_ = writer.checkpoint_pos();
+  wal_pending_bytes_ = writer.pending_bytes();
+  wal_last_sequence_ = writer.last_sequence();
+  wal_wrap_count_ = writer.wrap_count();
+  wal_checkpoint_count_ = writer.checkpoint_count();
+  wal_sentinel_write_count_ = writer.sentinel_write_count();
+  wal_write_call_count_ = writer.write_call_count();
+
+  stats_.pending_frames += static_cast<std::uint64_t>(contents.size());
+  next_frame_id_ += static_cast<std::uint64_t>(contents.size());
+  dirty_ = true;
+  has_local_mutations_ = true;
   return ids;
 }
 

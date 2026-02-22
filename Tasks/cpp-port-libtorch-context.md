@@ -359,6 +359,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/include/waxcpp/wax_store.hpp` | Extended `WaxWALStats` with `pending_embedding_mutations` runtime counter | Codex |
 | `cpp/src/core/wax_store.cpp` | Wired `pending_embedding_mutations` updates in open/write/commit paths and surfaced it via `WalStats()` | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added assertions that `pending_embedding_mutations` tracks pending embedding snapshot size and resets on commit/recovery transitions | Codex |
+| `cpp/src/core/wax_store.cpp` | Refactored `PutBatch` to a single `WalRingWriter` append path (no per-item `Put()` calls) while preserving dense IDs and existing commit semantics | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
