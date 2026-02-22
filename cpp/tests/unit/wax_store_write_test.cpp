@@ -1405,6 +1405,36 @@ void RunScenarioWriterLeaseCrossProcessExclusion(const std::filesystem::path& pa
   reopened.Close();
 }
 
+void RunScenarioFailedOpenReleasesWriterLease(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: failed open releases writer lease");
+  {
+    auto seed = waxcpp::WaxStore::Create(path);
+    seed.Close();
+  }
+
+  const std::array<std::byte, 1> corrupt_magic = {std::byte{0x00}};
+  WriteBytesAt(path, 0, std::span<const std::byte>(corrupt_magic.data(), corrupt_magic.size()));
+  WriteBytesAt(path,
+               waxcpp::core::mv2s::kHeaderPageSize,
+               std::span<const std::byte>(corrupt_magic.data(), corrupt_magic.size()));
+
+  bool threw = false;
+  try {
+    auto broken = waxcpp::WaxStore::Open(path);
+    broken.Close();
+  } catch (const std::exception& ex) {
+    threw = true;
+    waxcpp::tests::Log(std::string("expected open failure on corrupt header: ") + ex.what());
+  }
+  Require(threw, "open on corrupted header must fail");
+
+  // If failed Open leaks writer lease, this Create/Open sequence will fail.
+  auto recreated = waxcpp::WaxStore::Create(path);
+  recreated.Close();
+  auto reopened = waxcpp::WaxStore::Open(path);
+  reopened.Close();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1471,6 +1501,7 @@ int main(int argc, char** argv) {
     RunScenarioWriterLeaseArtifactDoesNotBlock(path);
     RunScenarioWriterLeaseCleansUpArtifactOnClose(path);
     RunScenarioWriterLeaseCrossProcessExclusion(path, executable_path);
+    RunScenarioFailedOpenReleasesWriterLease(path);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);

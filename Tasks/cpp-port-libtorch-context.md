@@ -406,6 +406,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/core/wax_store.cpp` | Hardened `Commit()` WAL sequence publication: footer/checkpoint now clamp committed sequence to `max(previous_committed_seq, scanned_last_seq)` to prevent sequence regression on corrupt/terminal pending headers | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added regression for corrupt pending WAL header at commit cursor, asserting committed sequence monotonicity across corruption-tolerant commit path | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added cross-process writer-lease exclusion regression via helper-mode test process (`--hold-writer-lease`), covering OS-level lock enforcement beyond in-process lease guard | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added regression that failed `WaxStore::Open` on corrupted dual-header state releases writer lease, allowing immediate `Create/Open` retry without stale lock leak | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Added constructor policy validation for `search_mode` vs enabled channels and extra filtering of text index hits against committed store frame state | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added policy-validation scenarios for invalid text-only/vector-only/hybrid configuration combinations | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added regression scenario for `flush fail -> close -> reopen` recovery path, ensuring text index rebuild from committed store state | Codex |
