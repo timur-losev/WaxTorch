@@ -763,6 +763,92 @@ void RunScenarioCrashWindowAfterHeaderB(const std::filesystem::path& path) {
   reopened.Close();
 }
 
+void RunScenarioVisibleCommitProbeStep1NoRefresh(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: published-commit probe does not refresh after step1 failure");
+  auto store = waxcpp::WaxStore::Create(path);
+  (void)store.Put({std::byte{0xA1}});
+  store.Commit();
+  (void)store.Put({std::byte{0xA2}});
+
+  bool threw = false;
+  {
+    ScopedCommitFailStep fail_step(1);
+    try {
+      store.Commit();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+  }
+  Require(threw, "commit should fail at injected step 1");
+
+  const bool refreshed = store.TryRefreshIfPublishedCommitVisible();
+  Require(!refreshed, "step1 failure must not report externally visible commit");
+
+  const auto stats_after_probe = store.Stats();
+  Require(stats_after_probe.frame_count == 1, "step1 probe must keep committed frame_count unchanged");
+  Require(stats_after_probe.pending_frames == 1, "step1 probe must preserve pending WAL mutations");
+
+  store.Commit();
+  const auto stats_after_retry = store.Stats();
+  Require(stats_after_retry.frame_count == 2, "retry commit after step1 failure should apply pending mutation");
+  Require(stats_after_retry.pending_frames == 0, "retry commit should clear pending state");
+  store.Close();
+}
+
+void RunScenarioVisibleCommitProbeStep2Refreshes(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: published-commit probe refreshes after step2 failure");
+  auto store = waxcpp::WaxStore::Create(path);
+  (void)store.Put({std::byte{0xB1}});
+  store.Commit();
+  (void)store.Put({std::byte{0xB2}});
+
+  bool threw = false;
+  {
+    ScopedCommitFailStep fail_step(2);
+    try {
+      store.Commit();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+  }
+  Require(threw, "commit should fail at injected step 2");
+
+  const bool refreshed = store.TryRefreshIfPublishedCommitVisible();
+  Require(refreshed, "step2 failure should report externally visible commit");
+
+  const auto stats_after_probe = store.Stats();
+  Require(stats_after_probe.frame_count == 2, "step2 probe should refresh committed frame_count");
+  Require(stats_after_probe.pending_frames == 0, "step2 probe should clear pending WAL state");
+  store.Close();
+}
+
+void RunScenarioVisibleCommitProbeStep5Refreshes(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: published-commit probe refreshes after step5 failure");
+  auto store = waxcpp::WaxStore::Create(path);
+  (void)store.Put({std::byte{0xC1}});
+  store.Commit();
+  (void)store.Put({std::byte{0xC2}});
+
+  bool threw = false;
+  {
+    ScopedCommitFailStep fail_step(5);
+    try {
+      store.Commit();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+  }
+  Require(threw, "commit should fail at injected step 5");
+
+  const bool refreshed = store.TryRefreshIfPublishedCommitVisible();
+  Require(refreshed, "step5 failure should report externally visible commit");
+
+  const auto stats_after_probe = store.Stats();
+  Require(stats_after_probe.frame_count == 2, "step5 probe should refresh committed frame_count");
+  Require(stats_after_probe.pending_frames == 0, "step5 probe should clear pending WAL state");
+  store.Close();
+}
+
 void RunScenarioSupersedeCycleRejected(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: supersede cycle rejected at commit");
   {
@@ -1026,6 +1112,9 @@ int main() {
     RunScenarioCrashWindowAfterCheckpointBeforeHeaders(path);
     RunScenarioCrashWindowAfterHeaderA(path);
     RunScenarioCrashWindowAfterHeaderB(path);
+    RunScenarioVisibleCommitProbeStep1NoRefresh(path);
+    RunScenarioVisibleCommitProbeStep2Refreshes(path);
+    RunScenarioVisibleCommitProbeStep5Refreshes(path);
     RunScenarioSupersedeCycleRejected(path);
     RunScenarioSupersedeConflictRejected(path);
     RunScenarioCloseAutoCommitsPending(path);

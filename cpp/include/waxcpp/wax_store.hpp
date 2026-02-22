@@ -78,6 +78,7 @@ class WaxStore {
 
   void Commit();
   void Close();
+  bool TryRefreshIfPublishedCommitVisible();
 
  [[nodiscard]] WaxStats Stats() const;
  [[nodiscard]] WaxWALStats WalStats() const;

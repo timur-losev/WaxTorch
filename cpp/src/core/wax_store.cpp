@@ -1206,6 +1206,24 @@ void WaxStore::Close() {
   writer_lease_.reset();
 }
 
+bool WaxStore::TryRefreshIfPublishedCommitVisible() {
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
+
+  const auto file_size = FileSize(path_);
+  const auto scanned_footer = ScanForLatestFooter(path_, file_size);
+  if (!scanned_footer.has_value()) {
+    return false;
+  }
+  if (scanned_footer->footer.generation <= file_generation_) {
+    return false;
+  }
+
+  LoadState(false, false);
+  return true;
+}
+
 WaxStats WaxStore::Stats() const {
   return stats_;
 }
