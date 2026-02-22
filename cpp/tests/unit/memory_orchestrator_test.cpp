@@ -659,6 +659,27 @@ void ScenarioMaxSnippetsClamp(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioMaxSnippetsZeroSuppressesRecallItems(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: max_snippets zero suppresses recall items");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_top_k = 10;
+  config.rag.max_snippets = 0;
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("apple alpha", {});
+    orchestrator.Remember("apple beta", {});
+    orchestrator.Flush();
+
+    const auto context = orchestrator.Recall("apple");
+    Require(context.items.empty(), "max_snippets=0 should suppress recall items");
+    Require(context.total_tokens == 0, "max_snippets=0 should produce zero tokens");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioRememberChunking(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: remember chunking");
   waxcpp::OrchestratorConfig config{};
@@ -1809,6 +1830,7 @@ int main() {
     const auto path42 = UniquePath();
     const auto path43 = UniquePath();
     const auto path44 = UniquePath();
+    const auto path45 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -1821,6 +1843,7 @@ int main() {
     ScenarioEmbeddingMemoizationInRecall(path4);
     ScenarioBatchProviderUsedForVectorRecall(path5);
     ScenarioMaxSnippetsClamp(path6);
+    ScenarioMaxSnippetsZeroSuppressesRecallItems(path45);
     ScenarioRememberChunking(path7);
     ScenarioBatchProviderUsedForRemember(path8);
     ScenarioRememberRespectsIngestBatchSize(path9);
@@ -1861,7 +1884,7 @@ int main() {
         path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
         path33, path34, path35, path36, path37, path38, path39, path40, path41, path42, path43,
-        path44,
+        path44, path45,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

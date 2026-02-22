@@ -201,6 +201,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add orchestrator regression for `hybrid` explicit-embedding recall path: `Recall(query, embedding)` must not invoke query embedder when embedding is supplied
 - [x] Align C++ FastRAG request clamping with Swift baseline in context assembly (`top_k/max_context/snippet/expansion` clamp to non-negative; zero disables output) and add negative/zero clamp regressions
 - [x] Align C++ hybrid RRF `rrf_k` handling with Swift parity: clamp `rrf_k` to `>=0` (no implicit fallback-to-60 when non-positive) and add regression for `rrf_k=0`/negative cases
+- [x] Fix orchestrator recall `max_snippets` clamp parity: `max_snippets<=0` no longer falls back to `search_top_k`; `Recall` now clamps `search_top_k/max_snippets` to non-negative and applies strict `min` limit with regression for `max_snippets=0`
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

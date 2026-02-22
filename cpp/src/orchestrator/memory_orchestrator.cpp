@@ -996,8 +996,9 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
   SearchRequest req;
   req.query = query;
   req.mode = config_.rag.search_mode;
-  const int max_snippets = config_.rag.max_snippets > 0 ? config_.rag.max_snippets : config_.rag.search_top_k;
-  req.top_k = std::min(config_.rag.search_top_k, max_snippets);
+  const int clamped_search_top_k = std::max(0, config_.rag.search_top_k);
+  const int clamped_max_snippets = std::max(0, config_.rag.max_snippets);
+  req.top_k = std::min(clamped_search_top_k, clamped_max_snippets);
   req.rrf_k = config_.rag.rrf_k;
   req.preview_max_bytes = config_.rag.preview_max_bytes;
   req.expansion_max_tokens = config_.rag.expansion_max_tokens;
@@ -1029,8 +1030,9 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
   req.query = query;
   req.embedding = embedding;
   req.mode = config_.rag.search_mode;
-  const int max_snippets = config_.rag.max_snippets > 0 ? config_.rag.max_snippets : config_.rag.search_top_k;
-  req.top_k = std::min(config_.rag.search_top_k, max_snippets);
+  const int clamped_search_top_k = std::max(0, config_.rag.search_top_k);
+  const int clamped_max_snippets = std::max(0, config_.rag.max_snippets);
+  req.top_k = std::min(clamped_search_top_k, clamped_max_snippets);
   req.rrf_k = config_.rag.rrf_k;
   req.preview_max_bytes = config_.rag.preview_max_bytes;
   req.expansion_max_tokens = config_.rag.expansion_max_tokens;
