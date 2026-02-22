@@ -8,8 +8,10 @@
 #include <cstdlib>
 #include <filesystem>
 #include <atomic>
+#include <array>
 #include <memory>
 #include <mutex>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -47,6 +49,44 @@ std::string BytesToString(const std::vector<std::byte>& bytes) {
     text.push_back(static_cast<char>(std::to_integer<unsigned char>(b)));
   }
   return text;
+}
+
+void AppendU32LE(std::vector<std::byte>& out, std::uint32_t value) {
+  for (std::size_t i = 0; i < 4; ++i) {
+    out.push_back(static_cast<std::byte>((value >> (8U * i)) & 0xFFU));
+  }
+}
+
+void AppendU64LE(std::vector<std::byte>& out, std::uint64_t value) {
+  for (std::size_t i = 0; i < 8; ++i) {
+    out.push_back(static_cast<std::byte>((value >> (8U * i)) & 0xFFU));
+  }
+}
+
+void AppendF32LE(std::vector<std::byte>& out, float value) {
+  std::uint32_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  AppendU32LE(out, bits);
+}
+
+std::vector<std::byte> BuildEmbeddingRecordPayloadV1(std::uint64_t frame_id, const std::vector<float>& embedding) {
+  constexpr std::array<std::byte, 6> kMagic = {
+      std::byte{'W'},
+      std::byte{'A'},
+      std::byte{'X'},
+      std::byte{'E'},
+      std::byte{'M'},
+      std::byte{'1'},
+  };
+  std::vector<std::byte> payload{};
+  payload.reserve(kMagic.size() + 8 + 4 + embedding.size() * 4);
+  payload.insert(payload.end(), kMagic.begin(), kMagic.end());
+  AppendU64LE(payload, frame_id);
+  AppendU32LE(payload, static_cast<std::uint32_t>(embedding.size()));
+  for (const float value : embedding) {
+    AppendF32LE(payload, value);
+  }
+  return payload;
 }
 
 bool StartsWithMagic(const std::vector<std::byte>& bytes, const char* magic, std::size_t size) {
@@ -2241,6 +2281,38 @@ void ScenarioVectorRebuildUsesConfiguredIngestConcurrency(const std::filesystem:
           "rebuild ingest_concurrency>1 should utilize more than one worker thread");
 }
 
+void ScenarioVectorReopenWithNonFinitePersistedEmbeddingReembeds(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector reopen with non-finite persisted embedding reembeds");
+  std::uint64_t user_frame_id = 0;
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    user_frame_id = store.Put(StringToBytes("non finite persisted apple"), {});
+    const auto nan = std::numeric_limits<float>::quiet_NaN();
+    const auto bad_embedding_payload = BuildEmbeddingRecordPayloadV1(user_frame_id, {nan, 0.0F, 0.0F, 0.0F});
+    (void)store.Put(bad_embedding_payload, {});
+    store.Commit();
+    store.Close();
+  }
+
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    // Non-finite persisted embeddings must be ignored, forcing rebuild re-embed.
+    Require(embedder->batch_calls() == 0,
+            "single missing embedding during rebuild should not use EmbedBatch fast path");
+    Require(embedder->embed_calls() == 1,
+            "non-finite persisted embedding should force one single-item re-embed");
+    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "vector recall should succeed after re-embedding non-finite persisted record");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: remember ingest_concurrency propagates embed errors");
   waxcpp::OrchestratorConfig config{};
@@ -2811,6 +2883,7 @@ int main() {
     const auto path76 = UniquePath();
     const auto path77 = UniquePath();
     const auto path78 = UniquePath();
+    const auto path79 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -2830,6 +2903,7 @@ int main() {
     ScenarioRememberRespectsIngestBatchSize(path9);
     ScenarioRememberUsesConfiguredIngestConcurrency(path37);
     ScenarioVectorRebuildUsesConfiguredIngestConcurrency(path38);
+    ScenarioVectorReopenWithNonFinitePersistedEmbeddingReembeds(path79);
     ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(path39);
     ScenarioTextOnlyRecallSkipsVectorEmbedding(path10);
     ScenarioStructuredMemoryFacts(path11);
@@ -2900,7 +2974,7 @@ int main() {
         path44, path45, path46, path47, path48, path49, path50, path51, path52, path53, path54,
         path55, path56, path57, path58, path59, path60, path61, path62, path63, path64, path65,
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
-        path77, path78,
+        path77, path78, path79,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

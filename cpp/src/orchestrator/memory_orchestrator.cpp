@@ -410,6 +410,15 @@ bool IsInternalOrchestratorPayload(const std::vector<std::byte>& payload) {
   return ParseStructuredFactPayload(payload).has_value() || ParseEmbeddingRecordPayload(payload).has_value();
 }
 
+bool AllFinite(const std::vector<float>& values) {
+  for (const float value : values) {
+    if (!std::isfinite(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::vector<std::string> TokenizeWhitespace(std::string_view text) {
   std::vector<std::string> tokens{};
   std::size_t start = 0;
@@ -751,7 +760,8 @@ void RebuildVectorIndexFromStore(WaxStore& store,
   for (std::size_t i = 0; i < frame_ids.size(); ++i) {
     const auto persisted_it = persisted_embeddings.by_frame.find(frame_ids[i]);
     if (persisted_it == persisted_embeddings.by_frame.end() ||
-        persisted_it->second.embedding.size() != static_cast<std::size_t>(vector_index.dimensions())) {
+        persisted_it->second.embedding.size() != static_cast<std::size_t>(vector_index.dimensions()) ||
+        !AllFinite(persisted_it->second.embedding)) {
       missing_ids.push_back(frame_ids[i]);
       missing_texts.push_back(texts[i]);
       continue;

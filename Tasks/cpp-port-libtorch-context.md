@@ -526,6 +526,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/wal_ring_writer_test.cpp` | Added `AppendBatch` writer scenario validating sequence monotonicity and decode parity | Codex |
 | `cpp/tests/unit/search_test.cpp` | Added deterministic seeded fuzz/property regression (`256` iterations) asserting unified-search and FastRAG context permutation invariance across randomized duplicate/NaN/preview/source inputs | Codex |
 | `cpp/tests/unit/structured_memory_store_test.cpp` | Added deterministic seeded model-parity regression (`512` iterations) for staged/direct upsert/remove/commit/rollback flows, asserting `PendingMutationCount`, `All`, `QueryByEntityPrefix`, and `Get` parity against reference model | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Hardened vector-index rebuild to reject non-finite persisted embedding records (`NaN/Inf`) and fall back to re-embedding path | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added regression for malformed persisted embedding record (`WAXEM1` with `NaN`) asserting reopen rebuild re-embeds document instead of trusting corrupted persisted vector | Codex |
 | `cpp/src/core/wax_store.cpp` | Switched `PutBatch` WAL path to `AppendBatch` for parity with batched write semantics and lower writer overhead | Codex |
 | `cpp/src/core/wal_ring.cpp` | Hardened `AppendBatch` with dry-run capacity preflight so overflow rejects atomically before any WAL writes | Codex |
 | `cpp/tests/unit/wal_ring_writer_test.cpp` | Added overflow atomicity regression ensuring failed `AppendBatch` preserves WAL cursor/state and does not append partial records | Codex |
