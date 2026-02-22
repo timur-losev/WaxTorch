@@ -247,6 +247,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Extend parity sidecar schema/assertions with lifecycle WAL counters (`wal_pending_delete_mutations`, `wal_pending_supersede_mutations`) and wire baseline synthetic fixture expectations
 - [x] Harden commit crash-window safety for metadata-only mutations by enforcing append-only TOC placement (never overwrite previous committed TOC region), with probe regression for lifecycle pending counters across step1 failure + retry commit
 - [x] Add deterministic mixed replay regression for pending WAL (`put + delete + supersede + putEmbedding`) validating reopen counters and final TOC lifecycle edges after commit
+- [x] Harden structured-fact journal replay against invalid keys: reject empty `entity/attribute` in `WAXSM1` payload decode, validate remove-path key contracts, and add malformed-journal reopen regression coverage
 - [x] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

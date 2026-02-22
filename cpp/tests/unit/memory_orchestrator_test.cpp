@@ -106,6 +106,51 @@ std::vector<std::byte> BuildMalformedEmbeddingRecordPayloadV1(std::uint64_t fram
   return payload;
 }
 
+void AppendStringField(std::vector<std::byte>& out, const std::string& value) {
+  AppendU32LE(out, static_cast<std::uint32_t>(value.size()));
+  for (const char ch : value) {
+    out.push_back(static_cast<std::byte>(static_cast<unsigned char>(ch)));
+  }
+}
+
+std::vector<std::byte> BuildMalformedStructuredFactRemovePayloadEmptyEntity() {
+  constexpr std::array<std::byte, 6> kMagic = {
+      std::byte{'W'},
+      std::byte{'A'},
+      std::byte{'X'},
+      std::byte{'S'},
+      std::byte{'M'},
+      std::byte{'1'},
+  };
+  std::vector<std::byte> payload{};
+  payload.reserve(32);
+  payload.insert(payload.end(), kMagic.begin(), kMagic.end());
+  payload.push_back(static_cast<std::byte>(2));  // remove opcode
+  AppendStringField(payload, "");
+  AppendStringField(payload, "city");
+  return payload;
+}
+
+std::vector<std::byte> BuildMalformedStructuredFactUpsertPayloadEmptyAttribute() {
+  constexpr std::array<std::byte, 6> kMagic = {
+      std::byte{'W'},
+      std::byte{'A'},
+      std::byte{'X'},
+      std::byte{'S'},
+      std::byte{'M'},
+      std::byte{'1'},
+  };
+  std::vector<std::byte> payload{};
+  payload.reserve(64);
+  payload.insert(payload.end(), kMagic.begin(), kMagic.end());
+  payload.push_back(static_cast<std::byte>(1));  // upsert opcode
+  AppendStringField(payload, "user:malformed");
+  AppendStringField(payload, "");
+  AppendStringField(payload, "ignored");
+  AppendU32LE(payload, 0U);  // metadata count
+  return payload;
+}
+
 bool StartsWithMagic(const std::vector<std::byte>& bytes, const char* magic, std::size_t size) {
   if (bytes.size() < size) {
     return false;
@@ -2835,6 +2880,53 @@ void ScenarioStructuredMemoryRemovePersists(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioMalformedStructuredJournalPayloadsAreIgnored(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: malformed structured journal payloads are ignored");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:ok", "city", "rome");
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    (void)store.Put(BuildMalformedStructuredFactRemovePayloadEmptyEntity(), {});
+    (void)store.Put(BuildMalformedStructuredFactUpsertPayloadEmptyAttribute(), {});
+    store.Commit();
+    store.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto facts = reopened.RecallFactsByEntityPrefix("user:ok", 10);
+    Require(facts.size() == 1, "malformed structured payload should be ignored during replay");
+    Require(facts.front().attribute == "city", "valid structured fact should remain intact");
+    Require(facts.front().value == "rome", "valid structured fact value should remain intact");
+
+    const auto context = reopened.Recall("rome");
+    bool has_structured = false;
+    for (const auto& item : context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          has_structured = true;
+          break;
+        }
+      }
+      if (has_structured) {
+        break;
+      }
+    }
+    Require(has_structured, "valid structured fact should remain searchable after malformed replay records");
+    reopened.Close();
+  }
+}
+
 void ScenarioConcurrentRememberIsSerialized(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: concurrent remember is serialized");
   waxcpp::OrchestratorConfig config{};
@@ -3050,6 +3142,7 @@ int main() {
     const auto path82 = UniquePath();
     const auto path83 = UniquePath();
     const auto path84 = UniquePath();
+    const auto path85 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -3081,6 +3174,7 @@ int main() {
     ScenarioRecallIncludesStructuredMemory(path12);
     ScenarioRecallTextChannelUsesTextSource(path13);
     ScenarioStructuredMemoryRemovePersists(path14);
+    ScenarioMalformedStructuredJournalPayloadsAreIgnored(path85);
     ScenarioRecallVisibilityRequiresFlush(path15);
     ScenarioVectorRecallVisibilityRequiresFlush(path16);
     ScenarioVectorIndexRebuildOnReopen(path17);
@@ -3146,7 +3240,7 @@ int main() {
         path55, path56, path57, path58, path59, path60, path61, path62, path63, path64, path65,
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
-        path83, path84,
+        path83, path84, path85,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
