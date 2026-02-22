@@ -239,6 +239,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Expand C++ CI with torch runtime matrix (`cpu_only`, `cuda_preferred` + simulated CUDA availability) to continuously validate runtime-policy diagnostics paths
 - [x] Add manual workflow dispatch release gate job that runs strict dependency verification (`verify_submodules.py --enforce-pin-required`) and can be triggered independently from normal PR/push CI
 - [x] Extend runtime diagnostics with selected artifact class (`cpu|cuda|any`) and add regressions to lock deterministic class assignment + runtime-info stability across embed calls
+- [x] Add deterministic MV2V decode fuzz regression (`512` seeded mutations over valid USearch/Metal segments) with decode-invariant checks for successful paths
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -258,6 +259,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/core/sha256.cpp` | Added SHA-256 implementation | Codex |
 | `cpp/src/core/mv2s_format.hpp` | Added MV2S constants and codec interfaces | Codex |
 | `cpp/src/core/mv2s_format.cpp` | Added MV2S header/footer codec + TOC encoder/decoder with structural checks | Codex |
+| `cpp/tests/unit/mv2v_format_test.cpp` | Added deterministic MV2V decode fuzz regression (`512` seeded mutations) with variant/invariant checks and rejection coverage | Codex |
 | `cpp/src/core/wax_store.cpp` | Added create/open/verify read-path with deep verify (stored/plain checksum model), footer arbitration (header/snapshot/scan), TOC decode, frame+segment range checks | Codex |
 | `cpp/include/waxcpp/wax_store.hpp` | Added internal load-state fields/helpers | Codex |
 | `cpp/tests/unit/wax_store_verify_test.cpp` | Added M2 unit test for create/open/verify/header fallback | Codex |
