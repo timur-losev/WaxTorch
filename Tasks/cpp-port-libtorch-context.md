@@ -253,6 +253,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/include/waxcpp/fts5_search_engine.hpp` | Added move-only lifecycle for backend-owned resources (SQLite state via pImpl) | Codex |
 | `cpp/src/text/fts5_search_engine.cpp` | Added optional SQLite FTS5 candidate path with deterministic TF-IDF ranking fallback and resilient rebuild/disable behavior on backend errors | Codex |
 | `cpp/src/text/fts5_search_engine.cpp` | Fixed SQLite backend lifetime via `SQLiteState` RAII destructor so failover `sqlite_.reset()` paths do not leak DB handles | Codex |
+| `cpp/tests/unit/fts5_search_engine_test.cpp` | Added move-semantics regression to lock index state preservation across move-construction and move-assignment (required by orchestrator index rebuild swaps) | Codex |
 | `cpp/include/waxcpp/wax_store.hpp` | Marked `WaxStore` non-copyable and added writer-lease ownership state | Codex |
 | `cpp/src/core/wax_store.cpp` | Added writer lease acquire/release lifecycle (`.writer.lock`) in open/close path | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added writer-lease exclusion scenario (competing open fails until primary close) | Codex |

@@ -3,6 +3,7 @@
 #include "../test_logger.hpp"
 
 #include <cstdlib>
+#include <utility>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -128,6 +129,24 @@ void ScenarioStagedOrderDeterminism() {
   Require(results[0].frame_id == 7, "unexpected frame_id after staged mutation order apply");
 }
 
+void ScenarioMoveSemanticsPreserveIndexState() {
+  waxcpp::tests::Log("scenario: move semantics preserve index state");
+  waxcpp::FTS5SearchEngine source;
+  source.Index(101, "move alpha");
+  source.Index(102, "move beta");
+
+  waxcpp::FTS5SearchEngine moved = std::move(source);
+  const auto moved_results = moved.Search("alpha", 10);
+  Require(moved_results.size() == 1, "moved engine should preserve indexed documents");
+  Require(moved_results[0].frame_id == 101, "moved engine returned unexpected frame_id");
+
+  waxcpp::FTS5SearchEngine reassigned;
+  reassigned = std::move(moved);
+  const auto reassigned_results = reassigned.Search("beta", 10);
+  Require(reassigned_results.size() == 1, "move-assigned engine should preserve indexed documents");
+  Require(reassigned_results[0].frame_id == 102, "move-assigned engine returned unexpected frame_id");
+}
+
 }  // namespace
 
 int main() {
@@ -142,6 +161,7 @@ int main() {
     ScenarioStagedMutationsRequireCommit();
     ScenarioRollbackStagedMutations();
     ScenarioStagedOrderDeterminism();
+    ScenarioMoveSemanticsPreserveIndexState();
     waxcpp::tests::Log("fts5_search_engine_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
