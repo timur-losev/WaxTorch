@@ -673,6 +673,8 @@ std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std:
   std::vector<std::uint64_t> ids{};
   ids.reserve(contents.size());
   std::uint64_t payload_offset = FileSize(path_);
+  std::vector<std::vector<std::byte>> wal_payloads{};
+  wal_payloads.reserve(contents.size());
   for (std::size_t i = 0; i < contents.size(); ++i) {
     const auto frame_id = next_frame_id_ + static_cast<std::uint64_t>(i);
     const auto payload_length = static_cast<std::uint64_t>(contents[i].size());
@@ -684,20 +686,20 @@ std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std:
     if (!contents[i].empty()) {
       WriteBytesAt(path_, payload_offset, contents[i]);
     }
-    const auto wal_payload = BuildWalPutFramePayload(frame_id,
-                                                     payload_offset,
-                                                     payload_length,
-                                                     canonical_encoding,
-                                                     canonical_length,
-                                                     canonical_checksum,
-                                                     stored_checksum);
-    (void)writer.Append(wal_payload);
+    wal_payloads.emplace_back(BuildWalPutFramePayload(frame_id,
+                                                      payload_offset,
+                                                      payload_length,
+                                                      canonical_encoding,
+                                                      canonical_length,
+                                                      canonical_checksum,
+                                                      stored_checksum));
     ids.push_back(frame_id);
     if (payload_offset > std::numeric_limits<std::uint64_t>::max() - payload_length) {
       throw StoreError("putBatch payload offset overflow");
     }
     payload_offset += payload_length;
   }
+  (void)writer.AppendBatch(wal_payloads);
 
   wal_write_pos_ = writer.write_pos();
   wal_checkpoint_pos_ = writer.checkpoint_pos();
