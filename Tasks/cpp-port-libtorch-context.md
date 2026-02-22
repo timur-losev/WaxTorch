@@ -262,6 +262,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/CMakeLists.txt` | Added C++ build/test scaffold | Codex |
 | `cpp/README.md` | Added workspace purpose/build docs | Codex |
 | `cpp/submodules.lock` | Added dependency lock policy skeleton | Codex |
+| `cpp/submodules.lock` | Replaced placeholder pins with concrete commit hashes for `usearch/sqlite/googletest`; `libtorch-dist` pin remains pending mirror finalization | Codex |
 | `cpp/scripts/verify_submodules.py` | Added policy consistency verifier; extended with strict placeholder-pin enforcement mode (`--enforce-pin-required`, `WAXCPP_ENFORCE_PIN_REQUIRED`) | Codex |
 | `cpp/scripts/verify_submodules.py` | Added policy gate rejecting `.gitmodules` `branch` tracking fields to enforce commit-pinned submodule workflow | Codex |
 | `cpp/src/core/sha256.hpp` | Added internal SHA-256 interface | Codex |
@@ -581,6 +582,6 @@ M1 and M2 are complete. M3 baseline is in place: C++ parses WAL headers, detects
 
 ## Open Questions
 1. Final remote for `cpp/third_party/libtorch-dist` should be replaced with dedicated artifact mirror before release.
-2. Pin commits in `cpp/submodules.lock` are placeholders and must be resolved in dependency PR.
+2. `usearch/sqlite/googletest` pins are now concrete; `libtorch-dist` pin in `cpp/submodules.lock` remains placeholder until dedicated artifact mirror is finalized.
 3. Implement full WAL replay apply path (materialize decoded pending mutations into store/index state and commit/checkpoint transitions).
 
