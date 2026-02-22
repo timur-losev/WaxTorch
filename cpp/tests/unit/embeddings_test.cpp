@@ -292,6 +292,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   const auto artifact_escape_manifest = artifact_manifest_dir / "manifest_escape.json";
   const auto artifact_absolute_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_with_absolute_artifact.json";
+  const auto manifest_local_artifact =
+      std::filesystem::temp_directory_path() / "waxcpp_test_manifest_local_only.bin";
+  const auto artifact_dist_root_strict_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_dist_root_strict.json";
   {
     std::ofstream out(temp_manifest, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) {
@@ -476,6 +480,20 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     out << "{\"artifacts\":[{\"path\":\""
         << artifact_escape_file.generic_string()
         << "\",\"sha256\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"}]}";
+  }
+  {
+    std::ofstream out(manifest_local_artifact, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create manifest-local artifact file");
+    }
+    out << "abc";
+  }
+  {
+    std::ofstream out(artifact_dist_root_strict_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create dist-root strict manifest file");
+    }
+    out << R"({"artifacts":[{"path":"waxcpp_test_manifest_local_only.bin","sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}]})";
   }
 
   {
@@ -1058,6 +1076,21 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_dist_root_strict_manifest.string());
+    const ScopedEnvVar set_dist_root("WAXCPP_LIBTORCH_DIST_ROOT", artifact_root.string());
+    const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::string("1"));
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw,
+            "when dist root is set, manifest-local artifact fallback must be disabled");
+  }
+
+  {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", artifact_manifest.string());
     const ScopedEnvVar set_dist_root("WAXCPP_LIBTORCH_DIST_ROOT", artifact_root.string());
     const ScopedEnvVar require_artifact_sha("WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256", std::nullopt);
@@ -1093,6 +1126,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(artifact_bad_sha_manifest, ec);
   std::filesystem::remove(artifact_escape_manifest, ec);
   std::filesystem::remove(artifact_absolute_manifest, ec);
+  std::filesystem::remove(artifact_dist_root_strict_manifest, ec);
+  std::filesystem::remove(manifest_local_artifact, ec);
   std::filesystem::remove(artifact_escape_file, ec);
   std::filesystem::remove(artifact_file, ec);
   std::filesystem::remove(artifact_file.parent_path(), ec);

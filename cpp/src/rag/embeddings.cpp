@@ -487,13 +487,29 @@ std::optional<std::filesystem::path> ResolveSelectedArtifactPath(
     std::string_view relative_or_absolute_artifact_path) {
   const std::filesystem::path artifact_path(relative_or_absolute_artifact_path);
   const auto dist_root = GetEnvValue("WAXCPP_LIBTORCH_DIST_ROOT");
-  if (artifact_path.is_absolute()) {
-    if (dist_root.has_value()) {
-      const auto root = std::filesystem::path(*dist_root);
+  if (dist_root.has_value()) {
+    const auto root = std::filesystem::path(*dist_root);
+    if (artifact_path.is_absolute()) {
       if (!IsPathWithinRoot(artifact_path, root)) {
         return std::nullopt;
       }
+      if (std::filesystem::exists(artifact_path) && std::filesystem::is_regular_file(artifact_path)) {
+        return NormalizeAbsolutePath(artifact_path);
+      }
+      return std::nullopt;
     }
+
+    const auto candidate = root / artifact_path;
+    if (!IsPathWithinRoot(candidate, root)) {
+      return std::nullopt;
+    }
+    if (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate)) {
+      return NormalizeAbsolutePath(candidate);
+    }
+    return std::nullopt;
+  }
+
+  if (artifact_path.is_absolute()) {
     if (std::filesystem::exists(artifact_path) && std::filesystem::is_regular_file(artifact_path)) {
       return NormalizeAbsolutePath(artifact_path);
     }
@@ -506,13 +522,6 @@ std::optional<std::filesystem::path> ResolveSelectedArtifactPath(
   };
 
   std::vector<RootedCandidate> candidates{};
-  if (dist_root.has_value()) {
-    const auto root = std::filesystem::path(*dist_root);
-    candidates.push_back(RootedCandidate{
-        .candidate = root / artifact_path,
-        .root = root,
-    });
-  }
   const auto manifest_dir = manifest_path.parent_path();
   candidates.push_back(RootedCandidate{
       .candidate = manifest_dir / artifact_path,
