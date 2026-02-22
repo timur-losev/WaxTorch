@@ -849,6 +849,76 @@ void RunScenarioVisibleCommitProbeStep5Refreshes(const std::filesystem::path& pa
   store.Close();
 }
 
+void RunScenarioVisibleCommitProbeStep3Refreshes(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: published-commit probe refreshes after step3 failure");
+  auto store = waxcpp::WaxStore::Create(path);
+  (void)store.Put({std::byte{0xD1}});
+  store.Commit();
+  (void)store.Put({std::byte{0xD2}});
+
+  bool threw = false;
+  {
+    ScopedCommitFailStep fail_step(3);
+    try {
+      store.Commit();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+  }
+  Require(threw, "commit should fail at injected step 3");
+
+  const bool refreshed = store.TryRefreshIfPublishedCommitVisible();
+  Require(refreshed, "step3 failure should report externally visible commit");
+
+  const auto stats_after_probe = store.Stats();
+  Require(stats_after_probe.frame_count == 2, "step3 probe should refresh committed frame_count");
+  Require(stats_after_probe.pending_frames == 0, "step3 probe should clear pending WAL state");
+  store.Close();
+}
+
+void RunScenarioVisibleCommitProbeStep4Refreshes(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: published-commit probe refreshes after step4 failure");
+  auto store = waxcpp::WaxStore::Create(path);
+  (void)store.Put({std::byte{0xE1}});
+  store.Commit();
+  (void)store.Put({std::byte{0xE2}});
+
+  bool threw = false;
+  {
+    ScopedCommitFailStep fail_step(4);
+    try {
+      store.Commit();
+    } catch (const std::exception&) {
+      threw = true;
+    }
+  }
+  Require(threw, "commit should fail at injected step 4");
+
+  const bool refreshed = store.TryRefreshIfPublishedCommitVisible();
+  Require(refreshed, "step4 failure should report externally visible commit");
+
+  const auto stats_after_probe = store.Stats();
+  Require(stats_after_probe.frame_count == 2, "step4 probe should refresh committed frame_count");
+  Require(stats_after_probe.pending_frames == 0, "step4 probe should clear pending WAL state");
+  store.Close();
+}
+
+void RunScenarioVisibleCommitProbeNoNewGenerationNoRefresh(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: published-commit probe no-op when no newer generation exists");
+  auto store = waxcpp::WaxStore::Create(path);
+  (void)store.Put({std::byte{0xF1}});
+  store.Commit();
+
+  const auto before = store.Stats();
+  const bool refreshed = store.TryRefreshIfPublishedCommitVisible();
+  const auto after = store.Stats();
+
+  Require(!refreshed, "probe should not refresh when no newer footer generation exists");
+  Require(after.frame_count == before.frame_count, "no-op probe should keep frame_count stable");
+  Require(after.pending_frames == before.pending_frames, "no-op probe should keep pending state stable");
+  store.Close();
+}
+
 void RunScenarioSupersedeCycleRejected(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: supersede cycle rejected at commit");
   {
@@ -1114,7 +1184,10 @@ int main() {
     RunScenarioCrashWindowAfterHeaderB(path);
     RunScenarioVisibleCommitProbeStep1NoRefresh(path);
     RunScenarioVisibleCommitProbeStep2Refreshes(path);
+    RunScenarioVisibleCommitProbeStep3Refreshes(path);
+    RunScenarioVisibleCommitProbeStep4Refreshes(path);
     RunScenarioVisibleCommitProbeStep5Refreshes(path);
+    RunScenarioVisibleCommitProbeNoNewGenerationNoRefresh(path);
     RunScenarioSupersedeCycleRejected(path);
     RunScenarioSupersedeConflictRejected(path);
     RunScenarioCloseAutoCommitsPending(path);
