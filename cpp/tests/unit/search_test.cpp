@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -724,6 +725,170 @@ void ScenarioLowerScorePreviewFallbackIsOrderIndependent() {
           "fallback preview selection must be independent of input order");
 }
 
+void ScenarioSeededFuzzPermutationInvariance() {
+  waxcpp::tests::Log("scenario: seeded fuzz permutation invariance");
+
+  auto equal_scores = [](float lhs, float rhs) -> bool {
+    return std::fabs(lhs - rhs) < 1e-6F;
+  };
+
+  auto require_response_equal = [&](const waxcpp::SearchResponse& expected,
+                                    const waxcpp::SearchResponse& actual,
+                                    const std::string& where) {
+    Require(expected.results.size() == actual.results.size(),
+            where + ": response size changed after permutation");
+    for (std::size_t i = 0; i < expected.results.size(); ++i) {
+      const auto& lhs = expected.results[i];
+      const auto& rhs = actual.results[i];
+      Require(lhs.frame_id == rhs.frame_id, where + ": frame_id changed after permutation");
+      Require(equal_scores(lhs.score, rhs.score), where + ": score changed after permutation");
+      Require(lhs.preview_text == rhs.preview_text, where + ": preview changed after permutation");
+      Require(lhs.sources == rhs.sources, where + ": sources changed after permutation");
+    }
+  };
+
+  auto require_context_equal = [&](const waxcpp::RAGContext& expected,
+                                   const waxcpp::RAGContext& actual,
+                                   const std::string& where) {
+    Require(expected.query == actual.query, where + ": query changed after permutation");
+    Require(expected.total_tokens == actual.total_tokens, where + ": total_tokens changed after permutation");
+    Require(expected.items.size() == actual.items.size(), where + ": context size changed after permutation");
+    for (std::size_t i = 0; i < expected.items.size(); ++i) {
+      const auto& lhs = expected.items[i];
+      const auto& rhs = actual.items[i];
+      Require(lhs.frame_id == rhs.frame_id, where + ": context frame_id changed after permutation");
+      Require(equal_scores(lhs.score, rhs.score), where + ": context score changed after permutation");
+      Require(lhs.kind == rhs.kind, where + ": context kind changed after permutation");
+      Require(lhs.text == rhs.text, where + ": context text changed after permutation");
+      Require(lhs.sources == rhs.sources, where + ": context sources changed after permutation");
+    }
+  };
+
+  std::mt19937 rng(0xC0DEFACEU);
+  std::uniform_int_distribution<int> mode_dist(0, 2);
+  std::uniform_real_distribution<float> alpha_dist(-1.5F, 2.5F);
+  std::uniform_int_distribution<int> topk_dist(0, 12);
+  std::uniform_int_distribution<int> rrf_dist(-20, 100);
+  std::uniform_int_distribution<int> preview_bytes_dist(0, 96);
+  std::uniform_int_distribution<int> context_tokens_dist(0, 64);
+  std::uniform_int_distribution<int> per_item_tokens_dist(-4, 24);
+  std::uniform_int_distribution<int> max_snippets_dist(-2, 6);
+  std::uniform_int_distribution<int> channel_size_dist(0, 20);
+  std::uniform_int_distribution<int> frame_id_dist(1, 14);
+  std::uniform_real_distribution<float> score_dist(-5.0F, 5.0F);
+  std::uniform_int_distribution<int> bool_dist(0, 1);
+  std::uniform_int_distribution<int> source_dist(0, 2);
+  std::uniform_int_distribution<int> word_len_dist(1, 6);
+  std::uniform_int_distribution<int> word_count_dist(1, 4);
+  std::uniform_int_distribution<int> letter_dist(0, 25);
+  std::uniform_int_distribution<int> nan_dist(0, 19);  // ~5%
+
+  auto random_word = [&]() -> std::string {
+    const int len = word_len_dist(rng);
+    std::string out{};
+    out.reserve(static_cast<std::size_t>(len));
+    for (int i = 0; i < len; ++i) {
+      out.push_back(static_cast<char>('a' + letter_dist(rng)));
+    }
+    return out;
+  };
+
+  auto random_text = [&]() -> std::string {
+    const int words = word_count_dist(rng);
+    std::string out{};
+    for (int i = 0; i < words; ++i) {
+      if (i > 0) {
+        out.push_back(' ');
+      }
+      out.append(random_word());
+    }
+    return out;
+  };
+
+  auto random_sources = [&]() -> std::vector<waxcpp::SearchSource> {
+    std::vector<waxcpp::SearchSource> sources{};
+    const int source_count = 1 + (rng() % 3);
+    for (int i = 0; i < source_count; ++i) {
+      const int kind = source_dist(rng);
+      if (kind == 0) {
+        sources.push_back(waxcpp::SearchSource::kText);
+      } else if (kind == 1) {
+        sources.push_back(waxcpp::SearchSource::kVector);
+      } else {
+        sources.push_back(waxcpp::SearchSource::kStructuredMemory);
+      }
+    }
+    return sources;
+  };
+
+  auto random_result = [&]() -> waxcpp::SearchResult {
+    waxcpp::SearchResult result{};
+    result.frame_id = static_cast<std::uint64_t>(frame_id_dist(rng));
+    if (nan_dist(rng) == 0) {
+      result.score = std::numeric_limits<float>::quiet_NaN();
+    } else {
+      result.score = score_dist(rng);
+    }
+    if (bool_dist(rng) == 0) {
+      result.preview_text = random_text();
+    } else if (bool_dist(rng) == 0) {
+      result.preview_text = std::string{};
+    } else {
+      result.preview_text = std::nullopt;
+    }
+    result.sources = random_sources();
+    return result;
+  };
+
+  constexpr std::size_t kIterations = 256;
+  for (std::size_t i = 0; i < kIterations; ++i) {
+    waxcpp::SearchRequest request{};
+    if (bool_dist(rng) == 0) {
+      request.query = random_text();
+    }
+    request.mode = {static_cast<waxcpp::SearchModeKind>(mode_dist(rng)), alpha_dist(rng)};
+    request.top_k = topk_dist(rng);
+    request.rrf_k = rrf_dist(rng);
+    request.preview_max_bytes = preview_bytes_dist(rng);
+    request.max_context_tokens = context_tokens_dist(rng);
+    request.expansion_max_tokens = per_item_tokens_dist(rng);
+    request.snippet_max_tokens = per_item_tokens_dist(rng);
+    request.max_snippets = max_snippets_dist(rng);
+
+    std::vector<waxcpp::SearchResult> text_results{};
+    text_results.reserve(static_cast<std::size_t>(channel_size_dist(rng)));
+    const int text_n = channel_size_dist(rng);
+    for (int k = 0; k < text_n; ++k) {
+      text_results.push_back(random_result());
+    }
+
+    std::vector<waxcpp::SearchResult> vector_results{};
+    vector_results.reserve(static_cast<std::size_t>(channel_size_dist(rng)));
+    const int vector_n = channel_size_dist(rng);
+    for (int k = 0; k < vector_n; ++k) {
+      vector_results.push_back(random_result());
+    }
+
+    const auto baseline = waxcpp::UnifiedSearchWithCandidates(request, text_results, vector_results);
+    const auto baseline_context = waxcpp::BuildFastRAGContext(request, baseline);
+
+    for (int perm = 0; perm < 4; ++perm) {
+      auto text_perm = text_results;
+      auto vector_perm = vector_results;
+      std::shuffle(text_perm.begin(), text_perm.end(), rng);
+      std::shuffle(vector_perm.begin(), vector_perm.end(), rng);
+
+      const auto permuted_response = waxcpp::UnifiedSearchWithCandidates(request, text_perm, vector_perm);
+      require_response_equal(baseline, permuted_response, "seeded fuzz unified search");
+
+      auto response_for_context = permuted_response;
+      std::shuffle(response_for_context.results.begin(), response_for_context.results.end(), rng);
+      const auto permuted_context = waxcpp::BuildFastRAGContext(request, response_for_context);
+      require_context_equal(baseline_context, permuted_context, "seeded fuzz context build");
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -751,6 +916,7 @@ int main() {
     ScenarioEqualScoreDuplicatePrefersPresentPreviewOverNullopt();
     ScenarioEqualScoreDuplicateMergesSourcesDeterministically();
     ScenarioLowerScorePreviewFallbackIsOrderIndependent();
+    ScenarioSeededFuzzPermutationInvariance();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
