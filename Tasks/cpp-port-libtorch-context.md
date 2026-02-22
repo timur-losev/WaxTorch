@@ -254,6 +254,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | File | Change Summary | Agent |
 |------|---------------|-------|
 | `.gitmodules` | Added required submodule declarations | Codex |
+| `.gitmodules` | Removed `branch` tracking entries so submodule updates stay explicit commit-pinned and policy-driven | Codex |
 | `.gitignore` | Added C++ build artifact ignores | Codex |
 | `.github/workflows/cpp-ci.yml` | Added C++ CI job with submodule sync/update/verify; strict parity config now enables `WAXCPP_REQUIRE_SWIFT_FIXTURES=ON` | Codex |
 | `.github/workflows/cpp-ci.yml` | Added torch runtime matrix test execution (`cpu_only`/`cuda_preferred`) and manual strict dependency release-gate job (`workflow_dispatch` + `--enforce-pin-required`) | Codex |
