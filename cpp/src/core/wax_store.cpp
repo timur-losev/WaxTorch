@@ -137,11 +137,7 @@ std::shared_ptr<void> AcquireWriterLease(const std::filesystem::path& store_path
     throw StoreError("failed to acquire writer lease at " + lease_path.string() + ": " + OsErrorMessage(code));
   }
 
-  // Keep the lock on the opened file descriptor while removing the path entry,
-  // so lock artifacts do not remain on disk after graceful or abrupt shutdown.
-  (void)::unlink(lease_path.c_str());
-
-  return std::shared_ptr<void>(new int(fd), [](void* raw) {
+  return std::shared_ptr<void>(new int(fd), [lease_path](void* raw) {
     auto* fd_ptr = static_cast<int*>(raw);
     if (fd_ptr != nullptr && *fd_ptr >= 0) {
       struct flock unlock {};
@@ -151,6 +147,7 @@ std::shared_ptr<void> AcquireWriterLease(const std::filesystem::path& store_path
       unlock.l_len = 0;
       (void)::fcntl(*fd_ptr, F_SETLK, &unlock);
       (void)::close(*fd_ptr);
+      (void)::unlink(lease_path.c_str());
     }
     delete fd_ptr;
   });

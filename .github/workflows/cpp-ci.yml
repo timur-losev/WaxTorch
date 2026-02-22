@@ -44,4 +44,4 @@ jobs:
         run: ./cpp/build/waxcpp_mv2s_fixture_generator
 
       - name: Test
-        run: ctest --test-dir cpp/build --output-on-failure
+        run: WAXCPP_TEST_LOG=1 ctest --test-dir cpp/build --output-on-failure
