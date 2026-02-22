@@ -1120,6 +1120,43 @@ void ScenarioStructuredFactCloseWithoutFlushPersistsViaStoreClose(const std::fil
   }
 }
 
+void ScenarioStructuredFactForgetWithoutFlushPersistsViaStoreClose(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: structured fact forget without flush persists via store close");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:noflush-remove", "city", "rome");
+    orchestrator.Flush();
+
+    const bool removed = orchestrator.ForgetFact("user:noflush-remove", "city");
+    Require(removed, "ForgetFact should return true for committed key");
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto facts = reopened.RecallFactsByEntityPrefix("user:noflush-remove", 10);
+    Require(facts.empty(), "Close() should persist forget fact without explicit Flush");
+
+    const auto context = reopened.Recall("rome");
+    bool has_structured = false;
+    for (const auto& item : context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          has_structured = true;
+          break;
+        }
+      }
+    }
+    Require(!has_structured, "removed structured fact should not appear in recall after reopen");
+    reopened.Close();
+  }
+}
+
 void ScenarioStructuredMemoryRemovePersists(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: structured memory remove persists");
   waxcpp::OrchestratorConfig config{};
@@ -1200,6 +1237,7 @@ int main() {
     const auto path32 = UniquePath();
     const auto path33 = UniquePath();
     const auto path34 = UniquePath();
+    const auto path35 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioSearchModePolicyValidation(path22);
@@ -1236,12 +1274,13 @@ int main() {
     ScenarioUseAfterCloseThrows(path26);
     ScenarioStructuredFactStagedOrderBeforeFlush(path27);
     ScenarioStructuredFactCloseWithoutFlushPersistsViaStoreClose(path28);
+    ScenarioStructuredFactForgetWithoutFlushPersistsViaStoreClose(path35);
 
     const std::vector<std::filesystem::path> cleanup_paths = {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
         path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
-        path33, path34,
+        path33, path34, path35,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
