@@ -755,6 +755,74 @@ void RunScenarioDeleteAndSupersedePersist(const std::filesystem::path& path) {
   Require(toc.frames[1].status == 1, "frame 1 status must be deleted");
 }
 
+void RunScenarioPendingLifecycleMutationCountersLocal(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: pending lifecycle mutation counters (local)");
+  auto store = waxcpp::WaxStore::Create(path);
+  (void)store.Put({std::byte{0x61}});
+  (void)store.Put({std::byte{0x62}});
+  store.Commit();
+
+  store.Delete(0);
+  store.Supersede(0, 1);
+  store.PutEmbedding(1, {0.4F, 0.8F});
+  const auto staged_wal = store.WalStats();
+  Require(staged_wal.pending_delete_mutations == 1,
+          "local pending delete counter mismatch");
+  Require(staged_wal.pending_supersede_mutations == 1,
+          "local pending supersede counter mismatch");
+  Require(staged_wal.pending_embedding_mutations == 1,
+          "local pending embedding counter mismatch");
+
+  store.Commit();
+  const auto committed_wal = store.WalStats();
+  Require(committed_wal.pending_delete_mutations == 0,
+          "commit should clear pending delete counter");
+  Require(committed_wal.pending_supersede_mutations == 0,
+          "commit should clear pending supersede counter");
+  Require(committed_wal.pending_embedding_mutations == 0,
+          "commit should clear pending embedding counter");
+  store.Close();
+}
+
+void RunScenarioPendingLifecycleMutationCountersRecovered(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: pending lifecycle mutation counters (recovered)");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    (void)store.Put({std::byte{0x71}});
+    (void)store.Put({std::byte{0x72}});
+    store.Commit();
+    store.Delete(0);
+    store.Supersede(0, 1);
+    // Simulate crash with recovered pending lifecycle mutations.
+  }
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto wal = reopened.WalStats();
+    Require(wal.pending_delete_mutations == 1,
+            "recovered pending delete counter mismatch");
+    Require(wal.pending_supersede_mutations == 1,
+            "recovered pending supersede counter mismatch");
+    reopened.Close();
+  }
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto wal = reopened.WalStats();
+    Require(wal.pending_delete_mutations == 1,
+            "recovered pending delete counter should survive close");
+    Require(wal.pending_supersede_mutations == 1,
+            "recovered pending supersede counter should survive close");
+    reopened.Commit();
+    const auto after_commit_wal = reopened.WalStats();
+    Require(after_commit_wal.pending_delete_mutations == 0,
+            "commit should clear recovered pending delete counter");
+    Require(after_commit_wal.pending_supersede_mutations == 0,
+            "commit should clear recovered pending supersede counter");
+    reopened.Close();
+  }
+}
+
 void RunScenarioCrashWindowAfterTocWrite(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: crash-window after TOC write (before footer)");
   {
@@ -1544,6 +1612,8 @@ int main(int argc, char** argv) {
     RunScenarioPendingRecoverySkipsUndecodableTail(path);
     RunScenarioPendingRecoveryIgnoresPartialTail(path);
     RunScenarioDeleteAndSupersedePersist(path);
+    RunScenarioPendingLifecycleMutationCountersLocal(path);
+    RunScenarioPendingLifecycleMutationCountersRecovered(path);
     RunScenarioCrashWindowAfterTocWrite(path);
     RunScenarioCrashWindowAfterFooterWrite(path);
     RunScenarioCrashWindowAfterCheckpointBeforeHeaders(path);

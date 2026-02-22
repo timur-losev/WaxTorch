@@ -29,6 +29,8 @@ struct WaxWALStats {
   std::uint64_t write_call_count = 0;
   std::uint64_t auto_commit_count = 0;
   std::uint64_t pending_embedding_mutations = 0;
+  std::uint64_t pending_delete_mutations = 0;
+  std::uint64_t pending_supersede_mutations = 0;
   std::uint64_t replay_snapshot_hit_count = 0;
 };
 
@@ -108,6 +110,8 @@ class WaxStore {
   std::uint64_t wal_write_call_count_ = 0;
   std::uint64_t wal_auto_commit_count_ = 0;
   std::uint64_t wal_pending_embedding_mutations_ = 0;
+  std::uint64_t wal_pending_delete_mutations_ = 0;
+  std::uint64_t wal_pending_supersede_mutations_ = 0;
   std::uint64_t wal_replay_snapshot_hit_count_ = 0;
   std::uint64_t footer_offset_ = 0;
   std::uint64_t next_frame_id_ = 0;
