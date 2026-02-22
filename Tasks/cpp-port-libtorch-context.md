@@ -549,6 +549,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added text-only whitespace-query regression: `Recall(\"   \\t\\r\\n\")` returns empty context with zero tokens despite indexed documents | Codex |
 | `cpp/src/rag/embeddings.cpp` | Hardened manifest parser to decode JSON string escapes in artifact `path`/`sha256` fields before validation and deterministic selection (supports escaped separators like `\\/`) | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added checksum-gate regression for escaped manifest artifact path (`cpu\\/libtorch-cpu.zip`) asserting decoded selected path + resolved artifact parity | Codex |
+| `cpp/src/rag/embeddings.cpp` | Extended manifest escape decoding with ASCII `\\uXXXX` support (for example `\\u002f`) while keeping strict deterministic rejection for malformed/non-ASCII escapes | Codex |
+| `cpp/tests/unit/embeddings_test.cpp` | Added checksum-gate regression for Unicode-escaped path (`cpu\\u002flibtorch-cpu.zip`) asserting decoded selected path + resolved artifact parity | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

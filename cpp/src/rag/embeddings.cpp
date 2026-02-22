@@ -363,6 +363,19 @@ std::optional<std::string_view> ExtractJsonStringField(std::string_view object,
 }
 
 std::optional<std::string> DecodeJsonEscapes(std::string_view encoded) {
+  auto hex_nibble = [](char ch) -> std::optional<std::uint32_t> {
+    if (ch >= '0' && ch <= '9') {
+      return static_cast<std::uint32_t>(ch - '0');
+    }
+    if (ch >= 'a' && ch <= 'f') {
+      return static_cast<std::uint32_t>(ch - 'a' + 10);
+    }
+    if (ch >= 'A' && ch <= 'F') {
+      return static_cast<std::uint32_t>(ch - 'A' + 10);
+    }
+    return std::nullopt;
+  };
+
   std::string decoded{};
   decoded.reserve(encoded.size());
   for (std::size_t i = 0; i < encoded.size(); ++i) {
@@ -396,6 +409,26 @@ std::optional<std::string> DecodeJsonEscapes(std::string_view encoded) {
       case 't':
         decoded.push_back('\t');
         break;
+      case 'u': {
+        if (i + 4 >= encoded.size()) {
+          return std::nullopt;
+        }
+        std::uint32_t codepoint = 0;
+        for (std::size_t digit = 0; digit < 4; ++digit) {
+          const auto nibble = hex_nibble(encoded[i + 1 + digit]);
+          if (!nibble.has_value()) {
+            return std::nullopt;
+          }
+          codepoint = (codepoint << 4U) | *nibble;
+        }
+        i += 4;
+        if (codepoint > 0x7FU) {
+          // Keep parser deterministic and ASCII-only for manifest fields.
+          return std::nullopt;
+        }
+        decoded.push_back(static_cast<char>(codepoint));
+        break;
+      }
       default:
         // Keep parser deterministic and strict for manifest paths.
         return std::nullopt;
