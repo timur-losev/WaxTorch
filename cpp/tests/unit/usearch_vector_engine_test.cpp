@@ -1,7 +1,9 @@
 #include "waxcpp/vector_engine.hpp"
+#include "waxcpp/mv2v_format.hpp"
 
 #include "../test_logger.hpp"
 
+#include <cmath>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
@@ -136,6 +138,64 @@ void ScenarioStagedOrderDeterminism() {
   Require(results[0].first == 7, "unexpected frame_id after staged mutation order apply");
 }
 
+void ScenarioMetalSegmentRoundtrip() {
+  waxcpp::tests::Log("scenario: metal segment roundtrip");
+  waxcpp::USearchVectorEngine source(3);
+  source.Add(9, {0.1F, 0.2F, 0.3F});
+  source.Add(2, {1.0F, 0.0F, 0.0F});
+  source.Add(5, {0.0F, 1.0F, 0.0F});
+
+  const auto segment = source.SerializeMetalSegment(waxcpp::VecSimilarity::kCosine);
+  waxcpp::USearchVectorEngine loaded(3);
+  loaded.LoadMetalSegment(segment);
+
+  const auto before = source.Search({1.0F, 0.0F, 0.0F}, 10);
+  const auto after = loaded.Search({1.0F, 0.0F, 0.0F}, 10);
+  Require(before.size() == after.size(), "roundtrip result count mismatch");
+  for (std::size_t i = 0; i < before.size(); ++i) {
+    Require(before[i].first == after[i].first, "roundtrip frame_id mismatch");
+    Require(std::fabs(before[i].second - after[i].second) <= 1e-6F, "roundtrip score mismatch");
+  }
+}
+
+void ScenarioLoadMetalSegmentValidation() {
+  waxcpp::tests::Log("scenario: load metal segment validation");
+  waxcpp::USearchVectorEngine engine(2);
+
+  waxcpp::VecSegmentInfo wrong_dim{};
+  wrong_dim.similarity = waxcpp::VecSimilarity::kCosine;
+  wrong_dim.dimension = 3;
+  wrong_dim.vector_count = 1;
+  wrong_dim.payload_length = 3 * sizeof(float);
+  const std::vector<float> wrong_dim_vectors = {0.1F, 0.2F, 0.3F};
+  const std::vector<std::uint64_t> wrong_dim_ids = {11};
+  const auto wrong_dim_segment = waxcpp::EncodeMetalVecSegment(wrong_dim, wrong_dim_vectors, wrong_dim_ids);
+
+  bool dim_threw = false;
+  try {
+    engine.LoadMetalSegment(wrong_dim_segment);
+  } catch (const std::exception&) {
+    dim_threw = true;
+  }
+  Require(dim_threw, "LoadMetalSegment must reject dimension mismatch");
+
+  waxcpp::VecSegmentInfo usearch_info{};
+  usearch_info.similarity = waxcpp::VecSimilarity::kCosine;
+  usearch_info.dimension = 2;
+  usearch_info.vector_count = 1;
+  const std::vector<std::byte> payload = {std::byte{0xAA}, std::byte{0xBB}};
+  usearch_info.payload_length = payload.size();
+  const auto usearch_segment = waxcpp::EncodeUSearchVecSegment(usearch_info, payload);
+
+  bool encoding_threw = false;
+  try {
+    engine.LoadMetalSegment(usearch_segment);
+  } catch (const std::exception&) {
+    encoding_threw = true;
+  }
+  Require(encoding_threw, "LoadMetalSegment must reject non-metal encoding");
+}
+
 }  // namespace
 
 int main() {
@@ -149,6 +209,8 @@ int main() {
     ScenarioStagedMutationsRequireCommit();
     ScenarioRollbackStagedMutations();
     ScenarioStagedOrderDeterminism();
+    ScenarioMetalSegmentRoundtrip();
+    ScenarioLoadMetalSegmentValidation();
     waxcpp::tests::Log("usearch_vector_engine_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

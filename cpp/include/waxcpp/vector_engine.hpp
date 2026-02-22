@@ -1,6 +1,10 @@
 #pragma once
 
+#include "waxcpp/mv2v_format.hpp"
+
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -40,6 +44,8 @@ class USearchVectorEngine final : public VectorSearchEngine {
   void Add(std::uint64_t frame_id, const std::vector<float>& vector) override;
   void AddBatch(const std::vector<std::uint64_t>& frame_ids, const std::vector<std::vector<float>>& vectors) override;
   void Remove(std::uint64_t frame_id) override;
+  [[nodiscard]] std::vector<std::byte> SerializeMetalSegment(VecSimilarity similarity) const;
+  void LoadMetalSegment(std::span<const std::byte> segment_bytes);
 
  private:
   enum class PendingMutationType {

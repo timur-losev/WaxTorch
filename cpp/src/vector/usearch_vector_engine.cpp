@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstddef>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -144,6 +145,52 @@ void USearchVectorEngine::AddBatch(const std::vector<std::uint64_t>& frame_ids,
 void USearchVectorEngine::Remove(std::uint64_t frame_id) {
   StageRemove(frame_id);
   CommitStaged();
+}
+
+std::vector<std::byte> USearchVectorEngine::SerializeMetalSegment(VecSimilarity similarity) const {
+  std::vector<std::uint64_t> frame_ids{};
+  frame_ids.reserve(vectors_.size());
+  for (const auto& [frame_id, _] : vectors_) {
+    frame_ids.push_back(frame_id);
+  }
+  std::sort(frame_ids.begin(), frame_ids.end());
+
+  std::vector<float> vectors{};
+  vectors.reserve(frame_ids.size() * static_cast<std::size_t>(dimensions_));
+  for (const auto frame_id : frame_ids) {
+    const auto it = vectors_.find(frame_id);
+    if (it == vectors_.end()) {
+      throw std::runtime_error("USearchVectorEngine::SerializeMetalSegment missing frame");
+    }
+    vectors.insert(vectors.end(), it->second.begin(), it->second.end());
+  }
+
+  VecSegmentInfo info{};
+  info.similarity = similarity;
+  info.dimension = static_cast<std::uint32_t>(dimensions_);
+  info.vector_count = static_cast<std::uint64_t>(frame_ids.size());
+  info.payload_length =
+      static_cast<std::uint64_t>(vectors.size()) * static_cast<std::uint64_t>(sizeof(float));
+  return EncodeMetalVecSegment(info, vectors, frame_ids);
+}
+
+void USearchVectorEngine::LoadMetalSegment(std::span<const std::byte> segment_bytes) {
+  const auto decoded = DecodeVecSegment(segment_bytes);
+  if (!std::holds_alternative<VecMetalPayload>(decoded)) {
+    throw std::runtime_error("USearchVectorEngine::LoadMetalSegment requires metal encoding");
+  }
+  const auto& metal = std::get<VecMetalPayload>(decoded);
+  if (metal.info.dimension != static_cast<std::uint32_t>(dimensions_)) {
+    throw std::runtime_error("USearchVectorEngine::LoadMetalSegment dimension mismatch");
+  }
+
+  vectors_.clear();
+  pending_mutations_.clear();
+  for (std::size_t i = 0; i < metal.frame_ids.size(); ++i) {
+    const auto begin = i * static_cast<std::size_t>(dimensions_);
+    const auto end = begin + static_cast<std::size_t>(dimensions_);
+    vectors_.emplace(metal.frame_ids[i], std::vector<float>(metal.vectors.begin() + begin, metal.vectors.begin() + end));
+  }
 }
 
 namespace vector::testing {
