@@ -538,6 +538,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `.github/workflows/dependency-integrity.yml` | Added focused dependency workflow for submodule/manifest checksum integrity + `waxcpp_libtorch_manifest_gate_test` matrix (`cpu_only`/`cuda_preferred`) | Codex |
 | `cpp/src/rag/embeddings.cpp` | Made `WAXCPP_LIBTORCH_DIST_ROOT` resolution strict: when set, selected artifact must resolve only under that root (no manifest-dir fallback) | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added regression for strict dist-root behavior: manifest-local artifact outside dist root must be rejected even if checksum matches | Codex |
+| `cpp/tests/unit/embeddings_test.cpp` | Added regression proving strict mode still accepts absolute artifact paths when they are inside configured dist root and checksum-valid | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
