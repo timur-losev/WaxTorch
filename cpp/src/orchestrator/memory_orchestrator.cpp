@@ -529,6 +529,9 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
   if (!query_embedding.has_value() && enable_vector_search && vector_mode_enabled && embedder != nullptr &&
       has_query_text) {
     query_embedding = embedder->Embed(*request.query);
+    if (!AllFinite(*query_embedding)) {
+      throw std::runtime_error("recall: query embedding contains non-finite values");
+    }
   }
   const bool vector_channel_enabled =
       enable_vector_search && vector_mode_enabled && query_embedding.has_value();
@@ -785,6 +788,9 @@ void RebuildVectorIndexFromStore(WaxStore& store,
       if (embeddings[i].size() != static_cast<std::size_t>(vector_index.dimensions())) {
         throw std::runtime_error("rebuild vector index: embedding dimension mismatch");
       }
+      if (!AllFinite(embeddings[i])) {
+        throw std::runtime_error("rebuild vector index: embedding contains non-finite values");
+      }
       vector_index.StageAdd(missing_ids[i], embeddings[i]);
     }
   }
@@ -974,6 +980,9 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
       if (embedding.size() != expected_dims) {
         throw std::runtime_error("remember: embedding dimension mismatch");
       }
+      if (!AllFinite(embedding)) {
+        throw std::runtime_error("remember: embedding contains non-finite values");
+      }
     }
   }
 
@@ -1045,6 +1054,9 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
   }
   if (vector_index_ != nullptr && embedding.size() != static_cast<std::size_t>(vector_index_->dimensions())) {
     throw std::runtime_error("Recall(query, embedding) dimension mismatch with vector index");
+  }
+  if (!AllFinite(embedding)) {
+    throw std::runtime_error("Recall(query, embedding) requires finite embedding values");
   }
   SearchRequest req;
   req.query = query;

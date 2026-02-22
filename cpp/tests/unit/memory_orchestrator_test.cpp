@@ -322,6 +322,24 @@ class FailingEmbedder final : public waxcpp::EmbeddingProvider {
   }
 };
 
+class NonFiniteEmbedder final : public waxcpp::EmbeddingProvider {
+ public:
+  int dimensions() const override { return 4; }
+  bool normalize() const override { return true; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override {
+    return waxcpp::EmbeddingIdentity{
+        .provider = std::string("WaxCppTest"),
+        .model = std::string("NonFiniteEmbedder"),
+        .dimensions = 4,
+        .normalized = true,
+    };
+  }
+
+  std::vector<float> Embed(const std::string&) override {
+    return {std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F, 0.0F};
+  }
+};
+
 class CloudIdentityEmbedder final : public waxcpp::EmbeddingProvider {
  public:
   int dimensions() const override { return 4; }
@@ -2347,6 +2365,77 @@ void ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(const std::filesyste
   }
 }
 
+void ScenarioRememberRejectsNonFiniteEmbeddings(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: remember rejects non-finite embeddings");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<NonFiniteEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    bool threw = false;
+    try {
+      orchestrator.Remember("non-finite remember payload", {});
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "remember should reject non-finite embedder outputs");
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    const auto stats = store.Stats();
+    Require(stats.frame_count == 0, "non-finite remember failure should not persist frames");
+    Require(stats.pending_frames == 0, "non-finite remember failure should not leave pending WAL");
+    store.Close();
+  }
+}
+
+void ScenarioRecallExplicitEmbeddingRejectsNonFinite(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: recall explicit embedding rejects non-finite");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    bool threw = false;
+    try {
+      (void)orchestrator.Recall("apple", {std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F, 0.0F});
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "Recall(query, embedding) should reject non-finite query embeddings");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioRecallQueryEmbeddingRejectsNonFiniteFromEmbedder(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: recall query embedding rejects non-finite from embedder");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<NonFiniteEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    bool threw = false;
+    try {
+      (void)orchestrator.Recall("apple");
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "Recall(query) should reject non-finite query embeddings produced by embedder");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: flush failure does not expose staged structured fact until retry");
   waxcpp::OrchestratorConfig config{};
@@ -2884,6 +2973,9 @@ int main() {
     const auto path77 = UniquePath();
     const auto path78 = UniquePath();
     const auto path79 = UniquePath();
+    const auto path80 = UniquePath();
+    const auto path81 = UniquePath();
+    const auto path82 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -2905,6 +2997,9 @@ int main() {
     ScenarioVectorRebuildUsesConfiguredIngestConcurrency(path38);
     ScenarioVectorReopenWithNonFinitePersistedEmbeddingReembeds(path79);
     ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(path39);
+    ScenarioRememberRejectsNonFiniteEmbeddings(path80);
+    ScenarioRecallExplicitEmbeddingRejectsNonFinite(path81);
+    ScenarioRecallQueryEmbeddingRejectsNonFiniteFromEmbedder(path82);
     ScenarioTextOnlyRecallSkipsVectorEmbedding(path10);
     ScenarioStructuredMemoryFacts(path11);
     ScenarioRecallIncludesStructuredMemory(path12);
@@ -2974,7 +3069,7 @@ int main() {
         path44, path45, path46, path47, path48, path49, path50, path51, path52, path53, path54,
         path55, path56, path57, path58, path59, path60, path61, path62, path63, path64, path65,
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
-        path77, path78, path79,
+        path77, path78, path79, path80, path81, path82,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
