@@ -6,6 +6,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -126,6 +127,20 @@ void WriteFile(const std::filesystem::path& path, const std::vector<std::byte>& 
   }
 }
 
+std::uint64_t NextPseudoRandom(std::uint64_t& state) {
+  // Deterministic xorshift64* for reproducible fuzz coverage.
+  state ^= (state >> 12U);
+  state ^= (state << 25U);
+  state ^= (state >> 27U);
+  return state * 2685821657736338717ULL;
+}
+
+void FillPseudoRandomBytes(std::vector<std::byte>& bytes, std::uint64_t& state) {
+  for (auto& value : bytes) {
+    value = static_cast<std::byte>(NextPseudoRandom(state) & 0xFFU);
+  }
+}
+
 void RunScenarioTerminalMarker(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: terminal marker detection");
   constexpr std::uint64_t kWalSize = 512;
@@ -242,6 +257,38 @@ void RunScenarioScanStateParity(const std::filesystem::path& path) {
   Require(state_only.pending_bytes == with_pending.state.pending_bytes, "ScanWalState pending_bytes mismatch");
 }
 
+void RunScenarioDeterministicFuzzScan(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: deterministic fuzz scan");
+  constexpr std::uint64_t kWalSize = 1024;
+  constexpr int kIterations = 256;
+  std::uint64_t seed = 0x26B16D5A0A7E9C43ULL;
+  waxcpp::tests::LogKV("fuzz_seed", seed);
+  waxcpp::tests::LogKV("fuzz_iterations", static_cast<std::uint64_t>(kIterations));
+
+  for (int iteration = 0; iteration < kIterations; ++iteration) {
+    std::vector<std::byte> wal(static_cast<std::size_t>(kWalSize), std::byte{0});
+    FillPseudoRandomBytes(wal, seed);
+    WriteFile(path, wal);
+
+    const auto checkpoint_pos = NextPseudoRandom(seed) % kWalSize;
+    const auto committed_seq = NextPseudoRandom(seed) % 1000ULL;
+
+    const auto with_pending = waxcpp::core::wal::ScanPendingMutationsWithState(path, 0, kWalSize, checkpoint_pos, committed_seq);
+    const auto state_only = waxcpp::core::wal::ScanWalState(path, 0, kWalSize, checkpoint_pos);
+
+    Require(with_pending.state.write_pos < kWalSize,
+            "fuzz scan write_pos out of wal range at iteration " + std::to_string(iteration));
+    Require(with_pending.state.pending_bytes <= kWalSize,
+            "fuzz scan pending_bytes out of wal range at iteration " + std::to_string(iteration));
+    Require(state_only.write_pos == with_pending.state.write_pos,
+            "fuzz scan state parity write_pos mismatch at iteration " + std::to_string(iteration));
+    Require(state_only.pending_bytes == with_pending.state.pending_bytes,
+            "fuzz scan state parity pending_bytes mismatch at iteration " + std::to_string(iteration));
+    Require(state_only.last_sequence == with_pending.state.last_sequence,
+            "fuzz scan state parity last_sequence mismatch at iteration " + std::to_string(iteration));
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -255,6 +302,7 @@ int main() {
     RunScenarioWrapAndPadding(path);
     RunScenarioPutEmbeddingDecode(path);
     RunScenarioScanStateParity(path);
+    RunScenarioDeterministicFuzzScan(path);
 
     std::filesystem::remove(path);
     waxcpp::tests::Log("wal_ring_test: finished");
