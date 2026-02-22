@@ -7,6 +7,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -183,6 +184,36 @@ void ScenarioHybridAlphaClamp() {
     const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, vector_results);
     Require(!response.results.empty(), "hybrid alpha>1 should still produce response");
     Require(response.results[0].frame_id == 10, "alpha>1 clamp should prioritize text channel");
+  }
+}
+
+void ScenarioRrfKClampMatchesSwiftParity() {
+  waxcpp::tests::Log("scenario: rrf_k clamp matches swift parity");
+  const std::vector<waxcpp::SearchResult> text_results = {
+      {.frame_id = 10, .score = 4.0F, .preview_text = std::string("t10"), .sources = {waxcpp::SearchSource::kText}},
+  };
+
+  {
+    waxcpp::SearchRequest request{};
+    request.mode = {waxcpp::SearchModeKind::kHybrid, 1.0F};  // text-only weight after alpha clamp
+    request.top_k = 10;
+    request.rrf_k = 0;
+    const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, {});
+    Require(response.results.size() == 1, "rrf_k=0 should still produce results");
+    Require(response.results[0].frame_id == 10, "rrf_k=0 top frame mismatch");
+    Require(std::fabs(response.results[0].score - 1.0F) < 1e-6F,
+            "rrf_k=0 must score top-1 as 1/(0+1)=1.0");
+  }
+
+  {
+    waxcpp::SearchRequest request{};
+    request.mode = {waxcpp::SearchModeKind::kHybrid, 1.0F};  // text-only weight after alpha clamp
+    request.top_k = 10;
+    request.rrf_k = -7;
+    const auto response = waxcpp::UnifiedSearchWithCandidates(request, text_results, {});
+    Require(response.results.size() == 1, "negative rrf_k should still produce results");
+    Require(std::fabs(response.results[0].score - 1.0F) < 1e-6F,
+            "negative rrf_k must clamp to zero and score top-1 as 1.0");
   }
 }
 
@@ -372,6 +403,7 @@ int main() {
     ScenarioUnifiedSearchModesAndHybridRrf();
     ScenarioDuplicateFrameIdsAreDeduplicated();
     ScenarioHybridAlphaClamp();
+    ScenarioRrfKClampMatchesSwiftParity();
     ScenarioContextTokenBudgetClamp();
     ScenarioRagItemKindPolicy();
     ScenarioSurrogateFallback();

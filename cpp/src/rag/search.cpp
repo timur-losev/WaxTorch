@@ -152,7 +152,7 @@ SearchResponse BuildHybridRrfResponse(const SearchRequest& request,
   const float alpha = ClampAlpha(request.mode.alpha);
   const float text_weight = alpha;
   const float vector_weight = 1.0F - alpha;
-  const float base = static_cast<float>(request.rrf_k <= 0 ? 60 : request.rrf_k);
+  const float base = static_cast<float>(std::max(0, request.rrf_k));
 
   auto apply_channel = [&](const std::vector<SearchResult>& channel, float weight) {
     for (std::size_t i = 0; i < channel.size(); ++i) {
