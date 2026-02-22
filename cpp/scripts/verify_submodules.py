@@ -34,6 +34,11 @@ def parse_args() -> argparse.Namespace:
         action='store_true',
         help='Fail if any checksum-verified submodule checkout is missing locally.'
     )
+    parser.add_argument(
+        '--require-gitlinks-present',
+        action='store_true',
+        help='Fail if required submodule gitlinks (mode 160000) are missing from repository index.'
+    )
     return parser.parse_args()
 
 
@@ -112,6 +117,26 @@ def parse_submodule_status() -> Dict[str, str]:
         path = match.group(2)
         status[path] = sha
     return status
+
+
+def parse_index_gitlinks() -> Dict[str, str]:
+    cmd = ['git', 'ls-files', '--stage']
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=True)
+    gitlinks: Dict[str, str] = {}
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Format: "<mode> <sha> <stage>\t<path>"
+        match = re.match(r'^([0-9]{6})\s+([0-9a-f]{40})\s+[0-3]\t(.+)$', line)
+        if not match:
+            continue
+        mode = match.group(1)
+        sha = match.group(2)
+        path = match.group(3)
+        if mode == '160000':
+            gitlinks[path] = sha
+    return gitlinks
 
 
 def sha256_file(path: pathlib.Path) -> str:
@@ -242,6 +267,9 @@ enforce_pin_required = args.enforce_pin_required or env_truthy('WAXCPP_ENFORCE_P
 require_checksum_submodules_present = (
     args.require_checksum_submodules_present or env_truthy('WAXCPP_REQUIRE_CHECKSUM_SUBMODULES_PRESENT')
 )
+require_gitlinks_present = (
+    args.require_gitlinks_present or env_truthy('WAXCPP_REQUIRE_GITLINKS_PRESENT')
+)
 placeholder_paths = sorted(
     path for path, entry in lock_entries.items() if entry.get('pinned_commit') == '<PIN_REQUIRED>'
 )
@@ -272,6 +300,14 @@ else:
         pinned = str(lock_entries.get(path, {}).get('pinned_commit', '<PIN_REQUIRED>'))
         if pinned != '<PIN_REQUIRED>' and pinned != status[path]:
             fail(f'commit mismatch for {path}: expected {pinned}, got {status[path]}')
+
+index_gitlinks = parse_index_gitlinks()
+missing_gitlinks = sorted(path for path in REQUIRED_PATHS if path not in index_gitlinks)
+if missing_gitlinks:
+    message = f'required submodule gitlinks are missing from index: {missing_gitlinks}'
+    if require_gitlinks_present:
+        fail(message)
+    warn(message)
 
 for path in sorted(REQUIRED_PATHS):
     entry = lock_entries.get(path, {})
