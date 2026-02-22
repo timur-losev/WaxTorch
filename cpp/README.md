@@ -37,6 +37,15 @@ Core format unit test:
 ctest --test-dir cpp/build -R waxcpp_mv2s_format_test --output-on-failure
 ```
 
+MiniLM runtime manifest policy (optional):
+```bash
+# Override manifest lookup path
+export WAXCPP_LIBTORCH_MANIFEST=/abs/path/to/libtorch-manifest.json
+
+# Require manifest presence during MiniLM embedder construction
+export WAXCPP_REQUIRE_LIBTORCH_MANIFEST=1
+```
+
 SQLite backend (optional, currently disabled by default in favor of WAL-focused track):
 ```bash
 cmake -S cpp -B cpp/build -DWAXCPP_ENABLE_SQLITE_BACKEND=ON
