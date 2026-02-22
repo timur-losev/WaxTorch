@@ -3,6 +3,7 @@
 #include "waxcpp/types.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -12,6 +13,11 @@ namespace waxcpp {
 class FTS5SearchEngine {
  public:
   FTS5SearchEngine();
+  ~FTS5SearchEngine();
+  FTS5SearchEngine(FTS5SearchEngine&&) noexcept;
+  FTS5SearchEngine& operator=(FTS5SearchEngine&&) noexcept;
+  FTS5SearchEngine(const FTS5SearchEngine&) = delete;
+  FTS5SearchEngine& operator=(const FTS5SearchEngine&) = delete;
 
   void StageIndex(std::uint64_t frame_id, const std::string& text);
   void StageIndexBatch(const std::vector<std::uint64_t>& frame_ids, const std::vector<std::string>& texts);
@@ -26,6 +32,8 @@ class FTS5SearchEngine {
   std::vector<SearchResult> Search(const std::string& query, int top_k) const;
 
  private:
+  struct SQLiteState;
+
   enum class PendingMutationType {
     kIndex,
     kRemove,
@@ -38,6 +46,7 @@ class FTS5SearchEngine {
 
   std::unordered_map<std::uint64_t, std::string> docs_;
   std::vector<PendingMutation> pending_mutations_;
+  std::unique_ptr<SQLiteState> sqlite_;
 };
 
 }  // namespace waxcpp

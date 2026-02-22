@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(WAXCPP_BUILD_TESTS "Build waxcpp tests" ON)
 option(WAXCPP_REQUIRE_PARITY_FIXTURES "Fail parity test if no .mv2s fixtures are found" OFF)
 option(WAXCPP_REQUIRE_SWIFT_FIXTURES "Fail parity test if no non-synthetic fixtures are found" OFF)
+option(WAXCPP_ENABLE_SQLITE_BACKEND "Enable SQLite/FTS5 backend when bundled sqlite amalgamation exists" ON)
 
 set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/embeddings.hpp
@@ -34,6 +35,20 @@ add_library(waxcpp STATIC
   src/orchestrator/memory_orchestrator.cpp
 )
 
+set(WAXCPP_SQLITE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite")
+set(WAXCPP_SQLITE_C "${WAXCPP_SQLITE_DIR}/sqlite3.c")
+set(WAXCPP_SQLITE_H "${WAXCPP_SQLITE_DIR}/sqlite3.h")
+if (WAXCPP_ENABLE_SQLITE_BACKEND AND EXISTS "${WAXCPP_SQLITE_C}" AND EXISTS "${WAXCPP_SQLITE_H}")
+  add_library(waxcpp_sqlite3 STATIC "${WAXCPP_SQLITE_C}")
+  target_include_directories(waxcpp_sqlite3 PUBLIC "${WAXCPP_SQLITE_DIR}")
+  target_compile_definitions(waxcpp_sqlite3
+    PUBLIC
+      SQLITE_THREADSAFE=1
+      SQLITE_ENABLE_FTS5
+      SQLITE_OMIT_LOAD_EXTENSION
+  )
+endif()
+
 target_sources(waxcpp PRIVATE ${WAXCPP_PUBLIC_HEADERS})
 source_group(
   TREE ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -45,6 +60,11 @@ target_include_directories(waxcpp
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+if (TARGET waxcpp_sqlite3)
+  target_link_libraries(waxcpp PRIVATE waxcpp_sqlite3)
+  target_compile_definitions(waxcpp PRIVATE WAXCPP_HAS_SQLITE=1)
+endif()
 
 target_compile_features(waxcpp PUBLIC cxx_std_20)
 target_precompile_headers(waxcpp
