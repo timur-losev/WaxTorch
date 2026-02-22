@@ -919,6 +919,20 @@ void RunScenarioVisibleCommitProbeNoNewGenerationNoRefresh(const std::filesystem
   store.Close();
 }
 
+void RunScenarioVisibleCommitProbeClosedStoreThrows(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: published-commit probe closed store throws");
+  auto store = waxcpp::WaxStore::Create(path);
+  store.Close();
+
+  bool threw = false;
+  try {
+    (void)store.TryRefreshIfPublishedCommitVisible();
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  Require(threw, "probe on closed store must throw");
+}
+
 void RunScenarioSupersedeCycleRejected(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: supersede cycle rejected at commit");
   {
@@ -1188,6 +1202,7 @@ int main() {
     RunScenarioVisibleCommitProbeStep4Refreshes(path);
     RunScenarioVisibleCommitProbeStep5Refreshes(path);
     RunScenarioVisibleCommitProbeNoNewGenerationNoRefresh(path);
+    RunScenarioVisibleCommitProbeClosedStoreThrows(path);
     RunScenarioSupersedeCycleRejected(path);
     RunScenarioSupersedeConflictRejected(path);
     RunScenarioCloseAutoCommitsPending(path);
