@@ -256,6 +256,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_multi_cpu_a.json";
   const auto multi_cpu_manifest_b =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_multi_cpu_b.json";
+  const auto generic_manifest_a =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_generic_a.json";
+  const auto generic_manifest_b =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_generic_b.json";
   const auto root_array_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_root_array.json";
   {
@@ -354,6 +358,20 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       throw std::runtime_error("failed to create multi-cpu manifest B file");
     }
     out << R"({"artifacts":[{"path":"libtorch-cpu-avx2.zip","sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},{"path":"libtorch-cpu.zip","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]})";
+  }
+  {
+    std::ofstream out(generic_manifest_a, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create generic manifest A file");
+    }
+    out << R"({"artifacts":[{"path":"libtorch-z.tar","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},{"path":"libtorch-a.tar","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}]})";
+  }
+  {
+    std::ofstream out(generic_manifest_b, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create generic manifest B file");
+    }
+    out << R"({"artifacts":[{"path":"libtorch-a.tar","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},{"path":"libtorch-z.tar","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}]})";
   }
   {
     std::ofstream out(root_array_manifest, std::ios::binary | std::ios::trunc);
@@ -566,6 +584,45 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    std::optional<std::string> selected_a{};
+    std::optional<std::string> selected_b{};
+    {
+      const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+      const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", generic_manifest_a.string());
+      const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
+      waxcpp::MiniLMEmbedderTorch embedder;
+      const auto info = embedder.runtime_info();
+      Require(info.selected_backend == "fallback_cpu",
+              "generic manifest without cuda tags should keep fallback_cpu backend");
+      Require(info.libtorch_manifest_cpu_artifact_count == 0 && info.libtorch_manifest_cuda_artifact_count == 0,
+              "generic manifest should report zero cpu/cuda classified artifacts");
+      Require(info.libtorch_selected_artifact_path.has_value(),
+              "generic manifest A should select fallback any-artifact path");
+      selected_a = info.libtorch_selected_artifact_path;
+    }
+    {
+      const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+      const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", generic_manifest_b.string());
+      const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
+      waxcpp::MiniLMEmbedderTorch embedder;
+      const auto info = embedder.runtime_info();
+      Require(info.selected_backend == "fallback_cpu",
+              "generic manifest without cuda tags should keep fallback_cpu backend");
+      Require(info.libtorch_manifest_cpu_artifact_count == 0 && info.libtorch_manifest_cuda_artifact_count == 0,
+              "generic manifest should report zero cpu/cuda classified artifacts");
+      Require(info.libtorch_selected_artifact_path.has_value(),
+              "generic manifest B should select fallback any-artifact path");
+      selected_b = info.libtorch_selected_artifact_path;
+    }
+    Require(selected_a.has_value() && selected_b.has_value(),
+            "generic manifests should produce selected artifact path");
+    Require(*selected_a == *selected_b,
+            "generic any-artifact selection should be deterministic regardless of manifest entry order");
+    Require(*selected_a == "libtorch-a.tar",
+            "generic any-artifact deterministic selection should pick lexicographically smallest path");
+  }
+
+  {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", root_array_manifest.string());
     waxcpp::MiniLMEmbedderTorch embedder;
     const auto info = embedder.runtime_info();
@@ -675,6 +732,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(multi_cuda_manifest_b, ec);
   std::filesystem::remove(multi_cpu_manifest_a, ec);
   std::filesystem::remove(multi_cpu_manifest_b, ec);
+  std::filesystem::remove(generic_manifest_a, ec);
+  std::filesystem::remove(generic_manifest_b, ec);
   std::filesystem::remove(root_array_manifest, ec);
 }
 
