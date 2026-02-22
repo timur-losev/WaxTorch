@@ -2306,6 +2306,30 @@ void ScenarioUseAfterCloseThrows(const std::filesystem::path& path) {
     fact_threw = true;
   }
   Require(fact_threw, "RememberFact should throw after Close");
+
+  bool forget_fact_threw = false;
+  try {
+    (void)orchestrator.ForgetFact("user:closed", "city");
+  } catch (const std::exception&) {
+    forget_fact_threw = true;
+  }
+  Require(forget_fact_threw, "ForgetFact should throw after Close");
+
+  bool recall_facts_threw = false;
+  try {
+    (void)orchestrator.RecallFactsByEntityPrefix("user:", 10);
+  } catch (const std::exception&) {
+    recall_facts_threw = true;
+  }
+  Require(recall_facts_threw, "RecallFactsByEntityPrefix should throw after Close");
+
+  bool recall_with_embedding_threw = false;
+  try {
+    (void)orchestrator.Recall("text", {});
+  } catch (const std::exception&) {
+    recall_with_embedding_threw = true;
+  }
+  Require(recall_with_embedding_threw, "Recall(query, embedding) should throw after Close");
 }
 
 void ScenarioStructuredFactStagedOrderBeforeFlush(const std::filesystem::path& path) {

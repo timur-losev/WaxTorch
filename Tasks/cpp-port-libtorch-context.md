@@ -427,6 +427,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/search_test.cpp` | Added lower-score preview fallback regression ensuring duplicate merge keeps deterministic preview text even when top-score duplicate has `nullopt` preview | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added generic-manifest regressions (no cpu/cuda tags) asserting deterministic fallback to lexicographically minimal `any` artifact path and stable backend routing | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Added constructor policy validation for `search_mode` vs enabled channels and extra filtering of text index hits against committed store frame state | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Extended use-after-close lifecycle regression to cover all public structured-memory/recall API variants (`ForgetFact`, `RecallFactsByEntityPrefix`, `Recall(query, embedding)`) | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added policy-validation scenarios for invalid text-only/vector-only/hybrid configuration combinations | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added regression scenario for `flush fail -> close -> reopen` recovery path, ensuring text index rebuild from committed store state | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added `flush fail -> close -> reopen` regressions for vector and structured-memory recovery paths | Codex |
