@@ -160,6 +160,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Harden orchestrator `Flush()` recovery path: only rebuild runtime state when commit is externally visible (store commit completed or crash-window step 3/4 header publication), preserving staged retry semantics for early commit failures
 - [x] Add orchestrator regressions for crash-window failpoint step 4 (`header B` published): failed `Flush()` now refreshes visible text/vector state in-process without close/reopen
 - [x] Add orchestrator regression for crash-window failpoint step 3 (`header A` published): failed `Flush()` now refreshes visible text state in-process without close/reopen
+- [x] Extend `Flush()` crash-window visibility handling to footer/checkpoint publication (commit step 2/5) and add in-process recovery regressions
 - [x] Add orchestrator config policy checks for incompatible `search_mode` / enabled-channel combinations
 - [x] Harden text recall channel by validating text-index hits against committed frame metadata and payload
 - [x] Add lifecycle regression: flush failure + close + reopen must recover text visibility via store-committed rebuild

@@ -440,6 +440,38 @@ void ThrowIfClosed(bool closed) {
   }
 }
 
+std::optional<std::uint32_t> ParseCommitFailStepFromError(std::string_view message) {
+  constexpr std::string_view kPrefix = "injected crash-window failure at commit step ";
+  const auto pos = message.find(kPrefix);
+  if (pos == std::string_view::npos) {
+    return std::nullopt;
+  }
+  const auto begin = pos + kPrefix.size();
+  if (begin >= message.size()) {
+    return std::nullopt;
+  }
+  std::uint32_t step = 0;
+  bool has_digit = false;
+  for (std::size_t i = begin; i < message.size(); ++i) {
+    const char ch = message[i];
+    if (ch < '0' || ch > '9') {
+      break;
+    }
+    has_digit = true;
+    step = static_cast<std::uint32_t>(step * 10U + static_cast<std::uint32_t>(ch - '0'));
+  }
+  if (!has_digit) {
+    return std::nullopt;
+  }
+  return step;
+}
+
+bool IsExternallyVisibleCommitCrashStep(std::uint32_t step) {
+  // Commit step 1 fails before footer publication.
+  // Steps 2..5 may already publish a valid new footer and become externally visible.
+  return step >= 2U && step <= 5U;
+}
+
 std::vector<std::string> ChunkContent(const std::string& content, int target_tokens, int overlap_tokens) {
   if (target_tokens <= 0) {
     return {content};
@@ -1114,11 +1146,8 @@ void MemoryOrchestrator::Flush() {
     bool has_pending_frames = true;
     bool should_probe_visible_state = store_commit_completed;
     if (!should_probe_visible_state) {
-      // For injected crash-window failures after header publication (step 3/4),
-      // the store may already be externally committed even though Commit threw.
-      const std::string message = ex.what();
-      should_probe_visible_state = message.find("commit step 3") != std::string::npos ||
-                                   message.find("commit step 4") != std::string::npos;
+      const auto step = ParseCommitFailStepFromError(ex.what());
+      should_probe_visible_state = step.has_value() && IsExternallyVisibleCommitCrashStep(*step);
     }
     if (should_probe_visible_state) {
       try {
