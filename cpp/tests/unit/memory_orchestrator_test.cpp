@@ -1071,6 +1071,28 @@ void ScenarioVectorRecallSupportsExplicitEmbeddingWithoutQuery(const std::filesy
   }
 }
 
+void ScenarioHybridRecallWithExplicitEmbeddingSkipsQueryEmbed(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: hybrid recall with explicit embedding skips query embed");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kHybrid, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("hybrid explicit embedding apple", {});
+    orchestrator.Flush();
+
+    embedder->Reset();
+    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "hybrid explicit embedding recall should return context");
+    Require(embedder->embed_calls() == 0, "hybrid explicit embedding recall should not call Embed");
+    Require(embedder->batch_calls() == 0, "hybrid explicit embedding recall should not call EmbedBatch");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioFlushFailureDoesNotExposeStagedText(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: flush failure does not expose staged text");
   waxcpp::OrchestratorConfig config{};
@@ -1786,6 +1808,7 @@ int main() {
     const auto path41 = UniquePath();
     const auto path42 = UniquePath();
     const auto path43 = UniquePath();
+    const auto path44 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -1818,6 +1841,7 @@ int main() {
     ScenarioEmbeddingJournalDoesNotLeakIntoTextRecall(path31);
     ScenarioVectorCloseWithoutFlushPersistsViaStoreClose(path18);
     ScenarioVectorRecallSupportsExplicitEmbeddingWithoutQuery(path19);
+    ScenarioHybridRecallWithExplicitEmbeddingSkipsQueryEmbed(path44);
     ScenarioFlushFailureDoesNotExposeStagedText(path20);
     ScenarioFlushFailureDoesNotExposeStagedVector(path21);
     ScenarioFlushFailureThenCloseReopenRecoversText(path23);
@@ -1837,6 +1861,7 @@ int main() {
         path11, path12, path13, path14, path15, path16, path17, path18, path19, path20, path21,
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
         path33, path34, path35, path36, path37, path38, path39, path40, path41, path42, path43,
+        path44,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
