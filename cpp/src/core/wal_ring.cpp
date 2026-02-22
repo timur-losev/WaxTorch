@@ -568,6 +568,90 @@ std::uint64_t WalRingWriter::Append(std::span<const std::byte> payload, std::uin
 
 std::vector<std::uint64_t> WalRingWriter::AppendBatch(const std::vector<std::vector<std::byte>>& payloads,
                                                       std::uint32_t flags) {
+  if (payloads.empty()) {
+    return {};
+  }
+
+  auto sim_write_pos = write_pos_;
+  auto sim_pending_bytes = pending_bytes_;
+  auto sim_last_sequence = last_sequence_;
+
+  auto simulate_append = [&](std::size_t payload_size) -> bool {
+    if (payload_size == 0 || payload_size > std::numeric_limits<std::uint32_t>::max()) {
+      return false;
+    }
+    const auto header_size = kRecordHeaderSize;
+    const auto entry_size = header_size + static_cast<std::uint64_t>(payload_size);
+    if (entry_size > wal_size_) {
+      return false;
+    }
+
+    std::uint64_t extra_padding = 0;
+    std::uint64_t probe_write_pos = sim_write_pos;
+    std::uint64_t remaining = wal_size_ - probe_write_pos;
+    if (remaining < header_size) {
+      extra_padding += remaining;
+      probe_write_pos = 0;
+      remaining = wal_size_;
+    }
+    if (remaining < entry_size) {
+      extra_padding += remaining;
+      probe_write_pos = 0;
+      remaining = wal_size_;
+    }
+    const auto predicted_write_pos = probe_write_pos + entry_size;
+    if (wal_size_ - predicted_write_pos < header_size) {
+      extra_padding += wal_size_ - predicted_write_pos;
+    }
+    if (entry_size > std::numeric_limits<std::uint64_t>::max() - extra_padding) {
+      return false;
+    }
+    const auto total_needed = entry_size + extra_padding;
+    if (total_needed > wal_size_ || sim_pending_bytes > wal_size_ - total_needed) {
+      return false;
+    }
+
+    remaining = wal_size_ - sim_write_pos;
+    if (remaining < header_size) {
+      sim_pending_bytes += remaining;
+      sim_write_pos = 0;
+      remaining = wal_size_;
+    }
+    if (remaining < entry_size && remaining >= header_size) {
+      sim_pending_bytes += remaining;
+      sim_write_pos = 0;
+    }
+
+    const auto record_start = sim_write_pos;
+    const auto record_end = record_start + entry_size;
+    const bool can_inline_sentinel =
+        record_end < wal_size_ &&
+        (wal_size_ - record_end) >= header_size &&
+        (sim_pending_bytes + entry_size) < wal_size_;
+    sim_pending_bytes += entry_size;
+    sim_write_pos = (record_end == wal_size_) ? 0 : record_end;
+
+    if (!can_inline_sentinel) {
+      auto sentinel_remaining = wal_size_ - sim_write_pos;
+      if (sentinel_remaining < header_size) {
+        sim_pending_bytes += sentinel_remaining;
+        sim_write_pos = 0;
+      }
+      if (sim_pending_bytes >= wal_size_) {
+        return false;
+      }
+    }
+
+    sim_last_sequence += 1;
+    return true;
+  };
+
+  for (const auto& payload : payloads) {
+    if (!simulate_append(payload.size())) {
+      throw WalError("wal capacity exceeded");
+    }
+  }
+
   std::vector<std::uint64_t> sequences{};
   sequences.reserve(payloads.size());
   for (const auto& payload : payloads) {

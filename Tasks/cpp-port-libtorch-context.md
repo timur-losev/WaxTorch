@@ -366,6 +366,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/core/wax_store.cpp` | Switched `PutEmbeddingBatch` to batched WAL append path via `WalRingWriter::AppendBatch` | Codex |
 | `cpp/tests/unit/wal_ring_writer_test.cpp` | Added `AppendBatch` writer scenario validating sequence monotonicity and decode parity | Codex |
 | `cpp/src/core/wax_store.cpp` | Switched `PutBatch` WAL path to `AppendBatch` for parity with batched write semantics and lower writer overhead | Codex |
+| `cpp/src/core/wal_ring.cpp` | Hardened `AppendBatch` with dry-run capacity preflight so overflow rejects atomically before any WAL writes | Codex |
+| `cpp/tests/unit/wal_ring_writer_test.cpp` | Added overflow atomicity regression ensuring failed `AppendBatch` preserves WAL cursor/state and does not append partial records | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

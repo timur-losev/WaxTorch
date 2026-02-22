@@ -180,6 +180,51 @@ void RunScenarioAppendBatch(const std::filesystem::path& path) {
   Require(scan.pending_mutations[1].delete_frame->frame_id == 6, "unexpected second delete frame id");
 }
 
+void RunScenarioAppendBatchCapacityAtomicity(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: append batch capacity atomicity");
+  constexpr std::uint64_t kWalSize = 128;
+  CreateSizedFile(path, static_cast<std::size_t>(kWalSize));
+
+  waxcpp::core::wal::WalRingWriter writer(path, 0, kWalSize);
+  (void)writer.Append(BuildDeletePayload(10));
+
+  const auto before_write_pos = writer.write_pos();
+  const auto before_pending_bytes = writer.pending_bytes();
+  const auto before_last_sequence = writer.last_sequence();
+  const auto before_write_calls = writer.write_call_count();
+  const auto before_scan = waxcpp::core::wal::ScanPendingMutationsWithState(path, 0, kWalSize, 0, 0);
+  Require(before_scan.pending_mutations.size() == 1, "expected one mutation before overflow batch");
+  Require(before_scan.pending_mutations[0].delete_frame.has_value(), "expected delete payload before overflow batch");
+  Require(before_scan.pending_mutations[0].delete_frame->frame_id == 10, "unexpected frame id before overflow batch");
+
+  bool threw = false;
+  try {
+    (void)writer.AppendBatch({
+        BuildDeletePayload(11),
+        BuildDeletePayload(12),
+    });
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  Require(threw, "AppendBatch must throw when payload set exceeds WAL capacity");
+  Require(writer.write_pos() == before_write_pos, "AppendBatch overflow must not advance write_pos");
+  Require(writer.pending_bytes() == before_pending_bytes, "AppendBatch overflow must not change pending_bytes");
+  Require(writer.last_sequence() == before_last_sequence, "AppendBatch overflow must not advance sequence");
+  Require(writer.write_call_count() == before_write_calls, "AppendBatch overflow must not write bytes");
+
+  const auto after_scan = waxcpp::core::wal::ScanPendingMutationsWithState(path, 0, kWalSize, 0, 0);
+  Require(after_scan.pending_mutations.size() == 1, "overflow batch must not append partial mutations");
+  Require(after_scan.pending_mutations[0].delete_frame.has_value(),
+          "overflow batch must preserve existing mutation payload");
+  Require(after_scan.pending_mutations[0].delete_frame->frame_id == 10,
+          "overflow batch must preserve original mutation ordering");
+  Require(after_scan.state.last_sequence == before_scan.state.last_sequence,
+          "overflow batch must preserve scanned last_sequence");
+  Require(after_scan.state.write_pos == before_scan.state.write_pos, "overflow batch must preserve scanned write_pos");
+  Require(after_scan.state.pending_bytes == before_scan.state.pending_bytes,
+          "overflow batch must preserve scanned pending_bytes");
+}
+
 }  // namespace
 
 int main() {
@@ -193,6 +238,7 @@ int main() {
     RunScenarioCapacityGuard(path);
     RunScenarioSeparateSentinelWrite(path);
     RunScenarioAppendBatch(path);
+    RunScenarioAppendBatchCapacityAtomicity(path);
 
     std::error_code ec;
     std::filesystem::remove(path, ec);
