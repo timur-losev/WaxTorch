@@ -21,6 +21,10 @@ struct EmbeddingIdentity {
 
 struct MiniLMRuntimeInfo {
   bool fallback_active = true;
+  bool cuda_preferred_requested = false;
+  bool cuda_runtime_available = false;
+  std::string runtime_policy = "cpu_only";
+  std::string selected_backend = "fallback_cpu";
   bool libtorch_manifest_detected = false;
   bool libtorch_manifest_valid = false;
   std::size_t libtorch_manifest_artifact_count = 0;

@@ -168,14 +168,48 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   waxcpp::tests::Log("scenario: runtime info and manifest policy");
   const ScopedEnvVar clear_override("WAXCPP_LIBTORCH_MANIFEST", std::nullopt);
   const ScopedEnvVar clear_require("WAXCPP_REQUIRE_LIBTORCH_MANIFEST", std::nullopt);
+  const ScopedEnvVar clear_runtime("WAXCPP_TORCH_RUNTIME", std::nullopt);
 
   {
     waxcpp::MiniLMEmbedderTorch embedder;
     const auto info = embedder.runtime_info();
     Require(info.fallback_active, "fallback backend should remain active in current build");
+    Require(info.runtime_policy == "cpu_only", "default torch runtime policy should be cpu_only");
+    Require(!info.cuda_preferred_requested, "default runtime should not request cuda");
+    Require(!info.cuda_runtime_available, "cuda runtime should be unavailable in fallback build");
+    Require(info.selected_backend == "fallback_cpu", "fallback backend should report fallback_cpu");
     if (info.libtorch_manifest_detected) {
       Require(info.libtorch_manifest_path.has_value(), "manifest path should be present when detected");
     }
+  }
+
+  {
+    const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.runtime_policy == "cuda_preferred", "runtime policy should reflect cuda_preferred override");
+    Require(info.cuda_preferred_requested, "cuda_preferred override should set request flag");
+    Require(info.selected_backend == "fallback_cpu", "fallback build should keep fallback_cpu backend");
+  }
+
+  {
+    const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("CPU_ONLY"));
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.runtime_policy == "cpu_only", "runtime policy parsing should be case-insensitive");
+    Require(!info.cuda_preferred_requested, "cpu_only should clear cuda request flag");
+  }
+
+  {
+    const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("gpu_auto"));
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "invalid torch runtime policy should be rejected");
   }
 
   const auto temp_manifest =

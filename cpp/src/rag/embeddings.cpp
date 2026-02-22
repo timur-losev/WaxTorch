@@ -67,6 +67,18 @@ bool EnvIsTruthy(const char* name) {
   return value == "1" || value == "true" || value == "yes" || value == "on";
 }
 
+std::string ResolveTorchRuntimePolicy() {
+  const auto raw = GetEnvValue("WAXCPP_TORCH_RUNTIME");
+  if (!raw.has_value()) {
+    return "cpu_only";
+  }
+  const auto value = ToAsciiLowerString(*raw);
+  if (value == "cpu_only" || value == "cuda_preferred") {
+    return value;
+  }
+  throw std::runtime_error("invalid WAXCPP_TORCH_RUNTIME; expected cpu_only or cuda_preferred");
+}
+
 bool IsAsciiHex(char ch) {
   return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
 }
@@ -545,6 +557,11 @@ void NormalizeL2(std::vector<float>& v) {
 
 MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
     : memoization_capacity_(memoization_capacity) {
+  runtime_info_.runtime_policy = ResolveTorchRuntimePolicy();
+  runtime_info_.cuda_preferred_requested = runtime_info_.runtime_policy == "cuda_preferred";
+  runtime_info_.cuda_runtime_available = false;
+  runtime_info_.selected_backend = "fallback_cpu";
+
   bool override_was_set = false;
   const auto manifest_path = ResolveLibTorchManifestPath(&override_was_set);
   if (manifest_path.has_value()) {
