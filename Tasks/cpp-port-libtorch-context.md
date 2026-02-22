@@ -244,6 +244,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add deterministic WAL payload fuzz regression with valid per-record checksums (`256` seeded payloads) to harden mutation-decoder paths while preserving scan-state invariants
 - [x] Introduce shared pending-WAL replay analyzer for `LoadState` + `Commit` paths and add explicit pending lifecycle counters (`delete`/`supersede`) to WAL runtime stats with local+recovered regression coverage
 - [x] Add WAL recovery regression for lifecycle mutations with undecodable tail: valid pending `delete` must survive decode-stop and commit correctly while invalid tail remains non-blocking
+- [x] Extend parity sidecar schema/assertions with lifecycle WAL counters (`wal_pending_delete_mutations`, `wal_pending_supersede_mutations`) and wire baseline synthetic fixture expectations
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
@@ -272,6 +273,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/parity/mv2s_fixture_generator.cpp` | Added deterministic small-WAL synthetic fixture generator (`pass/open_fail/verify_fail`) | Codex |
 | `cpp/tests/parity/mv2s_fixture_parity_test.cpp` | Extended pass-mode parity checks with WAL state invariants and frame read-surface consistency (`FrameMetas`, `FrameMeta(id)`, `FrameContent(s)`) | Codex |
 | `cpp/tests/parity/mv2s_fixture_parity_test.cpp` | Added optional sidecar assertions for `wal_*` and `frame_*.<id>` keys (`payload_len/status/payload_utf8`) | Codex |
+| `cpp/tests/parity/mv2s_fixture_parity_test.cpp` | Extended optional sidecar assertions with lifecycle WAL counters (`wal_pending_delete_mutations`, `wal_pending_supersede_mutations`) | Codex |
 | `cpp/tests/parity/mv2s_fixture_generator.cpp` | Extended synthetic valid-payload sidecar with frame/WAL assertions to exercise new parity key paths | Codex |
 | `cpp/tests/test_logger.hpp` | Added opt-in/Debug-default test logger (`WAXCPP_TEST_LOG`) for cleaner expected-failure diagnostics | Codex |
 | `cpp/tests/unit/wax_store_verify_test.cpp` | Added scenario logs and expected-exception logging to reduce Visual Studio first-chance exception ambiguity | Codex |
@@ -283,6 +285,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `fixtures/parity/README.md` | Documented extended fixture sidecar keys for WAL/frame-level parity assertions | Codex |
 | `fixtures/parity/swift/swift_valid_payload.mv2s.expected` | Added payload-level frame assertions for stronger Swift<->C++ parity coverage | Codex |
 | `fixtures/parity/synthetic/synthetic_valid_payload.mv2s.expected` | Added payload/WAL assertions for stronger synthetic parity coverage | Codex |
+| `fixtures/parity/synthetic/synthetic_valid_payload.mv2s.expected` | Added explicit zero-value lifecycle WAL counter expectations for parity schema coverage | Codex |
 | `Sources/WaxParityFixtureGenerator/main.swift` | Extended Swift valid-payload sidecar generation with frame payload/status expectations | Codex |
 | `cpp/src/core/mv2s_format.hpp` | Extended TOC summary with index manifest metadata (`lex/vec/time`) | Codex |
 | `cpp/src/core/mv2s_format.cpp` | Added decode-time validation that index manifests have matching segment catalog entries | Codex |
