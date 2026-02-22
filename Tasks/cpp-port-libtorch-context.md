@@ -226,6 +226,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add manifest-format compatibility regressions for alias fields (`files[]`, `file`, `sha256sum`) and root-array artifact manifests
 - [x] Add backend-selection policy regressions for `cpu_only|cuda_preferred` across CUDA runtime availability and missing-manifest override paths
 - [x] Extend `MiniLMEmbedderTorch` runtime introspection with selected manifest artifact path (`libtorch_selected_artifact_path`) and deterministic CPU/CUDA artifact selection based on resolved backend policy
+- [x] Extend CUDA artifact detection for manifest paths with `cuNNN` tags (for example `libtorch-cu124.zip`) and add backend-selection regression coverage for this naming pattern
 - [x] Add runtime-info stability regression: `MiniLMEmbedderTorch::runtime_info()` snapshot remains invariant across `Embed`/`EmbedBatch` calls
 - [ ] Implement M3+ functionality (WAL/store write/search/rag parity)
 
@@ -410,6 +411,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added regression that failed `WaxStore::Open` on corrupted dual-header state releases writer lease, allowing immediate `Create/Open` retry without stale lock leak | Codex |
 | `cpp/src/rag/embeddings.cpp` | Added manifest-aware selected artifact resolution (`cpu|cuda|any`) and exposed backend-selected artifact path in `MiniLMRuntimeInfo` for deterministic runtime diagnostics | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added regressions for `libtorch_selected_artifact_path` across cpu-only/cuda-preferred policies, mixed manifests, alias/root-array formats, and runtime-info stability | Codex |
+| `cpp/src/rag/embeddings.cpp` | Extended CUDA artifact classification to recognize common `cuNNN` path tags in manifest entries in addition to `cuda` substring matching | Codex |
+| `cpp/tests/unit/embeddings_test.cpp` | Added `libtorch-cu124.zip` manifest regression to validate `cuNNN` CUDA detection and `cuda_preferred` backend/artifact routing | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Added constructor policy validation for `search_mode` vs enabled channels and extra filtering of text index hits against committed store frame state | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added policy-validation scenarios for invalid text-only/vector-only/hybrid configuration combinations | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added regression scenario for `flush fail -> close -> reopen` recovery path, ensuring text index rebuild from committed store state | Codex |

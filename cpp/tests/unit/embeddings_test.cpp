@@ -246,6 +246,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_cpu_cuda.json";
   const auto alias_fields_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_alias_fields.json";
+  const auto cu_tag_manifest =
+      std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_cu_tag.json";
   const auto root_array_manifest =
       std::filesystem::temp_directory_path() / "waxcpp_test_libtorch_manifest_root_array.json";
   {
@@ -309,6 +311,13 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       throw std::runtime_error("failed to create alias-fields manifest file");
     }
     out << R"({"files":[{"file":"libtorch-cuda124.zip","sha256sum":"2222222222222222222222222222222222222222222222222222222222222222"}]})";
+  }
+  {
+    std::ofstream out(cu_tag_manifest, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+      throw std::runtime_error("failed to create cu-tag manifest file");
+    }
+    out << R"({"artifacts":[{"path":"libtorch-cu124.zip","sha256":"4444444444444444444444444444444444444444444444444444444444444444"}]})";
   }
   {
     std::ofstream out(root_array_manifest, std::ios::binary | std::ios::trunc);
@@ -435,6 +444,24 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   }
 
   {
+    const ScopedEnvVar set_runtime("WAXCPP_TORCH_RUNTIME", std::string("cuda_preferred"));
+    const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", cu_tag_manifest.string());
+    const ScopedEnvVar assume_cuda("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE", std::string("1"));
+    waxcpp::MiniLMEmbedderTorch embedder;
+    const auto info = embedder.runtime_info();
+    Require(info.libtorch_manifest_valid, "cu-tag manifest should pass validation");
+    Require(info.libtorch_manifest_artifact_count == 1, "cu-tag manifest should report one artifact");
+    Require(info.libtorch_manifest_cpu_artifact_count == 0, "cu-tag manifest should report zero cpu artifacts");
+    Require(info.libtorch_manifest_cuda_artifact_count == 1, "cu-tag manifest should report one cuda artifact");
+    Require(info.selected_backend == "fallback_cuda",
+            "cu-tag manifest should route cuda_preferred runtime to fallback_cuda backend");
+    Require(info.libtorch_selected_artifact_path.has_value(),
+            "cu-tag manifest should select cuda artifact path");
+    Require(*info.libtorch_selected_artifact_path == "libtorch-cu124.zip",
+            "cu-tag manifest selected artifact mismatch");
+  }
+
+  {
     const ScopedEnvVar set_override("WAXCPP_LIBTORCH_MANIFEST", root_array_manifest.string());
     waxcpp::MiniLMEmbedderTorch embedder;
     const auto info = embedder.runtime_info();
@@ -539,6 +566,7 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   std::filesystem::remove(nested_plus_top_level_manifest, ec);
   std::filesystem::remove(cpu_cuda_manifest, ec);
   std::filesystem::remove(alias_fields_manifest, ec);
+  std::filesystem::remove(cu_tag_manifest, ec);
   std::filesystem::remove(root_array_manifest, ec);
 }
 

@@ -391,7 +391,25 @@ struct ManifestValidationSummary {
 
 bool ArtifactPathLooksCuda(std::string_view path) {
   const auto lower = ToAsciiLowerString(path);
-  return lower.find("cuda") != std::string::npos;
+  if (lower.find("cuda") != std::string::npos) {
+    return true;
+  }
+  for (std::size_t i = 0; i + 2 < lower.size(); ++i) {
+    if (lower[i] != 'c' || lower[i + 1] != 'u') {
+      continue;
+    }
+    std::size_t j = i + 2;
+    std::size_t digit_count = 0;
+    while (j < lower.size() && lower[j] >= '0' && lower[j] <= '9') {
+      ++digit_count;
+      ++j;
+    }
+    // Common artifact naming includes cuXXX tags, e.g. libtorch-cu124.zip.
+    if (digit_count >= 2) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool ArtifactPathLooksCpu(std::string_view path) {
