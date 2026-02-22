@@ -1934,6 +1934,74 @@ void ScenarioFlushCrashWindowStructuredFactRebuildsStep5(const std::filesystem::
   ScenarioFlushCrashWindowStructuredFactRebuildsAtStep(path, 5, "step5");
 }
 
+void ScenarioFlushCrashWindowStructuredFactRetryNoOpAtStep(const std::filesystem::path& path,
+                                                           std::uint32_t fail_step,
+                                                           const std::string& scenario_suffix) {
+  waxcpp::tests::Log("scenario: flush crash-window structured fact retry no-op " + scenario_suffix);
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  const std::string entity = "user:retry-step" + std::to_string(fail_step);
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact(entity, "city", "rome");
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(fail_step);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw on injected crash-window step");
+
+    const auto after_failure_facts = orchestrator.RecallFactsByEntityPrefix(entity, 10);
+    Require(after_failure_facts.size() == 1,
+            "externally visible crash-window step should expose structured fact after failed flush");
+
+    orchestrator.Flush();
+    const auto after_retry_facts = orchestrator.RecallFactsByEntityPrefix(entity, 10);
+    Require(after_retry_facts.size() == 1,
+            "retry flush after externally visible crash-window should remain no-op for structured fact");
+
+    const auto context = orchestrator.Recall("rome");
+    bool has_structured = false;
+    for (const auto& item : context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          has_structured = true;
+          break;
+        }
+      }
+      if (has_structured) {
+        break;
+      }
+    }
+    Require(has_structured,
+            "structured fact should remain visible in recall after retry no-op flush");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioFlushCrashWindowStructuredFactRetryNoOpStep2(const std::filesystem::path& path) {
+  ScenarioFlushCrashWindowStructuredFactRetryNoOpAtStep(path, 2, "step2");
+}
+
+void ScenarioFlushCrashWindowStructuredFactRetryNoOpStep3(const std::filesystem::path& path) {
+  ScenarioFlushCrashWindowStructuredFactRetryNoOpAtStep(path, 3, "step3");
+}
+
+void ScenarioFlushCrashWindowStructuredFactRetryNoOpStep4(const std::filesystem::path& path) {
+  ScenarioFlushCrashWindowStructuredFactRetryNoOpAtStep(path, 4, "step4");
+}
+
+void ScenarioFlushCrashWindowStructuredFactRetryNoOpStep5(const std::filesystem::path& path) {
+  ScenarioFlushCrashWindowStructuredFactRetryNoOpAtStep(path, 5, "step5");
+}
+
 void ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: flush failure then close/reopen recovers structured fact");
   waxcpp::OrchestratorConfig config{};
@@ -2535,6 +2603,10 @@ int main() {
     const auto path66 = UniquePath();
     const auto path67 = UniquePath();
     const auto path68 = UniquePath();
+    const auto path69 = UniquePath();
+    const auto path70 = UniquePath();
+    const auto path71 = UniquePath();
+    const auto path72 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -2596,6 +2668,10 @@ int main() {
     ScenarioFlushCrashWindowStructuredFactRebuildsStep3(path66);
     ScenarioFlushCrashWindowStructuredFactRebuildsStep4(path67);
     ScenarioFlushCrashWindowStructuredFactRebuildsStep5(path68);
+    ScenarioFlushCrashWindowStructuredFactRetryNoOpStep2(path69);
+    ScenarioFlushCrashWindowStructuredFactRetryNoOpStep3(path70);
+    ScenarioFlushCrashWindowStructuredFactRetryNoOpStep4(path71);
+    ScenarioFlushCrashWindowStructuredFactRetryNoOpStep5(path72);
     ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(path25);
     ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(path32);
     ScenarioTextIndexCommitFailureRecoversFromCommittedStore(path33);
@@ -2613,7 +2689,7 @@ int main() {
         path33, path34, path35, path36, path37, path38, path39, path40, path41, path42, path43,
         path44, path45, path46, path47, path48, path49, path50, path51, path52, path53, path54,
         path55, path56, path57, path58, path59, path60, path61, path62, path63, path64, path65,
-        path66, path67, path68,
+        path66, path67, path68, path69, path70, path71, path72,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
