@@ -23,10 +23,18 @@ std::string StructuredMemoryStore::CompositeKey(const std::string& entity, const
   return entity + '\x1F' + attribute;
 }
 
-std::uint64_t StructuredMemoryStore::Upsert(const std::string& entity,
-                                            const std::string& attribute,
-                                            const std::string& value,
-                                            const Metadata& metadata) {
+void StructuredMemoryStore::EnsureStagingState() {
+  if (!pending_mutations_.empty()) {
+    return;
+  }
+  staged_entries_ = entries_;
+  staged_next_id_ = next_id_;
+}
+
+std::uint64_t StructuredMemoryStore::StageUpsert(const std::string& entity,
+                                                 const std::string& attribute,
+                                                 const std::string& value,
+                                                 const Metadata& metadata) {
   if (entity.empty()) {
     throw std::runtime_error("StructuredMemoryStore::Upsert entity must be non-empty");
   }
@@ -34,30 +42,88 @@ std::uint64_t StructuredMemoryStore::Upsert(const std::string& entity,
     throw std::runtime_error("StructuredMemoryStore::Upsert attribute must be non-empty");
   }
 
+  EnsureStagingState();
+
   const auto key = CompositeKey(entity, attribute);
-  auto it = entries_.find(key);
-  if (it == entries_.end()) {
+  auto it = staged_entries_.find(key);
+  std::uint64_t id = 0;
+  if (it == staged_entries_.end()) {
     StructuredMemoryEntry entry{};
-    entry.id = next_id_++;
+    entry.id = staged_next_id_++;
     entry.entity = entity;
     entry.attribute = attribute;
     entry.value = value;
     entry.metadata = metadata;
     entry.version = 1;
-    const auto id = entry.id;
-    entries_.emplace(key, std::move(entry));
-    return id;
+    id = entry.id;
+    staged_entries_.emplace(key, std::move(entry));
+  } else {
+    it->second.value = value;
+    it->second.metadata = metadata;
+    it->second.version += 1;
+    id = it->second.id;
   }
 
-  it->second.value = value;
-  it->second.metadata = metadata;
-  it->second.version += 1;
-  return it->second.id;
+  pending_mutations_.push_back(PendingMutation{
+      PendingMutationType::kUpsert,
+      key,
+      id,
+  });
+  return id;
+}
+
+std::optional<std::uint64_t> StructuredMemoryStore::StageRemove(const std::string& entity,
+                                                                const std::string& attribute) {
+  EnsureStagingState();
+
+  const auto key = CompositeKey(entity, attribute);
+  std::optional<std::uint64_t> removed_id{};
+  const auto it = staged_entries_.find(key);
+  if (it != staged_entries_.end()) {
+    removed_id = it->second.id;
+    staged_entries_.erase(it);
+  }
+  pending_mutations_.push_back(PendingMutation{
+      PendingMutationType::kRemove,
+      key,
+      removed_id,
+  });
+  return removed_id;
+}
+
+void StructuredMemoryStore::CommitStaged() {
+  if (pending_mutations_.empty()) {
+    return;
+  }
+  entries_ = std::move(staged_entries_);
+  staged_entries_.clear();
+  next_id_ = staged_next_id_;
+  pending_mutations_.clear();
+}
+
+void StructuredMemoryStore::RollbackStaged() {
+  pending_mutations_.clear();
+  staged_entries_.clear();
+  staged_next_id_ = next_id_;
+}
+
+std::size_t StructuredMemoryStore::PendingMutationCount() const {
+  return pending_mutations_.size();
+}
+
+std::uint64_t StructuredMemoryStore::Upsert(const std::string& entity,
+                                            const std::string& attribute,
+                                            const std::string& value,
+                                            const Metadata& metadata) {
+  const auto id = StageUpsert(entity, attribute, value, metadata);
+  CommitStaged();
+  return id;
 }
 
 bool StructuredMemoryStore::Remove(const std::string& entity, const std::string& attribute) {
-  const auto key = CompositeKey(entity, attribute);
-  return entries_.erase(key) > 0;
+  const auto removed_id = StageRemove(entity, attribute);
+  CommitStaged();
+  return removed_id.has_value();
 }
 
 std::optional<StructuredMemoryEntry> StructuredMemoryStore::Get(const std::string& entity,

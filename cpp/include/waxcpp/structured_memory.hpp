@@ -23,6 +23,15 @@ class StructuredMemoryStore {
  public:
   StructuredMemoryStore() = default;
 
+  std::uint64_t StageUpsert(const std::string& entity,
+                            const std::string& attribute,
+                            const std::string& value,
+                            const Metadata& metadata = {});
+  std::optional<std::uint64_t> StageRemove(const std::string& entity, const std::string& attribute);
+  void CommitStaged();
+  void RollbackStaged();
+  [[nodiscard]] std::size_t PendingMutationCount() const;
+
   std::uint64_t Upsert(const std::string& entity,
                        const std::string& attribute,
                        const std::string& value,
@@ -36,10 +45,24 @@ class StructuredMemoryStore {
   [[nodiscard]] std::vector<StructuredMemoryEntry> All(int limit = -1) const;
 
  private:
+  enum class PendingMutationType {
+    kUpsert,
+    kRemove,
+  };
+  struct PendingMutation {
+    PendingMutationType type = PendingMutationType::kUpsert;
+    std::string key;
+    std::optional<std::uint64_t> touched_id{};
+  };
+
   static std::string CompositeKey(const std::string& entity, const std::string& attribute);
+  void EnsureStagingState();
 
   std::uint64_t next_id_ = 0;
   std::unordered_map<std::string, StructuredMemoryEntry> entries_;
+  std::uint64_t staged_next_id_ = 0;
+  std::unordered_map<std::string, StructuredMemoryEntry> staged_entries_;
+  std::vector<PendingMutation> pending_mutations_;
 };
 
 }  // namespace waxcpp

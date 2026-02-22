@@ -89,6 +89,43 @@ void ScenarioValidation() {
   Require(attribute_throw, "empty attribute should throw");
 }
 
+void ScenarioStagedMutationVisibilityAndRollback() {
+  waxcpp::tests::Log("scenario: staged mutation visibility and rollback");
+  waxcpp::StructuredMemoryStore store;
+
+  const auto staged_id = store.StageUpsert("user:1", "city", "Rome", {{"src", "stage"}});
+  Require(store.PendingMutationCount() == 1, "stage upsert must increase pending mutation count");
+  Require(!store.Get("user:1", "city").has_value(), "staged upsert must stay invisible before commit");
+  Require(store.QueryByEntityPrefix("user:", -1).empty(),
+          "staged upsert must not appear in committed query view");
+
+  store.RollbackStaged();
+  Require(store.PendingMutationCount() == 0, "rollback must clear pending mutation count");
+  Require(!store.Get("user:1", "city").has_value(), "rollback must discard staged upsert");
+
+  const auto committed_id = store.StageUpsert("user:1", "city", "Rome", {});
+  Require(committed_id == staged_id, "id allocation should be deterministic across rollback retries");
+  store.CommitStaged();
+  Require(store.PendingMutationCount() == 0, "commit must clear pending mutation count");
+  const auto committed = store.Get("user:1", "city");
+  Require(committed.has_value(), "commit must publish staged upsert");
+  Require(committed->id == committed_id, "committed staged id mismatch");
+  Require(committed->value == "Rome", "committed staged value mismatch");
+
+  (void)store.StageUpsert("user:1", "city", "Milan", {});
+  Require(store.Get("user:1", "city")->value == "Rome",
+          "staged update must stay invisible before commit");
+  store.RollbackStaged();
+  Require(store.Get("user:1", "city")->value == "Rome",
+          "rollback must preserve last committed value");
+
+  const auto removed_id = store.StageRemove("user:1", "city");
+  Require(removed_id.has_value() && *removed_id == committed_id, "staged remove should expose removed id");
+  Require(store.Get("user:1", "city").has_value(), "staged remove must stay invisible before commit");
+  store.CommitStaged();
+  Require(!store.Get("user:1", "city").has_value(), "commit should apply staged remove");
+}
+
 }  // namespace
 
 int main() {
@@ -98,6 +135,7 @@ int main() {
     ScenarioRemove();
     ScenarioQueryDeterminismAndLimit();
     ScenarioValidation();
+    ScenarioStagedMutationVisibilityAndRollback();
     waxcpp::tests::Log("structured_memory_store_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

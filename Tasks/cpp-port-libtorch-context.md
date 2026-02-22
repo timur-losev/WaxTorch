@@ -297,6 +297,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/include/waxcpp/structured_memory.hpp` | Added structured-memory public API (`StructuredMemoryStore`, entry model) | Codex |
 | `cpp/src/text/structured_memory_store.cpp` | Implemented deterministic in-memory structured-memory CRUD and prefix-query behavior | Codex |
 | `cpp/tests/unit/structured_memory_store_test.cpp` | Added structured-memory unit suite (upsert/get/version/remove/query/validation) | Codex |
+| `cpp/include/waxcpp/structured_memory.hpp` | Added staged structured-memory mutation API (`StageUpsert`, `StageRemove`, `CommitStaged`, `RollbackStaged`, pending mutation count) | Codex |
+| `cpp/src/text/structured_memory_store.cpp` | Added two-phase staged structured-memory state with commit/rollback visibility gating | Codex |
+| `cpp/tests/unit/structured_memory_store_test.cpp` | Added staged structured-memory regressions for pre-commit invisibility, rollback discard, and staged remove-id semantics | Codex |
 | `cpp/CMakeLists.txt` | Added structured-memory sources/header and `waxcpp_structured_memory_store_test` target | Codex |
 | `cpp/include/waxcpp/memory_orchestrator.hpp` | Added orchestrator-level structured-memory API (`RememberFact`, `RecallFactsByEntityPrefix`) and state | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Wired structured-memory store into orchestrator with baseline fact CRUD/query methods | Codex |
@@ -306,6 +309,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Added internal structured-fact journal codec (encode/parse), fact persistence in `RememberFact`, startup replay from store, and internal-frame filtering from normal channels | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Extended structured-memory scenarios to validate persistence across reopen and absence of leaked text-source hits from internal fact journal frames | Codex |
 | `cpp/include/waxcpp/memory_orchestrator.hpp` | Added `ForgetFact(entity, attribute)` API for structured-memory delete parity | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Switched structured-memory path to staged mutations (`RememberFact/ForgetFact`) with flush-time `CommitStaged` parity | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Extended structured fact journal format with remove opcode; replay now applies upsert/remove deterministically | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added persisted remove scenario (`remove -> flush -> reopen`) and recall exclusion checks | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Replaced local text-overlap scoring with `FTS5SearchEngine`-backed text channel construction for store docs and structured facts | Codex |

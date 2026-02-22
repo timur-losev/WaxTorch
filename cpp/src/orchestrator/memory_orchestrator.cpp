@@ -809,7 +809,7 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
                                       const std::string& value,
                                       const Metadata& metadata) {
   ThrowIfClosed(closed_);
-  const auto fact_id = structured_memory_.Upsert(entity, attribute, value, metadata);
+  const auto fact_id = structured_memory_.StageUpsert(entity, attribute, value, metadata);
   if (config_.enable_text_search) {
     StructuredMemoryEntry preview_entry{};
     preview_entry.id = fact_id;
@@ -824,13 +824,12 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
 
 bool MemoryOrchestrator::ForgetFact(const std::string& entity, const std::string& attribute) {
   ThrowIfClosed(closed_);
-  const auto existing = structured_memory_.Get(entity, attribute);
-  if (!existing.has_value()) {
+  const auto removed_id = structured_memory_.StageRemove(entity, attribute);
+  if (!removed_id.has_value()) {
     return false;
   }
-  (void)structured_memory_.Remove(entity, attribute);
   if (config_.enable_text_search) {
-    structured_text_index_.StageRemove(kStructuredMemoryFrameIdBase + existing->id);
+    structured_text_index_.StageRemove(kStructuredMemoryFrameIdBase + *removed_id);
   }
   const auto payload = BuildStructuredFactRemovePayload(entity, attribute);
   (void)store_.Put(payload, {});
@@ -846,6 +845,7 @@ std::vector<StructuredMemoryEntry> MemoryOrchestrator::RecallFactsByEntityPrefix
 void MemoryOrchestrator::Flush() {
   ThrowIfClosed(closed_);
   store_.Commit();
+  structured_memory_.CommitStaged();
   if (config_.enable_text_search) {
     store_text_index_.CommitStaged();
     structured_text_index_.CommitStaged();
