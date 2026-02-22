@@ -1521,6 +1521,39 @@ void ScenarioFlushCrashWindowCheckpointPublishRebuildsVector(const std::filesyst
   }
 }
 
+void ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOp(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: flush crash-window after footer publish retry flush is no-op");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("flush step2 retry apple", {});
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(2);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw on injected crash-window step 2");
+
+    const auto after_failure = orchestrator.Recall("apple");
+    Require(!after_failure.items.empty(), "footer-published crash-window should expose committed text");
+
+    // Commit is already externally visible; retry flush should be a no-op and
+    // keep the same committed visibility contract.
+    orchestrator.Flush();
+    const auto after_retry = orchestrator.Recall("apple");
+    Require(!after_retry.items.empty(), "retry flush after externally visible commit should preserve text visibility");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: flush failure then close/reopen recovers structured fact");
   waxcpp::OrchestratorConfig config{};
@@ -2108,6 +2141,7 @@ int main() {
     const auto path52 = UniquePath();
     const auto path53 = UniquePath();
     const auto path54 = UniquePath();
+    const auto path55 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -2155,6 +2189,7 @@ int main() {
     ScenarioFlushCrashWindowCheckpointPublishRebuildsText(path51);
     ScenarioFlushCrashWindowFooterPublishRebuildsVector(path52);
     ScenarioFlushCrashWindowCheckpointPublishRebuildsVector(path53);
+    ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOp(path55);
     ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(path25);
     ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(path32);
     ScenarioTextIndexCommitFailureRecoversFromCommittedStore(path33);
@@ -2171,6 +2206,7 @@ int main() {
         path22, path23, path24, path25, path26, path27, path28, path29, path30, path31, path32,
         path33, path34, path35, path36, path37, path38, path39, path40, path41, path42, path43,
         path44, path45, path46, path47, path48, path49, path50, path51, path52, path53, path54,
+        path55,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

@@ -163,6 +163,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Extend `Flush()` crash-window visibility handling to footer/checkpoint publication (commit step 2/5) and add in-process recovery regressions
 - [x] Add vector-channel in-process recovery regressions for crash-window commit step 2/5 (footer/checkpoint publication)
 - [x] Add vector-channel in-process recovery regression for crash-window commit step 3 (`header A` publication)
+- [x] Add retry-flush regression for externally visible crash-window commit (`step2`): second `Flush()` must behave as no-op while preserving committed visibility
 - [x] Add orchestrator config policy checks for incompatible `search_mode` / enabled-channel combinations
 - [x] Harden text recall channel by validating text-index hits against committed frame metadata and payload
 - [x] Add lifecycle regression: flush failure + close + reopen must recover text visibility via store-committed rebuild
