@@ -89,6 +89,8 @@ inline constexpr std::array<std::byte, 6> kEmbeddingRecordMagicV2 = {
 
 constexpr std::uint32_t kMaxEmbeddingRecordValues = 16384;
 constexpr std::uint32_t kMaxEmbeddingIdentityTagBytes = 4096;
+constexpr std::uint32_t kMaxStructuredFactFieldBytes = 4U * 1024U * 1024U;
+constexpr std::uint32_t kMaxStructuredFactMetadataPairs = 16384U;
 
 enum class StructuredFactOpcode : std::uint8_t {
   kUpsert = 1,
@@ -259,6 +261,9 @@ std::optional<StructuredFactRecord> ParseStructuredFactPayload(const std::vector
     if (!length.has_value()) {
       return std::nullopt;
     }
+    if (*length > kMaxStructuredFactFieldBytes) {
+      return std::nullopt;
+    }
     if (cursor + *length > payload.size()) {
       return std::nullopt;
     }
@@ -282,6 +287,9 @@ std::optional<StructuredFactRecord> ParseStructuredFactPayload(const std::vector
     const auto value = read_string();
     const auto metadata_count = read_u32();
     if (!entity.has_value() || !attribute.has_value() || !value.has_value() || !metadata_count.has_value()) {
+      return std::nullopt;
+    }
+    if (*metadata_count > kMaxStructuredFactMetadataPairs) {
       return std::nullopt;
     }
     Metadata metadata{};

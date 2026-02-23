@@ -201,6 +201,43 @@ std::vector<std::byte> BuildMalformedStructuredFactUpsertPayloadEmptyAttribute()
   return payload;
 }
 
+std::vector<std::byte> BuildMalformedStructuredFactUpsertPayloadOverlongEntityLength() {
+  constexpr std::array<std::byte, 6> kMagic = {
+      std::byte{'W'},
+      std::byte{'A'},
+      std::byte{'X'},
+      std::byte{'S'},
+      std::byte{'M'},
+      std::byte{'1'},
+  };
+  std::vector<std::byte> payload{};
+  payload.reserve(32);
+  payload.insert(payload.end(), kMagic.begin(), kMagic.end());
+  payload.push_back(static_cast<std::byte>(1));  // upsert opcode
+  AppendU32LE(payload, 0xFFFFFFFFU);             // entity length (intentionally oversized)
+  return payload;
+}
+
+std::vector<std::byte> BuildMalformedStructuredFactUpsertPayloadMetadataCountOverflow() {
+  constexpr std::array<std::byte, 6> kMagic = {
+      std::byte{'W'},
+      std::byte{'A'},
+      std::byte{'X'},
+      std::byte{'S'},
+      std::byte{'M'},
+      std::byte{'1'},
+  };
+  std::vector<std::byte> payload{};
+  payload.reserve(64);
+  payload.insert(payload.end(), kMagic.begin(), kMagic.end());
+  payload.push_back(static_cast<std::byte>(1));  // upsert opcode
+  AppendStringField(payload, "user:overflow");
+  AppendStringField(payload, "city");
+  AppendStringField(payload, "rome");
+  AppendU32LE(payload, 0xFFFFFFFFU);  // metadata count (intentionally oversized)
+  return payload;
+}
+
 bool StartsWithMagic(const std::vector<std::byte>& bytes, const char* magic, std::size_t size) {
   if (bytes.size() < size) {
     return false;
@@ -3277,6 +3314,38 @@ void ScenarioStructuredJournalMalformedFuzzKeepsValidFacts(const std::filesystem
   }
 }
 
+void ScenarioStructuredJournalRejectsOversizedFieldsAndMetadataCount(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: structured journal rejects oversized fields and metadata count");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:stable", "city", "rome");
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    (void)store.Put(BuildMalformedStructuredFactUpsertPayloadOverlongEntityLength(), {});
+    (void)store.Put(BuildMalformedStructuredFactUpsertPayloadMetadataCountOverflow(), {});
+    store.Commit();
+    store.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto facts = reopened.RecallFactsByEntityPrefix("user:stable", 10);
+    Require(facts.size() == 1, "oversized structured payloads should be ignored during replay");
+    Require(facts.front().attribute == "city", "stable fact attribute mismatch after malformed replay");
+    Require(facts.front().value == "rome", "stable fact value mismatch after malformed replay");
+    reopened.Close();
+  }
+}
+
 void ScenarioConcurrentRememberIsSerialized(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: concurrent remember is serialized");
   waxcpp::OrchestratorConfig config{};
@@ -3501,6 +3570,7 @@ int main() {
     const auto path91 = UniquePath();
     const auto path92 = UniquePath();
     const auto path93 = UniquePath();
+    const auto path94 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -3541,6 +3611,7 @@ int main() {
     ScenarioStructuredMemoryRemovePersists(path14);
     ScenarioMalformedStructuredJournalPayloadsAreIgnored(path85);
     ScenarioStructuredJournalMalformedFuzzKeepsValidFacts(path86);
+    ScenarioStructuredJournalRejectsOversizedFieldsAndMetadataCount(path94);
     ScenarioRecallVisibilityRequiresFlush(path15);
     ScenarioVectorRecallVisibilityRequiresFlush(path16);
     ScenarioVectorIndexRebuildOnReopen(path17);
@@ -3607,6 +3678,7 @@ int main() {
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
+        path94,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
