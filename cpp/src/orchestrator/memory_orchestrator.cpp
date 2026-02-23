@@ -299,7 +299,10 @@ std::optional<StructuredFactRecord> ParseStructuredFactPayload(const std::vector
       if (!key.has_value() || !val.has_value()) {
         return std::nullopt;
       }
-      metadata[*key] = *val;
+      if (metadata.contains(*key)) {
+        return std::nullopt;
+      }
+      metadata.emplace(*key, *val);
     }
     record.opcode = StructuredFactOpcode::kUpsert;
     record.entity = *entity;
