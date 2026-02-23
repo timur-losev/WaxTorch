@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <cctype>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -21,14 +20,28 @@ namespace {
 
 std::atomic<std::uint32_t> g_test_commit_fail_countdown{0};
 
+constexpr bool IsAsciiAlphaNumeric(unsigned char ch) {
+  const bool is_digit = (ch >= static_cast<unsigned char>('0') && ch <= static_cast<unsigned char>('9'));
+  const bool is_upper = (ch >= static_cast<unsigned char>('A') && ch <= static_cast<unsigned char>('Z'));
+  const bool is_lower = (ch >= static_cast<unsigned char>('a') && ch <= static_cast<unsigned char>('z'));
+  return is_digit || is_upper || is_lower;
+}
+
+constexpr char ToLowerAscii(unsigned char ch) {
+  if (ch >= static_cast<unsigned char>('A') && ch <= static_cast<unsigned char>('Z')) {
+    return static_cast<char>(ch + static_cast<unsigned char>('a' - 'A'));
+  }
+  return static_cast<char>(ch);
+}
+
 std::vector<std::string> Tokenize(std::string_view text) {
   std::vector<std::string> tokens{};
   std::string current{};
   current.reserve(32);
 
   for (const unsigned char ch : text) {
-    if (std::isalnum(ch) != 0) {
-      current.push_back(static_cast<char>(std::tolower(ch)));
+    if (IsAsciiAlphaNumeric(ch)) {
+      current.push_back(ToLowerAscii(ch));
       continue;
     }
     if (!current.empty()) {

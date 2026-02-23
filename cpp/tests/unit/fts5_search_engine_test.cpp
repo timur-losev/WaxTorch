@@ -41,6 +41,24 @@ void ScenarioCaseInsensitiveTokenization() {
   Require(results[0].frame_id == 1, "matched frame_id mismatch");
 }
 
+void ScenarioAsciiTokenizerDeterminism() {
+  waxcpp::tests::Log("scenario: ASCII tokenizer determinism");
+  waxcpp::FTS5SearchEngine engine;
+
+  std::string non_ascii_separator_doc{"alpha"};
+  non_ascii_separator_doc.push_back(static_cast<char>(0xC0));
+  non_ascii_separator_doc.append("BETA");
+  engine.Index(20, non_ascii_separator_doc);
+
+  const auto alpha_results = engine.Search("alpha", 10);
+  Require(!alpha_results.empty(), "alpha should be tokenized before non-ASCII separator byte");
+  Require(alpha_results[0].frame_id == 20, "alpha lookup returned unexpected frame_id");
+
+  const auto beta_results = engine.Search("beta", 10);
+  Require(!beta_results.empty(), "beta should be tokenized after non-ASCII separator byte");
+  Require(beta_results[0].frame_id == 20, "beta lookup returned unexpected frame_id");
+}
+
 void ScenarioDeterministicTieBreak() {
   waxcpp::tests::Log("scenario: deterministic tie-break by frame_id");
   waxcpp::FTS5SearchEngine engine;
@@ -154,6 +172,7 @@ int main() {
     waxcpp::tests::Log("fts5_search_engine_test: start");
     ScenarioBasicRanking();
     ScenarioCaseInsensitiveTokenization();
+    ScenarioAsciiTokenizerDeterminism();
     ScenarioDeterministicTieBreak();
     ScenarioRemoveAndTopK();
     ScenarioIndexBatchMismatchThrows();

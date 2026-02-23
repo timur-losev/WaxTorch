@@ -99,6 +99,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add mixed pending scenario coverage (recovered pending + new local mutations commit in one pass)
 - [x] Replace `FTS5SearchEngine` stub with deterministic in-memory text ranking baseline (tokenization + TF-IDF scoring + frame_id tie-break)
 - [x] Add dedicated `fts5_search_engine` unit test suite (ranking, tie-break, remove, batch mismatch, empty-input guards)
+- [x] Make `FTS5SearchEngine` tokenizer locale-independent (strict ASCII alnum + ASCII lowercase) and add regression for non-ASCII separator byte handling
 - [x] Add writer-lease baseline for `WaxStore::Open/Create` via lock-directory sentinel (`.writer.lock`) to block concurrent writers on same store path
 - [x] Add integration coverage for writer-lease exclusion and post-close reacquire path
 - [x] Replace `USearchVectorEngine` stub with deterministic in-memory cosine ranking baseline (`Add/AddBatch/Remove/Search`)
@@ -468,6 +469,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/rag/embeddings.cpp` | Extended CUDA artifact classification to recognize common `cuNNN` path tags in manifest entries in addition to `cuda` substring matching | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added `libtorch-cu124.zip` manifest regression to validate `cuNNN` CUDA detection and `cuda_preferred` backend/artifact routing | Codex |
 | `cpp/tests/unit/search_test.cpp` | Added permutation-invariance regressions ensuring `UnifiedSearchWithCandidates` and `BuildFastRAGContext` produce stable ordering/scores/sources under reversed candidate input order | Codex |
+| `cpp/src/text/fts5_search_engine.cpp` | Removed locale-dependent `std::isalnum/std::tolower` tokenization; tokenizer now enforces deterministic ASCII-only alnum detection and lowercase normalization | Codex |
+| `cpp/tests/unit/fts5_search_engine_test.cpp` | Added ASCII-tokenizer determinism regression (`0xC0` separator) to lock stable token split/match behavior across locale/runtime differences | Codex |
 | `cpp/src/rag/search.cpp` | Made duplicate-frame merge preview selection order-independent for equal-score entries via deterministic preview tie-break (lexicographic) | Codex |
 | `cpp/tests/unit/search_test.cpp` | Added equal-score duplicate preview regression ensuring identical merged preview/context under forward/reversed candidate order | Codex |
 | `cpp/tests/unit/search_test.cpp` | Added equal-score duplicate regression asserting present preview text always outranks `nullopt` preview independent of candidate order | Codex |
