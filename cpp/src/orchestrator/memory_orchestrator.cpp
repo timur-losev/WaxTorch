@@ -374,17 +374,18 @@ std::optional<EmbeddingRecord> ParseEmbeddingRecordPayload(const std::vector<std
     if (!identity_len.has_value()) {
       return std::nullopt;
     }
+    if (*identity_len == 0) {
+      return std::nullopt;
+    }
     if (cursor + *identity_len > payload.size()) {
       return std::nullopt;
     }
-    if (*identity_len > 0) {
-      std::string tag{};
-      tag.reserve(*identity_len);
-      for (std::size_t i = 0; i < *identity_len; ++i) {
-        tag.push_back(static_cast<char>(std::to_integer<std::uint8_t>(payload[cursor + i])));
-      }
-      identity_tag = std::move(tag);
+    std::string tag{};
+    tag.reserve(*identity_len);
+    for (std::size_t i = 0; i < *identity_len; ++i) {
+      tag.push_back(static_cast<char>(std::to_integer<std::uint8_t>(payload[cursor + i])));
     }
+    identity_tag = std::move(tag);
     cursor += *identity_len;
   }
 

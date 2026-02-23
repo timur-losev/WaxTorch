@@ -2561,6 +2561,33 @@ void ScenarioVectorReopenWithMalformedPersistedEmbeddingIdentitySkipsRecord(cons
   }
 }
 
+void ScenarioVectorReopenWithEmptyIdentityV2SkipsRecord(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector reopen with empty V2 identity skips record");
+  std::uint64_t user_frame_id = 0;
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    user_frame_id = store.Put(StringToBytes("empty identity persisted payload apple"), {});
+    (void)store.Put(BuildEmbeddingRecordPayloadV2(user_frame_id, "", {1.0F, 0.0F, 0.0F, 0.0F}), {});
+    store.Commit();
+    store.Close();
+  }
+
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    Require(embedder->batch_calls() == 0, "single-frame empty identity rebuild should not use EmbedBatch");
+    Require(embedder->embed_calls() == 1, "empty V2 identity should be treated as malformed and re-embedded");
+    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "vector recall should succeed after empty V2 identity fallback");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioVectorReopenMalformedEmbeddingFuzzKeepsValidPersistedVector(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: vector reopen malformed embedding fuzz keeps valid persisted vector");
   std::uint64_t user_frame_id = 0;
@@ -3378,6 +3405,7 @@ int main() {
     const auto path87 = UniquePath();
     const auto path88 = UniquePath();
     const auto path89 = UniquePath();
+    const auto path90 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -3402,6 +3430,7 @@ int main() {
     ScenarioVectorReopenIgnoresLaterNonFinitePersistedOverride(path89);
     ScenarioVectorReopenWithMalformedPersistedEmbeddingCountSkipsRecord(path83);
     ScenarioVectorReopenWithMalformedPersistedEmbeddingIdentitySkipsRecord(path87);
+    ScenarioVectorReopenWithEmptyIdentityV2SkipsRecord(path90);
     ScenarioVectorReopenMalformedEmbeddingFuzzKeepsValidPersistedVector(path88);
     ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(path39);
     ScenarioRememberRejectsNonFiniteEmbeddings(path80);
@@ -3479,7 +3508,7 @@ int main() {
         path55, path56, path57, path58, path59, path60, path61, path62, path63, path64, path65,
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
-        path83, path84, path85, path86, path87, path88, path89,
+        path83, path84, path85, path86, path87, path88, path89, path90,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

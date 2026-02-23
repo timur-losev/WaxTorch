@@ -252,6 +252,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add malformed `WAXEM2` persisted-embedding identity-length regression: invalid identity payloads are skipped on reopen and trigger deterministic single-frame re-embed fallback
 - [x] Add deterministic malformed persisted-embedding journal fuzz regression (`128` noisy `WAXEM1/WAXEM2` records with non-target frame IDs) ensuring valid target persisted vectors remain reusable without re-embed on reopen
 - [x] Harden persisted-embedding replay merge semantics: ignore later non-finite `WAXEM*` overrides during snapshot load so earlier valid vectors for the same `frame_id` stay reusable; add reopen regression coverage
+- [x] Harden `WAXEM2` identity contract on replay: empty `identity_len=0` records are treated as malformed and skipped, with reopen regression forcing deterministic re-embed fallback
 - [x] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
