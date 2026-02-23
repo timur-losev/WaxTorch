@@ -78,6 +78,7 @@ inline constexpr std::array<std::byte, 6> kEmbeddingRecordMagicV2 = {
 };
 
 constexpr std::uint32_t kMaxEmbeddingRecordValues = 16384;
+constexpr std::uint32_t kMaxEmbeddingIdentityTagBytes = 4096;
 
 enum class StructuredFactOpcode : std::uint8_t {
   kUpsert = 1,
@@ -375,6 +376,9 @@ std::optional<EmbeddingRecord> ParseEmbeddingRecordPayload(const std::vector<std
       return std::nullopt;
     }
     if (*identity_len == 0) {
+      return std::nullopt;
+    }
+    if (*identity_len > kMaxEmbeddingIdentityTagBytes) {
       return std::nullopt;
     }
     if (cursor + *identity_len > payload.size()) {
