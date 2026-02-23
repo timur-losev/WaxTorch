@@ -101,6 +101,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add dedicated `fts5_search_engine` unit test suite (ranking, tie-break, remove, batch mismatch, empty-input guards)
 - [x] Make `FTS5SearchEngine` tokenizer locale-independent (strict ASCII alnum + ASCII lowercase) and add regression for non-ASCII separator byte handling
 - [x] Add deterministic seeded fuzz regression for `FTS5SearchEngine` ensuring permutation-invariant search output across index insertion order, plus ranking/top_k invariants
+- [x] Add injected `FTS5SearchEngine::CommitStaged` failure regression to enforce two-phase behavior (no partial publish, pending mutations preserved for retry)
 - [x] Add writer-lease baseline for `WaxStore::Open/Create` via lock-directory sentinel (`.writer.lock`) to block concurrent writers on same store path
 - [x] Add integration coverage for writer-lease exclusion and post-close reacquire path
 - [x] Replace `USearchVectorEngine` stub with deterministic in-memory cosine ranking baseline (`Add/AddBatch/Remove/Search`)
@@ -473,6 +474,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/text/fts5_search_engine.cpp` | Removed locale-dependent `std::isalnum/std::tolower` tokenization; tokenizer now enforces deterministic ASCII-only alnum detection and lowercase normalization | Codex |
 | `cpp/tests/unit/fts5_search_engine_test.cpp` | Added ASCII-tokenizer determinism regression (`0xC0` separator) to lock stable token split/match behavior across locale/runtime differences | Codex |
 | `cpp/tests/unit/fts5_search_engine_test.cpp` | Added seeded fuzz/property regression (`256` iterations) validating search permutation invariance across insertion order, deterministic tie-breaking, preview consistency, and `top_k` clamp invariants | Codex |
+| `cpp/tests/unit/fts5_search_engine_test.cpp` | Added injected commit-failure regression for staged text mutations, ensuring failed commit keeps staged state hidden and retry commit publishes atomically | Codex |
 | `cpp/src/rag/search.cpp` | Made duplicate-frame merge preview selection order-independent for equal-score entries via deterministic preview tie-break (lexicographic) | Codex |
 | `cpp/tests/unit/search_test.cpp` | Added equal-score duplicate preview regression ensuring identical merged preview/context under forward/reversed candidate order | Codex |
 | `cpp/tests/unit/search_test.cpp` | Added equal-score duplicate regression asserting present preview text always outranks `nullopt` preview independent of candidate order | Codex |

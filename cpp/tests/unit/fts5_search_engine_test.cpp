@@ -152,6 +152,32 @@ void ScenarioStagedOrderDeterminism() {
   Require(results[0].frame_id == 7, "unexpected frame_id after staged mutation order apply");
 }
 
+void ScenarioInjectedCommitFailurePreservesPendingState() {
+  waxcpp::tests::Log("scenario: injected commit failure preserves pending state");
+  waxcpp::FTS5SearchEngine engine;
+  engine.StageIndex(1, "alpha");
+  engine.StageIndex(2, "beta");
+  Require(engine.PendingMutationCount() == 2, "pending count mismatch before injected failure");
+
+  waxcpp::text::testing::SetCommitFailCountdown(1);
+  bool threw = false;
+  try {
+    engine.CommitStaged();
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  waxcpp::text::testing::ClearCommitFailCountdown();
+  Require(threw, "CommitStaged should throw when failure injection is active");
+  Require(engine.PendingMutationCount() == 2, "failed commit must keep pending mutations for retry");
+  Require(engine.Search("alpha", 10).empty(), "failed commit must not publish staged document");
+
+  engine.CommitStaged();
+  Require(engine.PendingMutationCount() == 0, "retry commit should clear pending mutations");
+  const auto results = engine.Search("alpha", 10);
+  Require(results.size() == 1, "successful retry commit should publish staged document");
+  Require(results[0].frame_id == 1, "unexpected frame_id after retry commit");
+}
+
 void ScenarioMoveSemanticsPreserveIndexState() {
   waxcpp::tests::Log("scenario: move semantics preserve index state");
   waxcpp::FTS5SearchEngine source;
@@ -329,6 +355,7 @@ int main() {
     ScenarioStagedMutationsRequireCommit();
     ScenarioRollbackStagedMutations();
     ScenarioStagedOrderDeterminism();
+    ScenarioInjectedCommitFailurePreservesPendingState();
     ScenarioMoveSemanticsPreserveIndexState();
     ScenarioSeededFuzzDeterminismAndInvariants();
     waxcpp::tests::Log("fts5_search_engine_test: finished");
