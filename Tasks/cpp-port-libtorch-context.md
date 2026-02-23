@@ -183,6 +183,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add byte-level structured-fact serialization determinism regression: identical fact content with metadata insertion-order permutations must produce identical persisted `WAXSM1` upsert payload bytes
 - [x] Add concurrent structured-fact ingest regression (`RememberFact` from multiple threads): after flush and reopen, all unique fact keys must persist without loss/duplication
 - [x] Add `FTS5SearchEngine` test hook for fail-on-Nth-commit-call injection (in addition to countdown hook) and cover structured-text-index-specific flush failure recovery in orchestrator
+- [x] Add structured-text-index retry-no-op regression after externally visible flush failure: second `Flush()` must not duplicate/mutate structured facts and recall channels remain stable through reopen
 - [x] Persist orchestrator-owned embedding records in store (`WAXEM1` internal payload) during `Remember` for deterministic vector rebuild support
 - [x] Rebuild vector index on orchestrator startup using persisted embedding records first, with embedder fallback only for missing/dimension-mismatched entries
 - [x] Add orchestrator regressions for persisted-embedding reopen behavior (no re-embed on reopen; embedding journal payload not surfaced in text recall)
@@ -466,6 +467,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/src/text/fts5_search_engine.cpp` | Implemented fail-on-call commit injection with deterministic call-index counter while preserving existing countdown-fail behavior | Codex |
 | `cpp/tests/unit/fts5_search_engine_test.cpp` | Added regression verifying fail-on-call hook semantics: first commit succeeds, configured second commit fails, pending mutation remains unpublished | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added structured-text-index-specific flush-failure regression (fail on 2nd text index commit call) proving in-process rebuild recovers both text and structured-memory recall from committed store state | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added structured-text-index retry-no-op regression: after externally visible fail/rebuild path, second `Flush()` keeps single structured fact/version and stable text+structured recall through reopen | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Switched vector recall channel to committed vector index hits; constructor rebuilds vector index from committed store with embedder batch support | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Updated vector recall expectations for committed index path and added flush-gating scenario for vector visibility | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added vector reopen/close lifecycle scenarios validating committed index rebuild and no re-embed on explicit vector recall | Codex |

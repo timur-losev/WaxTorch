@@ -3504,6 +3504,79 @@ void ScenarioStructuredTextIndexCommitFailureRecoversFromCommittedStore(const st
   }
 }
 
+void ScenarioStructuredTextIndexCommitFailureRetryFlushIsNoOp(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: structured text index commit failure retry flush is no-op");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("structured retry apple", {});
+    orchestrator.RememberFact("user:structured-retry", "city", "rome");
+
+    bool flush_threw = false;
+    waxcpp::text::testing::SetCommitFailOnCall(2);  // fail on structured_text_index_.CommitStaged()
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::text::testing::ClearCommitFailOnCall();
+    Require(flush_threw, "flush should throw when structured text index commit failpoint is set");
+
+    const auto facts_after_failure = orchestrator.RecallFactsByEntityPrefix("user:structured-retry", 10);
+    Require(facts_after_failure.size() == 1, "failed flush should rebuild committed structured fact");
+    Require(facts_after_failure.front().version == 1,
+            "failed flush should keep original structured fact version after rebuild");
+
+    orchestrator.Flush();  // retry after externally visible commit should be no-op
+    const auto facts_after_retry = orchestrator.RecallFactsByEntityPrefix("user:structured-retry", 10);
+    Require(facts_after_retry.size() == 1, "retry flush should not duplicate structured facts");
+    Require(facts_after_retry.front().version == 1, "retry flush should not mutate structured fact version");
+
+    const auto text_context = orchestrator.Recall("apple");
+    bool has_text = false;
+    for (const auto& item : text_context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kText) {
+          has_text = true;
+          break;
+        }
+      }
+      if (has_text) {
+        break;
+      }
+    }
+    Require(has_text, "retry flush should keep text channel visible");
+
+    const auto structured_context = orchestrator.Recall("rome");
+    bool has_structured = false;
+    for (const auto& item : structured_context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          has_structured = true;
+          break;
+        }
+      }
+      if (has_structured) {
+        break;
+      }
+    }
+    Require(has_structured, "retry flush should keep structured channel visible");
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto facts = reopened.RecallFactsByEntityPrefix("user:structured-retry", 10);
+    Require(facts.size() == 1, "reopen should keep single structured fact after retry no-op path");
+    Require(facts.front().version == 1, "reopen should preserve structured fact version after retry no-op path");
+    reopened.Close();
+  }
+}
+
 void ScenarioUseAfterCloseThrows(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: use-after-close throws");
   waxcpp::OrchestratorConfig config{};
@@ -4510,6 +4583,7 @@ int main() {
     const auto path104 = UniquePath();
     const auto path105 = UniquePath();
     const auto path106 = UniquePath();
+    const auto path107 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -4611,6 +4685,7 @@ int main() {
     ScenarioTextIndexCommitFailureRecoversFromCommittedStore(path33);
     ScenarioVectorIndexCommitFailureRecoversFromCommittedStore(path34);
     ScenarioStructuredTextIndexCommitFailureRecoversFromCommittedStore(path106);
+    ScenarioStructuredTextIndexCommitFailureRetryFlushIsNoOp(path107);
     ScenarioUseAfterCloseThrows(path26);
     ScenarioStructuredFactStagedOrderBeforeFlush(path27);
     ScenarioStructuredFactCloseWithoutFlushPersistsViaStoreClose(path28);
@@ -4630,7 +4705,7 @@ int main() {
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
         path94, path95, path96, path97, path98, path99, path100, path101, path102, path103, path104, path105,
-        path106,
+        path106, path107,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
