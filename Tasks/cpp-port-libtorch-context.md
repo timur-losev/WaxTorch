@@ -266,6 +266,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Harden `ForgetFact` validation/safety: enforce replay-safe field limits before staging remove operations, with regression ensuring failed validation does not mutate committed structured facts
 - [x] Harden structured-fact payload envelope: enforce max payload size (`<=8 MiB`) for both write/replay paths, with regression ensuring oversized `WAXSM1` payloads are ignored on reopen without affecting valid facts
 - [x] Harden vector dimension policy against replay-incompatible embedders: reject constructor initialization when embedder dimension exceeds persisted embedding replay ceiling (`16384`) with dedicated policy regression
+- [x] Optimize structured-fact envelope enforcement with early size estimation in write path (`upsert/remove`) to fail before large allocations; extend regressions to combined-field overflow in `RememberFact` and `ForgetFact`
 - [x] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

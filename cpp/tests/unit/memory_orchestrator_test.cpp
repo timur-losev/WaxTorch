@@ -1067,6 +1067,16 @@ void ScenarioRememberFactSerializationFailureDoesNotStageMutation(const std::fil
     }
     Require(threw_overflow_metadata, "oversized structured fact metadata should throw");
 
+    bool threw_payload_envelope = false;
+    try {
+      const std::string max_entity(4U * 1024U * 1024U, 'e');
+      const std::string max_attribute(4U * 1024U * 1024U, 'a');
+      orchestrator.RememberFact(max_entity, max_attribute, "x");
+    } catch (const std::exception&) {
+      threw_payload_envelope = true;
+    }
+    Require(threw_payload_envelope, "structured fact payload envelope overflow should throw");
+
     orchestrator.Flush();
     const auto facts = orchestrator.RecallFactsByEntityPrefix("user:", 10);
     Require(facts.size() == 1, "serialization failures must not stage phantom structured facts");
@@ -1112,6 +1122,16 @@ void ScenarioForgetFactValidationAndSerializationSafety(const std::filesystem::p
       threw_overlong_attribute = true;
     }
     Require(threw_overlong_attribute, "overlong ForgetFact attribute should throw");
+
+    bool threw_payload_envelope = false;
+    try {
+      const std::string max_entity(4U * 1024U * 1024U, 'e');
+      const std::string max_attribute(4U * 1024U * 1024U, 'a');
+      (void)orchestrator.ForgetFact(max_entity, max_attribute);
+    } catch (const std::exception&) {
+      threw_payload_envelope = true;
+    }
+    Require(threw_payload_envelope, "ForgetFact payload envelope overflow should throw");
 
     const auto facts = orchestrator.RecallFactsByEntityPrefix("user:seed-forget", 10);
     Require(facts.size() == 1, "failed ForgetFact serialization path must not remove committed fact");

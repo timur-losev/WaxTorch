@@ -151,6 +151,20 @@ std::vector<std::byte> BuildStructuredFactUpsertPayload(const std::string& entit
                                                         const std::string& attribute,
                                                         const std::string& value,
                                                         const Metadata& metadata) {
+  std::uint64_t estimated_size = static_cast<std::uint64_t>(kStructuredFactMagic.size()) + 1U + 4U +
+                                 static_cast<std::uint64_t>(entity.size()) + 4U +
+                                 static_cast<std::uint64_t>(attribute.size()) + 4U +
+                                 static_cast<std::uint64_t>(value.size()) + 4U;
+  if (estimated_size > kMaxStructuredFactPayloadBytes) {
+    throw std::runtime_error("structured fact payload exceeds replay safety limit");
+  }
+  for (const auto& [key, val] : metadata) {
+    estimated_size += 4U + static_cast<std::uint64_t>(key.size()) + 4U + static_cast<std::uint64_t>(val.size());
+    if (estimated_size > kMaxStructuredFactPayloadBytes) {
+      throw std::runtime_error("structured fact payload exceeds replay safety limit");
+    }
+  }
+
   std::vector<std::byte> out{};
   out.reserve(64 + entity.size() + attribute.size() + value.size());
   out.insert(out.end(), kStructuredFactMagic.begin(), kStructuredFactMagic.end());
@@ -177,6 +191,13 @@ std::vector<std::byte> BuildStructuredFactUpsertPayload(const std::string& entit
 
 std::vector<std::byte> BuildStructuredFactRemovePayload(const std::string& entity,
                                                         const std::string& attribute) {
+  const std::uint64_t estimated_size = static_cast<std::uint64_t>(kStructuredFactMagic.size()) + 1U + 4U +
+                                       static_cast<std::uint64_t>(entity.size()) + 4U +
+                                       static_cast<std::uint64_t>(attribute.size());
+  if (estimated_size > kMaxStructuredFactPayloadBytes) {
+    throw std::runtime_error("structured fact payload exceeds replay safety limit");
+  }
+
   std::vector<std::byte> out{};
   out.reserve(32 + entity.size() + attribute.size());
   out.insert(out.end(), kStructuredFactMagic.begin(), kStructuredFactMagic.end());
