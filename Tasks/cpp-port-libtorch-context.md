@@ -262,6 +262,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Harden write-side embedding identity serialization: oversized identity tags now fall back to `WAXEM1` (no identity), preventing malformed `WAXEM2` emission; add reopen regression ensuring persisted vectors are still reused without re-embed
 - [x] Harden write-side embedding identity serialization for control bytes: identity tags containing ASCII control chars now fall back to `WAXEM1`, preventing malformed `WAXEM2` emission and preserving reopen vector reuse
 - [x] Harden structured-fact write path against replay-incompatible payloads: apply replay safety limits during `RememberFact` serialization and prevent phantom staged facts when serialization throws (regression covers overlong field + metadata overflow)
+- [x] Harden persisted-embedding replay merge semantics for same-frame corruption: dimension-mismatched `WAXEM*` tail records no longer override earlier valid persisted embeddings for the same `frame_id`
 - [x] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files

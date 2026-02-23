@@ -716,6 +716,12 @@ PersistedEmbeddingSnapshot LoadPersistedEmbeddingsFromStore(WaxStore& store) {
       // Keep previously loaded valid record for this frame_id if a later corrupted record appears.
       continue;
     }
+    if (const auto existing_it = snapshot.by_frame.find(embedding_record->frame_id);
+        existing_it != snapshot.by_frame.end() &&
+        existing_it->second.embedding.size() != embedding_record->embedding.size()) {
+      // Dimension-mismatched overrides for the same frame_id are treated as malformed tail noise.
+      continue;
+    }
     if (!snapshot.dimensions.has_value() && !embedding_record->embedding.empty()) {
       snapshot.dimensions = static_cast<int>(embedding_record->embedding.size());
     }
