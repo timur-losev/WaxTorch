@@ -647,6 +647,28 @@ class WrongDimensionBatchEmbedder final : public waxcpp::BatchEmbeddingProvider 
   }
 };
 
+class OversizedDimensionEmbedder final : public waxcpp::EmbeddingProvider {
+ public:
+  int dimensions() const override { return 20000; }
+  bool normalize() const override { return true; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override {
+    return waxcpp::EmbeddingIdentity{
+        .provider = std::string("WaxCppTest"),
+        .model = std::string("OversizedDimensionEmbedder"),
+        .dimensions = 20000,
+        .normalized = true,
+    };
+  }
+
+  std::vector<float> Embed(const std::string& text) override {
+    std::vector<float> out(20000, 0.0F);
+    for (std::size_t i = 0; i < text.size(); ++i) {
+      out[i % out.size()] += static_cast<float>(static_cast<unsigned char>(text[i])) / 255.0F;
+    }
+    return out;
+  }
+};
+
 void ScenarioVectorPolicyValidation(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: vector policy validation");
   waxcpp::OrchestratorConfig config{};
@@ -744,6 +766,18 @@ void ScenarioEmbeddingDimensionPolicyValidation(const std::filesystem::path& pat
       ctor_threw = true;
     }
     Require(ctor_threw, "constructor should reject rebuild-time embedding dimension mismatch");
+  }
+
+  {
+    auto embedder = std::make_shared<OversizedDimensionEmbedder>();
+    bool ctor_threw = false;
+    try {
+      waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+      orchestrator.Close();
+    } catch (const std::exception&) {
+      ctor_threw = true;
+    }
+    Require(ctor_threw, "constructor should reject oversized embedding dimension beyond replay safety limit");
   }
   CleanupPath(rebuild_path);
 }

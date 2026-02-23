@@ -1039,6 +1039,10 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
   if (config_.enable_vector_search && embedder_->dimensions() <= 0) {
     throw std::runtime_error("vector-enabled config requires positive embedder dimensions");
   }
+  if (config_.enable_vector_search &&
+      embedder_->dimensions() > static_cast<int>(kMaxEmbeddingRecordValues)) {
+    throw std::runtime_error("vector-enabled config embedder dimensions exceed replay safety limit");
+  }
   RebuildRuntimeStateFromStore(store_,
                                config_,
                                embedder_,
