@@ -195,6 +195,10 @@ std::optional<std::string> BuildEmbeddingIdentityTag(const std::optional<Embeddi
   if (identity->normalized.has_value()) {
     out.append(*identity->normalized ? "true" : "false");
   }
+  if (HasAsciiControlChars(out)) {
+    // Preserve replay compatibility: control bytes in identity payload must not emit malformed WAXEM2 records.
+    return std::nullopt;
+  }
   if (out.size() > kMaxEmbeddingIdentityTagBytes) {
     // Keep replay-format compatibility: oversized identities must not be serialized as malformed WAXEM2.
     return std::nullopt;

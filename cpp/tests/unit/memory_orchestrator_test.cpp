@@ -563,6 +563,37 @@ class OversizedIdentityEmbedder final : public waxcpp::EmbeddingProvider {
   int calls_ = 0;
 };
 
+class ControlCharIdentityEmbedder final : public waxcpp::EmbeddingProvider {
+ public:
+  int dimensions() const override { return 4; }
+  bool normalize() const override { return true; }
+  std::optional<waxcpp::EmbeddingIdentity> identity() const override {
+    std::string provider = "WaxCppTest";
+    provider.push_back('\0');
+    provider.append("-Ctrl");
+    return waxcpp::EmbeddingIdentity{
+        .provider = std::move(provider),
+        .model = std::string("ControlCharIdentityEmbedder"),
+        .dimensions = 4,
+        .normalized = true,
+    };
+  }
+
+  std::vector<float> Embed(const std::string& text) override {
+    ++calls_;
+    std::vector<float> out(4, 0.0F);
+    for (std::size_t i = 0; i < text.size(); ++i) {
+      out[i % out.size()] += static_cast<float>(static_cast<unsigned char>(text[i])) / 255.0F;
+    }
+    return out;
+  }
+
+  int calls() const { return calls_; }
+
+ private:
+  int calls_ = 0;
+};
+
 class WrongDimensionBatchEmbedder final : public waxcpp::BatchEmbeddingProvider {
  public:
   int dimensions() const override { return 4; }
@@ -1370,6 +1401,54 @@ void ScenarioOversizedIdentityFallbackUsesWAXEM1AndReusesPersistedVectors(const 
             "reopen should reuse persisted vectors and avoid re-embedding with oversized identity fallback");
     const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should succeed after oversized identity fallback");
+    reopened.Close();
+  }
+}
+
+void ScenarioControlCharIdentityFallbackUsesWAXEM1AndReusesPersistedVectors(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: control-char identity fallback uses WAXEM1 and reuses persisted vectors");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  {
+    auto embedder = std::make_shared<ControlCharIdentityEmbedder>();
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("control-char identity apple", {});
+    Require(embedder->calls() == 1, "remember should embed user payload once");
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  bool has_waxem1 = false;
+  bool has_waxem2 = false;
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    for (const auto& meta : store.FrameMetas()) {
+      if (meta.status != 0) {
+        continue;
+      }
+      const auto payload = store.FrameContent(meta.id);
+      if (StartsWithMagic(payload, "WAXEM1", 6)) {
+        has_waxem1 = true;
+      }
+      if (StartsWithMagic(payload, "WAXEM2", 6)) {
+        has_waxem2 = true;
+      }
+    }
+    store.Close();
+  }
+  Require(has_waxem1, "control-char identity fallback should store persisted embedding as WAXEM1");
+  Require(!has_waxem2, "control-char identity fallback must not emit malformed WAXEM2 record");
+
+  {
+    auto reopen_embedder = std::make_shared<ControlCharIdentityEmbedder>();
+    waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
+    Require(reopen_embedder->calls() == 0,
+            "reopen should reuse persisted vectors and avoid re-embedding with control-char identity fallback");
+    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "vector recall should succeed after control-char identity fallback");
     reopened.Close();
   }
 }
@@ -3741,6 +3820,7 @@ int main() {
     const auto path95 = UniquePath();
     const auto path96 = UniquePath();
     const auto path97 = UniquePath();
+    const auto path98 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -3791,6 +3871,7 @@ int main() {
     ScenarioVectorReopenWithMatchingIdentityReusesPersistedEmbeddings(path40);
     ScenarioVectorReopenWithMismatchedIdentityReembeds(path41);
     ScenarioOversizedIdentityFallbackUsesWAXEM1AndReusesPersistedVectors(path97);
+    ScenarioControlCharIdentityFallbackUsesWAXEM1AndReusesPersistedVectors(path98);
     ScenarioEmbeddingJournalDoesNotLeakIntoTextRecall(path31);
     ScenarioVectorCloseWithoutFlushPersistsViaStoreClose(path18);
     ScenarioVectorRecallSupportsExplicitEmbeddingWithoutQuery(path19);
@@ -3851,7 +3932,7 @@ int main() {
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
-        path94, path95, path96, path97,
+        path94, path95, path96, path97, path98,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
