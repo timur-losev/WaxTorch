@@ -178,6 +178,35 @@ void ScenarioInjectedCommitFailurePreservesPendingState() {
   Require(results[0].frame_id == 1, "unexpected frame_id after retry commit");
 }
 
+void ScenarioInjectedCommitFailureOnSecondCall() {
+  waxcpp::tests::Log("scenario: injected commit failure on second call");
+  waxcpp::FTS5SearchEngine engine;
+  engine.StageIndex(1, "alpha");
+  engine.StageIndex(2, "beta");
+
+  waxcpp::text::testing::SetCommitFailOnCall(2);
+  bool first_threw = false;
+  try {
+    engine.CommitStaged();
+  } catch (const std::exception&) {
+    first_threw = true;
+  }
+  Require(!first_threw, "first CommitStaged should succeed when fail-on-call is set to second call");
+  Require(engine.PendingMutationCount() == 0, "first successful commit should clear pending state");
+
+  engine.StageIndex(3, "gamma");
+  bool second_threw = false;
+  try {
+    engine.CommitStaged();
+  } catch (const std::exception&) {
+    second_threw = true;
+  }
+  waxcpp::text::testing::ClearCommitFailOnCall();
+  Require(second_threw, "second CommitStaged should fail under fail-on-call hook");
+  Require(engine.PendingMutationCount() == 1, "failed second commit should preserve pending staged mutation");
+  Require(engine.Search("gamma", 10).empty(), "failed second commit must not publish staged document");
+}
+
 void ScenarioMoveSemanticsPreserveIndexState() {
   waxcpp::tests::Log("scenario: move semantics preserve index state");
   waxcpp::FTS5SearchEngine source;
@@ -356,6 +385,7 @@ int main() {
     ScenarioRollbackStagedMutations();
     ScenarioStagedOrderDeterminism();
     ScenarioInjectedCommitFailurePreservesPendingState();
+    ScenarioInjectedCommitFailureOnSecondCall();
     ScenarioMoveSemanticsPreserveIndexState();
     ScenarioSeededFuzzDeterminismAndInvariants();
     waxcpp::tests::Log("fts5_search_engine_test: finished");

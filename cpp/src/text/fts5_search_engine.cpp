@@ -19,6 +19,8 @@ namespace waxcpp {
 namespace {
 
 std::atomic<std::uint32_t> g_test_commit_fail_countdown{0};
+std::atomic<std::uint32_t> g_test_commit_fail_on_call{0};
+std::atomic<std::uint32_t> g_test_commit_call_counter{0};
 
 constexpr bool IsAsciiAlphaNumeric(unsigned char ch) {
   const bool is_digit = (ch >= static_cast<unsigned char>('0') && ch <= static_cast<unsigned char>('9'));
@@ -283,6 +285,14 @@ void RebuildSqliteSnapshot(sqlite3* db, const std::unordered_map<std::uint64_t, 
 #endif  // WAXCPP_HAS_SQLITE
 
 void MaybeInjectCommitFailure() {
+  const auto fail_on_call = g_test_commit_fail_on_call.load(std::memory_order_relaxed);
+  if (fail_on_call > 0) {
+    const auto call_index = g_test_commit_call_counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (call_index == fail_on_call) {
+      throw std::runtime_error("FTS5SearchEngine::CommitStaged injected failure on configured call");
+    }
+  }
+
   auto remaining = g_test_commit_fail_countdown.load(std::memory_order_relaxed);
   while (remaining > 0) {
     if (g_test_commit_fail_countdown.compare_exchange_weak(remaining,
@@ -480,6 +490,16 @@ void SetCommitFailCountdown(std::uint32_t countdown) {
 
 void ClearCommitFailCountdown() {
   g_test_commit_fail_countdown.store(0, std::memory_order_relaxed);
+}
+
+void SetCommitFailOnCall(std::uint32_t call_index) {
+  g_test_commit_call_counter.store(0, std::memory_order_relaxed);
+  g_test_commit_fail_on_call.store(call_index, std::memory_order_relaxed);
+}
+
+void ClearCommitFailOnCall() {
+  g_test_commit_fail_on_call.store(0, std::memory_order_relaxed);
+  g_test_commit_call_counter.store(0, std::memory_order_relaxed);
 }
 
 }  // namespace text::testing

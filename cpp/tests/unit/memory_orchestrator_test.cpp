@@ -3445,6 +3445,65 @@ void ScenarioVectorIndexCommitFailureRecoversFromCommittedStore(const std::files
   }
 }
 
+void ScenarioStructuredTextIndexCommitFailureRecoversFromCommittedStore(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: structured text index commit failure recovers from committed store");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("text commit fail apple", {});
+    orchestrator.RememberFact("user:structured-fail", "city", "rome");
+
+    bool flush_threw = false;
+    waxcpp::text::testing::SetCommitFailOnCall(2);  // fail on structured_text_index_.CommitStaged()
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::text::testing::ClearCommitFailOnCall();
+    Require(flush_threw, "flush should throw when structured text index commit failpoint is set");
+
+    const auto text_context = orchestrator.Recall("apple");
+    bool has_text = false;
+    for (const auto& item : text_context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kText) {
+          has_text = true;
+          break;
+        }
+      }
+      if (has_text) {
+        break;
+      }
+    }
+    Require(has_text, "failed structured text commit should rebuild and keep text channel visible");
+
+    const auto facts = orchestrator.RecallFactsByEntityPrefix("user:structured-fail", 10);
+    Require(facts.size() == 1, "failed structured text commit should rebuild structured facts from committed store");
+
+    const auto structured_context = orchestrator.Recall("rome");
+    bool has_structured = false;
+    for (const auto& item : structured_context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          has_structured = true;
+          break;
+        }
+      }
+      if (has_structured) {
+        break;
+      }
+    }
+    Require(has_structured,
+            "failed structured text commit should rebuild structured-text channel from committed store");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioUseAfterCloseThrows(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: use-after-close throws");
   waxcpp::OrchestratorConfig config{};
@@ -4450,6 +4509,7 @@ int main() {
     const auto path103 = UniquePath();
     const auto path104 = UniquePath();
     const auto path105 = UniquePath();
+    const auto path106 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -4550,6 +4610,7 @@ int main() {
     ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(path32);
     ScenarioTextIndexCommitFailureRecoversFromCommittedStore(path33);
     ScenarioVectorIndexCommitFailureRecoversFromCommittedStore(path34);
+    ScenarioStructuredTextIndexCommitFailureRecoversFromCommittedStore(path106);
     ScenarioUseAfterCloseThrows(path26);
     ScenarioStructuredFactStagedOrderBeforeFlush(path27);
     ScenarioStructuredFactCloseWithoutFlushPersistsViaStoreClose(path28);
@@ -4569,6 +4630,7 @@ int main() {
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
         path94, path95, path96, path97, path98, path99, path100, path101, path102, path103, path104, path105,
+        path106,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
