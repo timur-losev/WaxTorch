@@ -106,6 +106,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add integration coverage for writer-lease exclusion and post-close reacquire path
 - [x] Replace `USearchVectorEngine` stub with deterministic in-memory cosine ranking baseline (`Add/AddBatch/Remove/Search`)
 - [x] Add `usearch_vector_engine` unit suite (constructor/dimension validation, tie-break determinism, remove, top-k clamp)
+- [x] Add deterministic seeded fuzz regression for `USearchVectorEngine` (`256` iterations) validating insertion-order invariance, remove invariants, score ordering, and tie-break determinism
 - [x] Replace `MiniLMEmbedderTorch` throw stubs with deterministic CPU fallback embeddings (token hash projection + optional L2 normalization)
 - [x] Add embedding unit suite (identity/dimension contract, determinism, normalization, batch parity)
 - [x] Implement `MemoryOrchestrator::Remember` baseline write-path (`content -> WaxStore::Put`) and auto-create store when file is missing
@@ -451,6 +452,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/include/waxcpp/vector_engine.hpp` | Added two-phase vector indexing API (`Stage*`, `CommitStaged`, `RollbackStaged`, pending mutation introspection) | Codex |
 | `cpp/src/vector/usearch_vector_engine.cpp` | Implemented deterministic staged mutation queue for vector index; legacy `Add/AddBatch/Remove` now immediate wrappers over stage+commit | Codex |
 | `cpp/tests/unit/usearch_vector_engine_test.cpp` | Added staged-vector unit scenarios for commit visibility, rollback behavior, and ordered mutation application | Codex |
+| `cpp/tests/unit/usearch_vector_engine_test.cpp` | Added seeded vector fuzz/property regression (`256` iterations) validating search result invariance under insertion-order permutations plus remove/order/tie-break invariants | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Switched vector recall channel to committed vector index hits; constructor rebuilds vector index from committed store with embedder batch support | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Updated vector recall expectations for committed index path and added flush-gating scenario for vector visibility | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added vector reopen/close lifecycle scenarios validating committed index rebuild and no re-embed on explicit vector recall | Codex |

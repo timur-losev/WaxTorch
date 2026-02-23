@@ -3,10 +3,14 @@
 
 #include "../test_logger.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstdint>
+#include <random>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -242,6 +246,90 @@ void ScenarioLoadMetalSegmentValidation() {
   Require(encoding_threw, "LoadMetalSegment must reject non-metal encoding");
 }
 
+void ScenarioSeededFuzzDeterminismAndInvariants() {
+  waxcpp::tests::Log("scenario: seeded vector fuzz determinism and invariants");
+
+  auto scores_equal = [](float lhs, float rhs) -> bool { return std::fabs(lhs - rhs) < 1e-5F; };
+  auto vectors_equal = [&](const std::vector<std::pair<std::uint64_t, float>>& lhs,
+                           const std::vector<std::pair<std::uint64_t, float>>& rhs,
+                           const std::string& where) {
+    Require(lhs.size() == rhs.size(), where + ": size mismatch");
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+      Require(lhs[i].first == rhs[i].first, where + ": frame_id mismatch");
+      Require(scores_equal(lhs[i].second, rhs[i].second), where + ": score mismatch");
+    }
+  };
+
+  std::mt19937 rng(0xA117C0DEU);
+  std::uniform_int_distribution<int> count_dist(1, 64);
+  std::uniform_int_distribution<int> remove_count_dist(0, 12);
+  std::uniform_int_distribution<int> topk_dist(1, 32);
+  std::uniform_real_distribution<float> value_dist(-1.0F, 1.0F);
+
+  constexpr int kDim = 8;
+  constexpr std::size_t kIterations = 256;
+  for (std::size_t iteration = 0; iteration < kIterations; ++iteration) {
+    const int count = count_dist(rng);
+    std::vector<std::uint64_t> frame_ids{};
+    frame_ids.reserve(static_cast<std::size_t>(count));
+    std::vector<std::vector<float>> vectors{};
+    vectors.reserve(static_cast<std::size_t>(count));
+
+    for (int i = 0; i < count; ++i) {
+      frame_ids.push_back(static_cast<std::uint64_t>(5000 + i));
+      std::vector<float> vec(static_cast<std::size_t>(kDim), 0.0F);
+      for (float& v : vec) {
+        v = value_dist(rng);
+      }
+      vectors.push_back(std::move(vec));
+    }
+
+    waxcpp::USearchVectorEngine forward(kDim);
+    for (int i = 0; i < count; ++i) {
+      forward.Add(frame_ids[static_cast<std::size_t>(i)], vectors[static_cast<std::size_t>(i)]);
+    }
+
+    waxcpp::USearchVectorEngine reversed(kDim);
+    for (int i = count - 1; i >= 0; --i) {
+      reversed.Add(frame_ids[static_cast<std::size_t>(i)], vectors[static_cast<std::size_t>(i)]);
+    }
+
+    std::unordered_set<std::uint64_t> removed{};
+    const int remove_count = std::min(remove_count_dist(rng), count);
+    for (int i = 0; i < remove_count; ++i) {
+      const auto remove_index = static_cast<std::size_t>(rng() % static_cast<std::uint32_t>(count));
+      const auto frame_id = frame_ids[remove_index];
+      removed.insert(frame_id);
+      forward.Remove(frame_id);
+      reversed.Remove(frame_id);
+    }
+
+    std::vector<float> query(static_cast<std::size_t>(kDim), 0.0F);
+    for (float& v : query) {
+      v = value_dist(rng);
+    }
+
+    const int top_k = topk_dist(rng);
+    const auto lhs = forward.Search(query, top_k);
+    const auto rhs = reversed.Search(query, top_k);
+    vectors_equal(lhs, rhs, "seeded vector permutation invariance");
+    Require(lhs.size() <= static_cast<std::size_t>(top_k), "top_k clamp violated in vector search");
+
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+      Require(removed.find(lhs[i].first) == removed.end(), "removed frame_id must not appear in results");
+      if (i == 0) {
+        continue;
+      }
+      const auto& prev = lhs[i - 1];
+      const auto& cur = lhs[i];
+      Require(prev.second >= cur.second, "vector results must be sorted by score desc");
+      if (scores_equal(prev.second, cur.second)) {
+        Require(prev.first < cur.first, "equal-score vector results must tie-break by frame_id asc");
+      }
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -258,6 +346,7 @@ int main() {
     ScenarioStagedOrderDeterminism();
     ScenarioMetalSegmentRoundtrip();
     ScenarioLoadMetalSegmentValidation();
+    ScenarioSeededFuzzDeterminismAndInvariants();
     waxcpp::tests::Log("usearch_vector_engine_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
