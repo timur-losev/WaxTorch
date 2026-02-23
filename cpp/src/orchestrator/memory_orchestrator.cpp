@@ -1198,6 +1198,18 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
 bool MemoryOrchestrator::ForgetFact(const std::string& entity, const std::string& attribute) {
   std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
+  if (entity.empty()) {
+    throw std::runtime_error("ForgetFact entity must be non-empty");
+  }
+  if (attribute.empty()) {
+    throw std::runtime_error("ForgetFact attribute must be non-empty");
+  }
+  if (entity.size() > static_cast<std::size_t>(kMaxStructuredFactFieldBytes)) {
+    throw std::runtime_error("ForgetFact entity exceeds replay safety limit");
+  }
+  if (attribute.size() > static_cast<std::size_t>(kMaxStructuredFactFieldBytes)) {
+    throw std::runtime_error("ForgetFact attribute exceeds replay safety limit");
+  }
   const auto removed_id = structured_memory_.StageRemove(entity, attribute);
   if (!removed_id.has_value()) {
     return false;

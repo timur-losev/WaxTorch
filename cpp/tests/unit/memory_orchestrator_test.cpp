@@ -1027,6 +1027,50 @@ void ScenarioRememberFactSerializationFailureDoesNotStageMutation(const std::fil
   }
 }
 
+void ScenarioForgetFactValidationAndSerializationSafety(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: forget fact validation and serialization safety");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:seed-forget", "city", "rome");
+    orchestrator.Flush();
+
+    bool threw_overlong_entity = false;
+    try {
+      const std::string overlong_entity((4U * 1024U * 1024U) + 1U, 'e');
+      (void)orchestrator.ForgetFact(overlong_entity, "city");
+    } catch (const std::exception&) {
+      threw_overlong_entity = true;
+    }
+    Require(threw_overlong_entity, "overlong ForgetFact entity should throw");
+
+    bool threw_overlong_attribute = false;
+    try {
+      const std::string overlong_attribute((4U * 1024U * 1024U) + 1U, 'a');
+      (void)orchestrator.ForgetFact("user:seed-forget", overlong_attribute);
+    } catch (const std::exception&) {
+      threw_overlong_attribute = true;
+    }
+    Require(threw_overlong_attribute, "overlong ForgetFact attribute should throw");
+
+    const auto facts = orchestrator.RecallFactsByEntityPrefix("user:seed-forget", 10);
+    Require(facts.size() == 1, "failed ForgetFact serialization path must not remove committed fact");
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto facts = reopened.RecallFactsByEntityPrefix("user:seed-forget", 10);
+    Require(facts.size() == 1, "reopen should preserve committed fact after failed ForgetFact validation");
+    reopened.Close();
+  }
+}
+
 void ScenarioMaxSnippetsZeroSuppressesSnippetsOnly(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: max_snippets zero suppresses snippets only");
   waxcpp::OrchestratorConfig config{};
@@ -3908,6 +3952,7 @@ int main() {
     const auto path98 = UniquePath();
     const auto path99 = UniquePath();
     const auto path100 = UniquePath();
+    const auto path101 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -3916,6 +3961,7 @@ int main() {
     ScenarioRecallEmbeddingPolicyValidation(path29);
     ScenarioForgetFactValidation(path84);
     ScenarioRememberFactSerializationFailureDoesNotStageMutation(path99);
+    ScenarioForgetFactValidationAndSerializationSafety(path101);
     ScenarioRememberFlushPersistsFrame(path1);
     ScenarioRecallReturnsRankedItems(path2);
     ScenarioHybridRecallWithEmbedder(path3);
@@ -4021,7 +4067,7 @@ int main() {
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
-        path94, path95, path96, path97, path98, path99, path100,
+        path94, path95, path96, path97, path98, path99, path100, path101,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
