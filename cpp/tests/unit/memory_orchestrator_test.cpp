@@ -4270,6 +4270,75 @@ void ScenarioConcurrentRecallIsStable(const std::filesystem::path& path) {
   orchestrator.Close();
 }
 
+void ScenarioConcurrentRememberFactIsSerialized(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: concurrent remember fact is serialized");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  constexpr int kThreadCount = 4;
+  constexpr int kFactsPerThread = 12;
+  std::unordered_set<std::string> expected_keys{};
+  expected_keys.reserve(static_cast<std::size_t>(kThreadCount * kFactsPerThread));
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    std::vector<std::thread> workers{};
+    workers.reserve(kThreadCount);
+
+    for (int thread_index = 0; thread_index < kThreadCount; ++thread_index) {
+      workers.emplace_back([&, thread_index]() {
+        for (int fact_index = 0; fact_index < kFactsPerThread; ++fact_index) {
+          const std::string entity = "user:t" + std::to_string(thread_index) + ":f" + std::to_string(fact_index);
+          const std::string attribute = "city";
+          const std::string value = "v" + std::to_string(thread_index) + "_" + std::to_string(fact_index);
+          waxcpp::Metadata metadata{};
+          metadata.emplace("thread", std::to_string(thread_index));
+          metadata.emplace("fact", std::to_string(fact_index));
+          orchestrator.RememberFact(entity, attribute, value, metadata);
+        }
+      });
+    }
+
+    for (auto& worker : workers) {
+      worker.join();
+    }
+
+    for (int thread_index = 0; thread_index < kThreadCount; ++thread_index) {
+      for (int fact_index = 0; fact_index < kFactsPerThread; ++fact_index) {
+        expected_keys.insert("user:t" + std::to_string(thread_index) + ":f" + std::to_string(fact_index) + '\x1F' + "city");
+      }
+    }
+
+    orchestrator.Flush();
+    const auto facts = orchestrator.RecallFactsByEntityPrefix("user:t", 2048);
+    Require(facts.size() == expected_keys.size(), "concurrent RememberFact should publish all inserted facts");
+    std::unordered_set<std::string> actual_keys{};
+    actual_keys.reserve(facts.size());
+    for (const auto& fact : facts) {
+      actual_keys.insert(fact.entity + '\x1F' + fact.attribute);
+    }
+    Require(actual_keys == expected_keys, "concurrent RememberFact fact key set mismatch after flush");
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto facts = reopened.RecallFactsByEntityPrefix("user:t", 2048);
+    Require(facts.size() == expected_keys.size(),
+            "reopen after concurrent RememberFact should preserve all inserted facts");
+
+    std::unordered_set<std::string> actual_keys{};
+    actual_keys.reserve(facts.size());
+    for (const auto& fact : facts) {
+      actual_keys.insert(fact.entity + '\x1F' + fact.attribute);
+    }
+    Require(actual_keys == expected_keys, "reopen concurrent RememberFact fact key set mismatch");
+    reopened.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -4380,6 +4449,7 @@ int main() {
     const auto path102 = UniquePath();
     const auto path103 = UniquePath();
     const auto path104 = UniquePath();
+    const auto path105 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -4486,6 +4556,7 @@ int main() {
     ScenarioStructuredFactForgetWithoutFlushPersistsViaStoreClose(path35);
     ScenarioConcurrentRememberIsSerialized(path36);
     ScenarioConcurrentRecallIsStable(path73);
+    ScenarioConcurrentRememberFactIsSerialized(path105);
 
     const std::vector<std::filesystem::path> cleanup_paths = {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
@@ -4497,7 +4568,7 @@ int main() {
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
-        path94, path95, path96, path97, path98, path99, path100, path101, path102, path103, path104,
+        path94, path95, path96, path97, path98, path99, path100, path101, path102, path103, path104, path105,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
