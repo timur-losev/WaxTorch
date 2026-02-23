@@ -2,10 +2,15 @@
 
 #include "../test_logger.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
-#include <utility>
+#include <cstdint>
+#include <random>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -165,6 +170,150 @@ void ScenarioMoveSemanticsPreserveIndexState() {
   Require(reassigned_results[0].frame_id == 102, "move-assigned engine returned unexpected frame_id");
 }
 
+void ScenarioSeededFuzzDeterminismAndInvariants() {
+  waxcpp::tests::Log("scenario: seeded fuzz determinism and invariants");
+
+  auto scores_equal = [](float lhs, float rhs) -> bool { return std::fabs(lhs - rhs) < 1e-6F; };
+
+  auto require_same_results = [&](const std::vector<waxcpp::SearchResult>& lhs,
+                                  const std::vector<waxcpp::SearchResult>& rhs,
+                                  const std::string& where) {
+    Require(lhs.size() == rhs.size(), where + ": result size mismatch");
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+      Require(lhs[i].frame_id == rhs[i].frame_id, where + ": frame_id mismatch");
+      Require(scores_equal(lhs[i].score, rhs[i].score), where + ": score mismatch");
+      Require(lhs[i].preview_text == rhs[i].preview_text, where + ": preview mismatch");
+      Require(lhs[i].sources == rhs[i].sources, where + ": sources mismatch");
+    }
+  };
+
+  std::mt19937 rng(0x51F5A11U);
+  std::uniform_int_distribution<int> doc_count_dist(1, 32);
+  std::uniform_int_distribution<int> token_count_dist(1, 8);
+  std::uniform_int_distribution<int> token_len_dist(1, 7);
+  std::uniform_int_distribution<int> letter_dist(0, 25);
+  std::uniform_int_distribution<int> sep_dist(0, 5);
+  std::uniform_int_distribution<int> bool_dist(0, 1);
+  std::uniform_int_distribution<int> topk_dist(1, 16);
+  std::uniform_int_distribution<int> pick_doc_dist(0, 31);
+  std::uniform_int_distribution<int> pick_token_dist(0, 7);
+
+  auto random_token = [&]() -> std::string {
+    const int len = token_len_dist(rng);
+    std::string out{};
+    out.reserve(static_cast<std::size_t>(len));
+    for (int i = 0; i < len; ++i) {
+      char ch = static_cast<char>('a' + letter_dist(rng));
+      if (bool_dist(rng) != 0) {
+        ch = static_cast<char>(ch - ('a' - 'A'));
+      }
+      out.push_back(ch);
+    }
+    return out;
+  };
+
+  auto random_separator = [&]() -> std::string {
+    switch (sep_dist(rng)) {
+      case 0:
+        return " ";
+      case 1:
+        return "-";
+      case 2:
+        return ".";
+      case 3:
+        return "/";
+      case 4:
+        return "_";
+      default: {
+        std::string non_ascii{};
+        non_ascii.push_back(static_cast<char>(0xC0));
+        return non_ascii;
+      }
+    }
+  };
+
+  constexpr std::size_t kIterations = 256;
+  for (std::size_t iteration = 0; iteration < kIterations; ++iteration) {
+    const int doc_count = doc_count_dist(rng);
+    std::vector<std::uint64_t> frame_ids(static_cast<std::size_t>(doc_count));
+    for (int i = 0; i < doc_count; ++i) {
+      frame_ids[static_cast<std::size_t>(i)] = static_cast<std::uint64_t>(1000 + i);
+    }
+
+    std::vector<std::vector<std::string>> doc_tokens{};
+    std::vector<std::pair<std::uint64_t, std::string>> docs{};
+    doc_tokens.reserve(static_cast<std::size_t>(doc_count));
+    docs.reserve(static_cast<std::size_t>(doc_count));
+
+    for (int i = 0; i < doc_count; ++i) {
+      const int token_count = token_count_dist(rng);
+      std::vector<std::string> tokens{};
+      tokens.reserve(static_cast<std::size_t>(token_count));
+      std::string text{};
+      for (int t = 0; t < token_count; ++t) {
+        const auto token = random_token();
+        tokens.push_back(token);
+        if (t > 0) {
+          text.append(random_separator());
+        }
+        text.append(token);
+      }
+      doc_tokens.push_back(tokens);
+      docs.emplace_back(frame_ids[static_cast<std::size_t>(i)], text);
+    }
+
+    waxcpp::FTS5SearchEngine engine_forward;
+    for (const auto& [frame_id, text] : docs) {
+      engine_forward.Index(frame_id, text);
+    }
+
+    auto docs_reversed = docs;
+    std::reverse(docs_reversed.begin(), docs_reversed.end());
+    waxcpp::FTS5SearchEngine engine_reversed;
+    for (const auto& [frame_id, text] : docs_reversed) {
+      engine_reversed.Index(frame_id, text);
+    }
+
+    const int query_doc_index = pick_doc_dist(rng) % doc_count;
+    const auto& query_tokens = doc_tokens[static_cast<std::size_t>(query_doc_index)];
+    const int query_token_count = std::max(1, static_cast<int>(query_tokens.size() / 2));
+    std::string query{};
+    for (int i = 0; i < query_token_count; ++i) {
+      if (!query.empty()) {
+        query.push_back(' ');
+      }
+      query.append(query_tokens[static_cast<std::size_t>(pick_token_dist(rng) % query_tokens.size())]);
+    }
+
+    const int top_k = std::min(topk_dist(rng), doc_count + 4);
+    const auto forward = engine_forward.Search(query, top_k);
+    const auto reversed = engine_reversed.Search(query, top_k);
+    require_same_results(forward, reversed, "seeded-fuzz permutation invariance");
+    Require(forward.size() <= static_cast<std::size_t>(top_k), "top_k clamp violated");
+
+    std::unordered_map<std::uint64_t, std::string> expected_preview{};
+    for (const auto& [frame_id, text] : docs) {
+      expected_preview.emplace(frame_id, text);
+    }
+
+    for (std::size_t i = 0; i < forward.size(); ++i) {
+      const auto& result = forward[i];
+      Require(result.preview_text.has_value(), "result preview should always be present");
+      const auto expected_it = expected_preview.find(result.frame_id);
+      Require(expected_it != expected_preview.end(), "result frame_id not found in corpus");
+      Require(*result.preview_text == expected_it->second, "preview text mismatch against indexed corpus");
+      if (i == 0) {
+        continue;
+      }
+      const auto& previous = forward[i - 1];
+      Require(previous.score >= result.score, "result ordering must be score-desc");
+      if (scores_equal(previous.score, result.score)) {
+        Require(previous.frame_id < result.frame_id, "equal-score ordering must use frame_id asc tie-break");
+      }
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -181,6 +330,7 @@ int main() {
     ScenarioRollbackStagedMutations();
     ScenarioStagedOrderDeterminism();
     ScenarioMoveSemanticsPreserveIndexState();
+    ScenarioSeededFuzzDeterminismAndInvariants();
     waxcpp::tests::Log("fts5_search_engine_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
