@@ -691,6 +691,10 @@ PersistedEmbeddingSnapshot LoadPersistedEmbeddingsFromStore(WaxStore& store) {
     if (!embedding_record.has_value()) {
       continue;
     }
+    if (embedding_record->embedding.empty()) {
+      // Empty embedding payloads are malformed for vector replay and must not override prior valid records.
+      continue;
+    }
     if (!AllFinite(embedding_record->embedding)) {
       // Keep previously loaded valid record for this frame_id if a later corrupted record appears.
       continue;

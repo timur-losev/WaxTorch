@@ -2717,6 +2717,40 @@ void ScenarioVectorReopenEmptyIdentityOverrideDoesNotReplaceValidPersisted(const
   }
 }
 
+void ScenarioVectorReopenEmptyEmbeddingOverrideDoesNotReplaceValidPersisted(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector reopen empty embedding override does not replace valid persisted");
+  std::uint64_t user_frame_id = 0;
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    user_frame_id = store.Put(StringToBytes("valid persisted then empty embedding override apple"), {});
+    (void)store.Put(
+        BuildEmbeddingRecordPayloadV2(
+            user_frame_id,
+            "provider=WaxCppTest;model=CountingBatchEmbedder;dimensions=4;normalized=true",
+            {1.0F, 0.0F, 0.0F, 0.0F}),
+        {});
+    (void)store.Put(BuildEmbeddingRecordPayloadV1(user_frame_id, {}), {});
+    store.Commit();
+    store.Close();
+  }
+
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    Require(embedder->batch_calls() == 0, "valid persisted vector should avoid batch re-embed");
+    Require(embedder->embed_calls() == 0,
+            "later empty embedding record should not override earlier valid persisted vector");
+    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "vector recall should remain available from earlier valid persisted vector");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioVectorReopenMalformedEmbeddingFuzzKeepsValidPersistedVector(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: vector reopen malformed embedding fuzz keeps valid persisted vector");
   std::uint64_t user_frame_id = 0;
@@ -3571,6 +3605,7 @@ int main() {
     const auto path92 = UniquePath();
     const auto path93 = UniquePath();
     const auto path94 = UniquePath();
+    const auto path95 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -3599,6 +3634,7 @@ int main() {
     ScenarioVectorReopenWithControlCharIdentityV2SkipsRecord(path93);
     ScenarioVectorReopenWithEmptyIdentityV2SkipsRecord(path90);
     ScenarioVectorReopenEmptyIdentityOverrideDoesNotReplaceValidPersisted(path91);
+    ScenarioVectorReopenEmptyEmbeddingOverrideDoesNotReplaceValidPersisted(path95);
     ScenarioVectorReopenMalformedEmbeddingFuzzKeepsValidPersistedVector(path88);
     ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(path39);
     ScenarioRememberRejectsNonFiniteEmbeddings(path80);
@@ -3678,7 +3714,7 @@ int main() {
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
-        path94,
+        path94, path95,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
