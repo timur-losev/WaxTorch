@@ -977,6 +977,56 @@ void ScenarioForgetFactValidation(const std::filesystem::path& path) {
   orchestrator.Close();
 }
 
+void ScenarioRememberFactSerializationFailureDoesNotStageMutation(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: remember fact serialization failure does not stage mutation");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:seed", "city", "rome");
+    orchestrator.Flush();
+
+    bool threw_overlong_entity = false;
+    try {
+      const std::string overlong_entity((4U * 1024U * 1024U) + 1U, 'e');
+      orchestrator.RememberFact(overlong_entity, "city", "bad");
+    } catch (const std::exception&) {
+      threw_overlong_entity = true;
+    }
+    Require(threw_overlong_entity, "overlong structured fact entity should throw");
+
+    bool threw_overflow_metadata = false;
+    try {
+      waxcpp::Metadata huge_metadata{};
+      constexpr std::size_t kTooManyPairs = 16385;
+      for (std::size_t i = 0; i < kTooManyPairs; ++i) {
+        huge_metadata.emplace("k" + std::to_string(i), "v");
+      }
+      orchestrator.RememberFact("user:overflow", "city", "bad", huge_metadata);
+    } catch (const std::exception&) {
+      threw_overflow_metadata = true;
+    }
+    Require(threw_overflow_metadata, "oversized structured fact metadata should throw");
+
+    orchestrator.Flush();
+    const auto facts = orchestrator.RecallFactsByEntityPrefix("user:", 10);
+    Require(facts.size() == 1, "serialization failures must not stage phantom structured facts");
+    Require(facts.front().entity == "user:seed", "seed fact should remain the only committed fact");
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto facts = reopened.RecallFactsByEntityPrefix("user:", 10);
+    Require(facts.size() == 1, "reopen should preserve only successfully serialized structured facts");
+    Require(facts.front().entity == "user:seed", "unexpected structured fact after reopen");
+    reopened.Close();
+  }
+}
+
 void ScenarioMaxSnippetsZeroSuppressesSnippetsOnly(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: max_snippets zero suppresses snippets only");
   waxcpp::OrchestratorConfig config{};
@@ -3821,6 +3871,7 @@ int main() {
     const auto path96 = UniquePath();
     const auto path97 = UniquePath();
     const auto path98 = UniquePath();
+    const auto path99 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -3828,6 +3879,7 @@ int main() {
     ScenarioSearchModePolicyValidation(path22);
     ScenarioRecallEmbeddingPolicyValidation(path29);
     ScenarioForgetFactValidation(path84);
+    ScenarioRememberFactSerializationFailureDoesNotStageMutation(path99);
     ScenarioRememberFlushPersistsFrame(path1);
     ScenarioRecallReturnsRankedItems(path2);
     ScenarioHybridRecallWithEmbedder(path3);
@@ -3932,7 +3984,7 @@ int main() {
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
-        path94, path95, path96, path97, path98,
+        path94, path95, path96, path97, path98, path99,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

@@ -134,6 +134,9 @@ void AppendF32LE(std::vector<std::byte>& out, float value) {
 }
 
 void AppendString(std::vector<std::byte>& out, const std::string& value) {
+  if (value.size() > static_cast<std::size_t>(kMaxStructuredFactFieldBytes)) {
+    throw std::runtime_error("structured fact field exceeds replay safety limit");
+  }
   if (value.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
     throw std::runtime_error("structured fact field exceeds uint32 length");
   }
@@ -154,6 +157,9 @@ std::vector<std::byte> BuildStructuredFactUpsertPayload(const std::string& entit
   AppendString(out, entity);
   AppendString(out, attribute);
   AppendString(out, value);
+  if (metadata.size() > static_cast<std::size_t>(kMaxStructuredFactMetadataPairs)) {
+    throw std::runtime_error("structured fact metadata count exceeds replay safety limit");
+  }
   if (metadata.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
     throw std::runtime_error("structured fact metadata count exceeds uint32");
   }
@@ -1164,6 +1170,13 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
                                       const Metadata& metadata) {
   std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
+  if (entity.empty()) {
+    throw std::runtime_error("RememberFact entity must be non-empty");
+  }
+  if (attribute.empty()) {
+    throw std::runtime_error("RememberFact attribute must be non-empty");
+  }
+  const auto payload = BuildStructuredFactUpsertPayload(entity, attribute, value, metadata);
   const auto fact_id = structured_memory_.StageUpsert(entity, attribute, value, metadata);
   if (config_.enable_text_search) {
     StructuredMemoryEntry preview_entry{};
@@ -1173,7 +1186,6 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
     preview_entry.value = value;
     structured_text_index_.StageIndex(kStructuredMemoryFrameIdBase + fact_id, StructuredFactPreviewText(preview_entry));
   }
-  const auto payload = BuildStructuredFactUpsertPayload(entity, attribute, value, metadata);
   (void)store_.Put(payload, {});
 }
 
