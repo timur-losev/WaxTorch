@@ -91,6 +91,7 @@ constexpr std::uint32_t kMaxEmbeddingRecordValues = 16384;
 constexpr std::uint32_t kMaxEmbeddingIdentityTagBytes = 4096;
 constexpr std::uint32_t kMaxStructuredFactFieldBytes = 4U * 1024U * 1024U;
 constexpr std::uint32_t kMaxStructuredFactMetadataPairs = 16384U;
+constexpr std::uint32_t kMaxStructuredFactPayloadBytes = 8U * 1024U * 1024U;
 
 enum class StructuredFactOpcode : std::uint8_t {
   kUpsert = 1,
@@ -168,6 +169,9 @@ std::vector<std::byte> BuildStructuredFactUpsertPayload(const std::string& entit
     AppendString(out, key);
     AppendString(out, val);
   }
+  if (out.size() > static_cast<std::size_t>(kMaxStructuredFactPayloadBytes)) {
+    throw std::runtime_error("structured fact payload exceeds replay safety limit");
+  }
   return out;
 }
 
@@ -179,6 +183,9 @@ std::vector<std::byte> BuildStructuredFactRemovePayload(const std::string& entit
   AppendU8(out, static_cast<std::uint8_t>(StructuredFactOpcode::kRemove));
   AppendString(out, entity);
   AppendString(out, attribute);
+  if (out.size() > static_cast<std::size_t>(kMaxStructuredFactPayloadBytes)) {
+    throw std::runtime_error("structured fact payload exceeds replay safety limit");
+  }
   return out;
 }
 
@@ -245,6 +252,9 @@ std::vector<std::byte> BuildEmbeddingRecordPayload(std::uint64_t frame_id,
 }
 
 std::optional<StructuredFactRecord> ParseStructuredFactPayload(const std::vector<std::byte>& payload) {
+  if (payload.size() > static_cast<std::size_t>(kMaxStructuredFactPayloadBytes)) {
+    return std::nullopt;
+  }
   if (payload.size() < kStructuredFactMagic.size() + 1 + 4 + 4) {
     return std::nullopt;
   }
@@ -1209,6 +1219,11 @@ bool MemoryOrchestrator::ForgetFact(const std::string& entity, const std::string
   }
   if (attribute.size() > static_cast<std::size_t>(kMaxStructuredFactFieldBytes)) {
     throw std::runtime_error("ForgetFact attribute exceeds replay safety limit");
+  }
+  const auto estimated_payload_size =
+      kStructuredFactMagic.size() + 1U + 4U + entity.size() + 4U + attribute.size();
+  if (estimated_payload_size > static_cast<std::size_t>(kMaxStructuredFactPayloadBytes)) {
+    throw std::runtime_error("ForgetFact payload exceeds replay safety limit");
   }
   const auto removed_id = structured_memory_.StageRemove(entity, attribute);
   if (!removed_id.has_value()) {

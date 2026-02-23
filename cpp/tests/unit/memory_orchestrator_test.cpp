@@ -262,6 +262,28 @@ std::vector<std::byte> BuildMalformedStructuredFactUpsertPayloadDuplicateMetadat
   return payload;
 }
 
+std::vector<std::byte> BuildMalformedStructuredFactUpsertPayloadOversizedTotalBytes() {
+  constexpr std::array<std::byte, 6> kMagic = {
+      std::byte{'W'},
+      std::byte{'A'},
+      std::byte{'X'},
+      std::byte{'S'},
+      std::byte{'M'},
+      std::byte{'1'},
+  };
+  constexpr std::size_t kValueLen = 8U * 1024U * 1024U;
+  std::vector<std::byte> payload{};
+  payload.reserve(128 + kValueLen);
+  payload.insert(payload.end(), kMagic.begin(), kMagic.end());
+  payload.push_back(static_cast<std::byte>(1));  // upsert opcode
+  AppendStringField(payload, "user:oversized-payload");
+  AppendStringField(payload, "city");
+  AppendU32LE(payload, static_cast<std::uint32_t>(kValueLen));
+  payload.insert(payload.end(), kValueLen, static_cast<std::byte>('x'));
+  AppendU32LE(payload, 0U);
+  return payload;
+}
+
 bool StartsWithMagic(const std::vector<std::byte>& bytes, const char* magic, std::size_t size) {
   if (bytes.size() < size) {
     return false;
@@ -3721,6 +3743,37 @@ void ScenarioStructuredJournalRejectsDuplicateMetadataKeys(const std::filesystem
   }
 }
 
+void ScenarioStructuredJournalRejectsOversizedPayloadBytes(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: structured journal rejects oversized payload bytes");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:stable-bytes", "city", "rome");
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    (void)store.Put(BuildMalformedStructuredFactUpsertPayloadOversizedTotalBytes(), {});
+    store.Commit();
+    store.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto stable_facts = reopened.RecallFactsByEntityPrefix("user:stable-bytes", 10);
+    Require(stable_facts.size() == 1, "oversized structured payload should be ignored");
+    const auto malformed_facts = reopened.RecallFactsByEntityPrefix("user:oversized-payload", 10);
+    Require(malformed_facts.empty(), "oversized structured payload must not create committed fact");
+    reopened.Close();
+  }
+}
+
 void ScenarioConcurrentRememberIsSerialized(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: concurrent remember is serialized");
   waxcpp::OrchestratorConfig config{};
@@ -3953,6 +4006,7 @@ int main() {
     const auto path99 = UniquePath();
     const auto path100 = UniquePath();
     const auto path101 = UniquePath();
+    const auto path102 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -3999,6 +4053,7 @@ int main() {
     ScenarioStructuredJournalMalformedFuzzKeepsValidFacts(path86);
     ScenarioStructuredJournalRejectsOversizedFieldsAndMetadataCount(path94);
     ScenarioStructuredJournalRejectsDuplicateMetadataKeys(path96);
+    ScenarioStructuredJournalRejectsOversizedPayloadBytes(path102);
     ScenarioRecallVisibilityRequiresFlush(path15);
     ScenarioVectorRecallVisibilityRequiresFlush(path16);
     ScenarioVectorIndexRebuildOnReopen(path17);
@@ -4067,7 +4122,7 @@ int main() {
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
-        path94, path95, path96, path97, path98, path99, path100, path101,
+        path94, path95, path96, path97, path98, path99, path100, path101, path102,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
