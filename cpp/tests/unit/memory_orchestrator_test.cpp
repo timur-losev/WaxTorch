@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -3625,6 +3626,224 @@ void ScenarioStructuredMemoryRemovePersists(const std::filesystem::path& path) {
   }
 }
 
+void ScenarioStructuredFactSeededFlushReopenModelParity(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: structured fact seeded flush/reopen model parity");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  struct ModeledFact final {
+    std::uint64_t id = 0;
+    std::string entity{};
+    std::string attribute{};
+    std::string value{};
+    waxcpp::Metadata metadata{};
+    std::uint64_t version = 0;
+  };
+
+  auto make_key = [](const std::string& entity, const std::string& attribute) {
+    return entity + '\x1F' + attribute;
+  };
+
+  auto sort_facts = [](std::vector<waxcpp::StructuredMemoryEntry> facts) {
+    std::sort(facts.begin(), facts.end(), [](const auto& lhs, const auto& rhs) {
+      if (lhs.entity != rhs.entity) {
+        return lhs.entity < rhs.entity;
+      }
+      if (lhs.attribute != rhs.attribute) {
+        return lhs.attribute < rhs.attribute;
+      }
+      return lhs.id < rhs.id;
+    });
+    return facts;
+  };
+
+  auto require_facts_equal = [&](const std::vector<waxcpp::StructuredMemoryEntry>& actual,
+                                 const std::vector<waxcpp::StructuredMemoryEntry>& expected,
+                                 const std::string& where) {
+    Require(actual.size() == expected.size(), where + ": fact count mismatch");
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+      Require(actual[i].entity == expected[i].entity, where + ": entity mismatch");
+      Require(actual[i].attribute == expected[i].attribute, where + ": attribute mismatch");
+      Require(actual[i].value == expected[i].value, where + ": value mismatch");
+      Require(actual[i].metadata == expected[i].metadata, where + ": metadata mismatch");
+      Require(actual[i].version == expected[i].version, where + ": version mismatch");
+      Require(actual[i].id == expected[i].id, where + ": id mismatch");
+    }
+  };
+
+  std::unordered_map<std::string, ModeledFact> committed{};
+  std::unordered_map<std::string, ModeledFact> staged{};
+  std::uint64_t next_id = 0;
+  std::uint64_t staged_next_id = 0;
+  bool has_staged = false;
+
+  auto ensure_staged = [&]() {
+    if (has_staged) {
+      return;
+    }
+    staged = committed;
+    staged_next_id = next_id;
+    has_staged = true;
+  };
+
+  auto model_upsert = [&](const std::string& entity,
+                          const std::string& attribute,
+                          const std::string& value,
+                          const waxcpp::Metadata& metadata) {
+    ensure_staged();
+    const auto key = make_key(entity, attribute);
+    auto it = staged.find(key);
+    if (it == staged.end()) {
+      ModeledFact entry{};
+      entry.id = staged_next_id++;
+      entry.entity = entity;
+      entry.attribute = attribute;
+      entry.value = value;
+      entry.metadata = metadata;
+      entry.version = 1;
+      staged.emplace(key, std::move(entry));
+      return;
+    }
+    it->second.value = value;
+    it->second.metadata = metadata;
+    it->second.version += 1;
+  };
+
+  auto model_remove = [&](const std::string& entity, const std::string& attribute) {
+    ensure_staged();
+    const auto key = make_key(entity, attribute);
+    return staged.erase(key) > 0;
+  };
+
+  auto model_commit = [&]() {
+    if (!has_staged) {
+      return;
+    }
+    committed = staged;
+    staged.clear();
+    next_id = staged_next_id;
+    has_staged = false;
+  };
+
+  auto expected_facts = [&]() {
+    std::vector<waxcpp::StructuredMemoryEntry> out{};
+    out.reserve(committed.size());
+    for (const auto& [_, fact] : committed) {
+      waxcpp::StructuredMemoryEntry entry{};
+      entry.id = fact.id;
+      entry.entity = fact.entity;
+      entry.attribute = fact.attribute;
+      entry.value = fact.value;
+      entry.metadata = fact.metadata;
+      entry.version = fact.version;
+      out.push_back(std::move(entry));
+    }
+    return sort_facts(std::move(out));
+  };
+
+  auto assert_structured_query_visibility = [&](waxcpp::MemoryOrchestrator& orchestrator,
+                                                const std::vector<waxcpp::StructuredMemoryEntry>& committed_facts,
+                                                std::mt19937& rng,
+                                                const std::string& where) {
+    if (committed_facts.empty()) {
+      const auto context = orchestrator.Recall("nonexistent-query-token");
+      bool has_structured = false;
+      for (const auto& item : context.items) {
+        for (const auto source : item.sources) {
+          if (source == waxcpp::SearchSource::kStructuredMemory) {
+            has_structured = true;
+            break;
+          }
+        }
+      }
+      Require(!has_structured, where + ": empty model should not have structured hits");
+      return;
+    }
+
+    const std::size_t probe_index = static_cast<std::size_t>(rng() % static_cast<std::uint32_t>(committed_facts.size()));
+    const auto& probe = committed_facts[probe_index];
+    const auto context = orchestrator.Recall(probe.value);
+    bool has_structured = false;
+    for (const auto& item : context.items) {
+      for (const auto source : item.sources) {
+        if (source == waxcpp::SearchSource::kStructuredMemory) {
+          has_structured = true;
+          break;
+        }
+      }
+      if (has_structured) {
+        break;
+      }
+    }
+    Require(has_structured, where + ": committed fact value should be recallable via structured source");
+  };
+
+  std::mt19937 rng(0x5EED1234U);
+  const std::array<std::string, 6> entities = {
+      "user:0", "user:1", "user:2", "user:3", "user:4", "user:5"};
+  const std::array<std::string, 4> attributes = {
+      "city", "food", "team", "language"};
+  const std::array<std::string, 10> values = {
+      "rome", "paris", "berlin", "tokyo", "madrid", "apple", "sushi", "jazz", "swift", "cpp"};
+  std::uniform_int_distribution<int> operation_dist(0, 99);
+  std::uniform_int_distribution<int> entity_dist(0, static_cast<int>(entities.size()) - 1);
+  std::uniform_int_distribution<int> attribute_dist(0, static_cast<int>(attributes.size()) - 1);
+  std::uniform_int_distribution<int> value_dist(0, static_cast<int>(values.size()) - 1);
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+
+    constexpr int kIterations = 128;
+    for (int i = 0; i < kIterations; ++i) {
+      const auto& entity = entities[static_cast<std::size_t>(entity_dist(rng))];
+      const auto& attribute = attributes[static_cast<std::size_t>(attribute_dist(rng))];
+      const int op = operation_dist(rng);
+
+      if (op < 65) {
+        const auto& value = values[static_cast<std::size_t>(value_dist(rng))];
+        waxcpp::Metadata metadata{};
+        metadata.emplace("src", "seeded");
+        metadata.emplace("iter", std::to_string(i % 11));
+        if ((i % 3) == 0) {
+          metadata.emplace("tag", values[static_cast<std::size_t>(value_dist(rng))]);
+        }
+        orchestrator.RememberFact(entity, attribute, value, metadata);
+        model_upsert(entity, attribute, value, metadata);
+      } else if (op < 92) {
+        const bool removed_runtime = orchestrator.ForgetFact(entity, attribute);
+        const bool removed_model = model_remove(entity, attribute);
+        Require(removed_runtime == removed_model, "seeded ForgetFact return mismatch against model");
+      } else {
+        orchestrator.Flush();
+        model_commit();
+        const auto actual = sort_facts(orchestrator.RecallFactsByEntityPrefix("user:", 512));
+        const auto expected = expected_facts();
+        require_facts_equal(actual, expected, "seeded flush checkpoint");
+        assert_structured_query_visibility(orchestrator, expected, rng, "seeded flush checkpoint");
+      }
+    }
+
+    orchestrator.Flush();
+    model_commit();
+    const auto final_actual = sort_facts(orchestrator.RecallFactsByEntityPrefix("user:", 512));
+    const auto final_expected = expected_facts();
+    require_facts_equal(final_actual, final_expected, "seeded final flush parity");
+    assert_structured_query_visibility(orchestrator, final_expected, rng, "seeded final flush parity");
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto actual = sort_facts(reopened.RecallFactsByEntityPrefix("user:", 512));
+    const auto expected = expected_facts();
+    require_facts_equal(actual, expected, "seeded reopen parity");
+    assert_structured_query_visibility(reopened, expected, rng, "seeded reopen parity");
+    reopened.Close();
+  }
+}
+
 void ScenarioMalformedStructuredJournalPayloadsAreIgnored(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: malformed structured journal payloads are ignored");
   waxcpp::OrchestratorConfig config{};
@@ -4061,6 +4280,7 @@ int main() {
     const auto path100 = UniquePath();
     const auto path101 = UniquePath();
     const auto path102 = UniquePath();
+    const auto path103 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -4103,6 +4323,7 @@ int main() {
     ScenarioRecallIncludesStructuredMemory(path12);
     ScenarioRecallTextChannelUsesTextSource(path13);
     ScenarioStructuredMemoryRemovePersists(path14);
+    ScenarioStructuredFactSeededFlushReopenModelParity(path103);
     ScenarioMalformedStructuredJournalPayloadsAreIgnored(path85);
     ScenarioStructuredJournalMalformedFuzzKeepsValidFacts(path86);
     ScenarioStructuredJournalRejectsOversizedFieldsAndMetadataCount(path94);
@@ -4176,7 +4397,7 @@ int main() {
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
-        path94, path95, path96, path97, path98, path99, path100, path101, path102,
+        path94, path95, path96, path97, path98, path99, path100, path101, path102, path103,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
