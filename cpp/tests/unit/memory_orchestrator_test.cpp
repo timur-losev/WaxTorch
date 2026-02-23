@@ -53,6 +53,46 @@ std::string BytesToString(const std::vector<std::byte>& bytes) {
   return text;
 }
 
+bool StartsWithStructuredFactMagic(const std::vector<std::byte>& payload) {
+  constexpr std::array<std::byte, 6> kStructuredFactMagic = {
+      std::byte{'W'},
+      std::byte{'A'},
+      std::byte{'X'},
+      std::byte{'S'},
+      std::byte{'M'},
+      std::byte{'1'},
+  };
+  if (payload.size() < kStructuredFactMagic.size() + 1) {
+    return false;
+  }
+  return std::equal(kStructuredFactMagic.begin(), kStructuredFactMagic.end(), payload.begin());
+}
+
+std::vector<std::byte> ReadStructuredUpsertPayloadByOrdinal(const std::filesystem::path& path, std::size_t ordinal) {
+  auto store = waxcpp::WaxStore::Open(path);
+  std::vector<std::vector<std::byte>> structured_payloads{};
+  for (const auto& meta : store.FrameMetas()) {
+    if (meta.status != 0) {
+      continue;
+    }
+    const auto payload = store.FrameContent(meta.id);
+    if (!StartsWithStructuredFactMagic(payload)) {
+      continue;
+    }
+    constexpr std::size_t kOpcodeOffset = 6;
+    constexpr std::uint8_t kUpsertOpcode = 1;
+    if (std::to_integer<std::uint8_t>(payload[kOpcodeOffset]) != kUpsertOpcode) {
+      continue;
+    }
+    structured_payloads.push_back(payload);
+  }
+  store.Close();
+  if (ordinal >= structured_payloads.size()) {
+    throw std::runtime_error("structured upsert payload ordinal out of range");
+  }
+  return structured_payloads[ordinal];
+}
+
 void AppendU32LE(std::vector<std::byte>& out, std::uint32_t value) {
   for (std::size_t i = 0; i < 4; ++i) {
     out.push_back(static_cast<std::byte>((value >> (8U * i)) & 0xFFU));
@@ -3844,6 +3884,64 @@ void ScenarioStructuredFactSeededFlushReopenModelParity(const std::filesystem::p
   }
 }
 
+void ScenarioStructuredFactMetadataSerializationDeterminism(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: structured fact metadata serialization determinism");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  auto iteration_order = [](const waxcpp::Metadata& metadata) {
+    std::vector<std::string> order{};
+    order.reserve(metadata.size());
+    for (const auto& [key, _] : metadata) {
+      order.push_back(key);
+    }
+    return order;
+  };
+
+  waxcpp::Metadata metadata_a{};
+  metadata_a.reserve(17);
+  for (int i = 0; i < 24; ++i) {
+    metadata_a.emplace("k" + std::to_string(i), "v" + std::to_string((i * 7) % 19));
+  }
+
+  waxcpp::Metadata metadata_b{};
+  metadata_b.reserve(257);
+  for (int i = 23; i >= 0; --i) {
+    metadata_b.emplace("k" + std::to_string(i), "v" + std::to_string((i * 7) % 19));
+  }
+
+  auto order_a = iteration_order(metadata_a);
+  auto order_b = iteration_order(metadata_b);
+  if (order_a == order_b) {
+    metadata_b.rehash(997);
+    order_b = iteration_order(metadata_b);
+  }
+  Require(order_a != order_b,
+          "test precondition: metadata iteration orders must differ to validate deterministic serialization");
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberFact("user:determinism", "city", "rome", metadata_a);
+    orchestrator.RememberFact("user:determinism", "city", "rome", metadata_b);
+    orchestrator.Flush();
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    const auto stats = store.Stats();
+    Require(stats.frame_count == 2, "determinism scenario should persist two structured upsert journal frames");
+    store.Close();
+  }
+
+  const auto first_payload = ReadStructuredUpsertPayloadByOrdinal(path, 0);
+  const auto second_payload = ReadStructuredUpsertPayloadByOrdinal(path, 1);
+  Require(first_payload == second_payload,
+          "structured fact payload bytes must be deterministic across metadata insertion-order permutations");
+}
+
 void ScenarioMalformedStructuredJournalPayloadsAreIgnored(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: malformed structured journal payloads are ignored");
   waxcpp::OrchestratorConfig config{};
@@ -4281,6 +4379,7 @@ int main() {
     const auto path101 = UniquePath();
     const auto path102 = UniquePath();
     const auto path103 = UniquePath();
+    const auto path104 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -4324,6 +4423,7 @@ int main() {
     ScenarioRecallTextChannelUsesTextSource(path13);
     ScenarioStructuredMemoryRemovePersists(path14);
     ScenarioStructuredFactSeededFlushReopenModelParity(path103);
+    ScenarioStructuredFactMetadataSerializationDeterminism(path104);
     ScenarioMalformedStructuredJournalPayloadsAreIgnored(path85);
     ScenarioStructuredJournalMalformedFuzzKeepsValidFacts(path86);
     ScenarioStructuredJournalRejectsOversizedFieldsAndMetadataCount(path94);
@@ -4397,7 +4497,7 @@ int main() {
         path66, path67, path68, path69, path70, path71, path72, path73, path74, path75, path76,
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
-        path94, path95, path96, path97, path98, path99, path100, path101, path102, path103,
+        path94, path95, path96, path97, path98, path99, path100, path101, path102, path103, path104,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

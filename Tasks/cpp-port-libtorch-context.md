@@ -179,6 +179,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add structured-memory no-flush close regression (`RememberFact` + `Close` persists via store auto-commit and is rebuilt on reopen)
 - [x] Enforce `Recall(query, embedding)` policy contract (vector must be enabled and embedding dimension must match vector index)
 - [x] Add seeded structured-fact model-parity regression (`128` randomized upsert/remove/flush operations) validating fact-state parity after each flush and after reopen, plus structured-source recall visibility for committed fact values
+- [x] Make structured-fact journal upsert serialization deterministic by sorting metadata key/value pairs before payload encode (`unordered_map` iteration-order independent)
+- [x] Add byte-level structured-fact serialization determinism regression: identical fact content with metadata insertion-order permutations must produce identical persisted `WAXSM1` upsert payload bytes
 - [x] Persist orchestrator-owned embedding records in store (`WAXEM1` internal payload) during `Remember` for deterministic vector rebuild support
 - [x] Rebuild vector index on orchestrator startup using persisted embedding records first, with embedder fallback only for missing/dimension-mismatched entries
 - [x] Add orchestrator regressions for persisted-embedding reopen behavior (no re-embed on reopen; embedding journal payload not surfaced in text recall)
@@ -455,6 +457,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/usearch_vector_engine_test.cpp` | Added staged-vector unit scenarios for commit visibility, rollback behavior, and ordered mutation application | Codex |
 | `cpp/tests/unit/usearch_vector_engine_test.cpp` | Added seeded vector fuzz/property regression (`256` iterations) validating search result invariance under insertion-order permutations plus remove/order/tie-break invariants | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added seeded structured-fact model-parity regression (`128` operations) asserting flush/reopen fact-state parity (`id/version/value/metadata`) and structured-source recall visibility for committed fact values | Codex |
+| `cpp/src/orchestrator/memory_orchestrator.cpp` | Hardened structured-fact upsert journal encoding to sort metadata pairs lexicographically before serialization, removing `unordered_map` iteration-order nondeterminism from `WAXSM1` payload bytes | Codex |
+| `cpp/tests/unit/memory_orchestrator_test.cpp` | Added byte-level determinism regression: two `RememberFact` calls with same logical metadata but different insertion/rehash orders must persist identical `WAXSM1` upsert payload bytes | Codex |
 | `cpp/src/orchestrator/memory_orchestrator.cpp` | Switched vector recall channel to committed vector index hits; constructor rebuilds vector index from committed store with embedder batch support | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Updated vector recall expectations for committed index path and added flush-gating scenario for vector visibility | Codex |
 | `cpp/tests/unit/memory_orchestrator_test.cpp` | Added vector reopen/close lifecycle scenarios validating committed index rebuild and no re-embed on explicit vector recall | Codex |

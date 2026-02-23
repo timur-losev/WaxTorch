@@ -179,7 +179,23 @@ std::vector<std::byte> BuildStructuredFactUpsertPayload(const std::string& entit
     throw std::runtime_error("structured fact metadata count exceeds uint32");
   }
   AppendU32LE(out, static_cast<std::uint32_t>(metadata.size()));
-  for (const auto& [key, val] : metadata) {
+  std::vector<const Metadata::value_type*> sorted_metadata_entries{};
+  sorted_metadata_entries.reserve(metadata.size());
+  for (const auto& entry : metadata) {
+    sorted_metadata_entries.push_back(&entry);
+  }
+  std::sort(sorted_metadata_entries.begin(),
+            sorted_metadata_entries.end(),
+            [](const Metadata::value_type* lhs, const Metadata::value_type* rhs) {
+              if (lhs->first != rhs->first) {
+                return lhs->first < rhs->first;
+              }
+              return lhs->second < rhs->second;
+            });
+
+  for (const auto* entry : sorted_metadata_entries) {
+    const auto& key = entry->first;
+    const auto& val = entry->second;
     AppendString(out, key);
     AppendString(out, val);
   }
