@@ -665,6 +665,10 @@ PersistedEmbeddingSnapshot LoadPersistedEmbeddingsFromStore(WaxStore& store) {
     if (!embedding_record.has_value()) {
       continue;
     }
+    if (!AllFinite(embedding_record->embedding)) {
+      // Keep previously loaded valid record for this frame_id if a later corrupted record appears.
+      continue;
+    }
     if (!snapshot.dimensions.has_value() && !embedding_record->embedding.empty()) {
       snapshot.dimensions = static_cast<int>(embedding_record->embedding.size());
     }

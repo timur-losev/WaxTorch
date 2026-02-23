@@ -1,7 +1,7 @@
 # Context: C++ Core RAG Port (LibTorch)
 
 **Created**: 2026-02-18
-**Last Updated**: 2026-02-22
+**Last Updated**: 2026-02-23
 **Current Phase**: M7-M9 baseline complete, M11 hardening in progress
 **Next Agent**: wax-rag-specialist
 
@@ -251,6 +251,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add deterministic malformed-structured-journal fuzz replay regression (`128` mutated invalid `WAXSM1` payloads) ensuring reopen resilience and preservation of previously committed valid facts
 - [x] Add malformed `WAXEM2` persisted-embedding identity-length regression: invalid identity payloads are skipped on reopen and trigger deterministic single-frame re-embed fallback
 - [x] Add deterministic malformed persisted-embedding journal fuzz regression (`128` noisy `WAXEM1/WAXEM2` records with non-target frame IDs) ensuring valid target persisted vectors remain reusable without re-embed on reopen
+- [x] Harden persisted-embedding replay merge semantics: ignore later non-finite `WAXEM*` overrides during snapshot load so earlier valid vectors for the same `frame_id` stay reusable; add reopen regression coverage
 - [x] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
