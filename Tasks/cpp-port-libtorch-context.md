@@ -259,6 +259,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Harden structured-fact replay parser limits: cap decoded field length (`<=4 MiB`) and metadata pair count (`<=16384`) to avoid oversized `WAXSM1` payload abuse, with reopen regression preserving valid facts
 - [x] Harden persisted-embedding replay against empty vectors: ignore `WAXEM*` records with `count=0` so late malformed empties cannot override earlier valid persisted embeddings for the same `frame_id`
 - [x] Harden structured-fact replay metadata parser against duplicate keys: malformed `WAXSM1` upsert payloads with duplicate metadata keys are rejected and ignored on reopen
+- [x] Harden write-side embedding identity serialization: oversized identity tags now fall back to `WAXEM1` (no identity), preventing malformed `WAXEM2` emission; add reopen regression ensuring persisted vectors are still reused without re-embed
 - [x] Implement M3+ functionality (WAL/store write/search/rag parity)
 
 ## Modified Files
