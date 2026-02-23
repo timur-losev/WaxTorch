@@ -50,6 +50,16 @@ std::string ToAsciiLower(std::string_view text) {
   return out;
 }
 
+bool HasAsciiControlChars(std::string_view text) {
+  for (const char ch : text) {
+    const auto u = static_cast<unsigned char>(ch);
+    if (u < 0x20U || u == 0x7FU) {
+      return true;
+    }
+  }
+  return false;
+}
+
 inline constexpr std::array<std::byte, 6> kStructuredFactMagic = {
     std::byte{'W'},
     std::byte{'A'},
@@ -388,6 +398,9 @@ std::optional<EmbeddingRecord> ParseEmbeddingRecordPayload(const std::vector<std
     tag.reserve(*identity_len);
     for (std::size_t i = 0; i < *identity_len; ++i) {
       tag.push_back(static_cast<char>(std::to_integer<std::uint8_t>(payload[cursor + i])));
+    }
+    if (HasAsciiControlChars(tag)) {
+      return std::nullopt;
     }
     identity_tag = std::move(tag);
     cursor += *identity_len;
