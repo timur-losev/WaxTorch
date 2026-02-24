@@ -337,6 +337,17 @@ bool StartsWithMagic(const std::vector<std::byte>& bytes, const char* magic, std
   return true;
 }
 
+bool ContextHasSource(const waxcpp::RAGContext& context, waxcpp::SearchSource source) {
+  for (const auto& item : context.items) {
+    for (const auto item_source : item.sources) {
+      if (item_source == source) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 void CleanupPath(const std::filesystem::path& path) {
   std::error_code ec;
   std::filesystem::remove(path, ec);
@@ -3570,17 +3581,6 @@ void ScenarioHybridVectorIndexCommitFailureRecoversBothChannelsAndRetryNoOp(cons
   config.enable_vector_search = true;
   config.rag.search_mode = {waxcpp::SearchModeKind::kHybrid, 0.5F};
 
-  auto has_source = [](const waxcpp::RAGContext& context, waxcpp::SearchSource source) {
-    for (const auto& item : context.items) {
-      for (const auto item_source : item.sources) {
-        if (item_source == source) {
-          return true;
-        }
-      }
-    }
-    return false;
-  };
-
   auto embedder = std::make_shared<CountingBatchEmbedder>();
   {
     waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
@@ -3602,9 +3602,9 @@ void ScenarioHybridVectorIndexCommitFailureRecoversBothChannelsAndRetryNoOp(cons
 
     const auto hybrid_after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
     Require(!hybrid_after_failure.items.empty(), "failed hybrid flush should rebuild and keep hybrid recall visible");
-    Require(has_source(hybrid_after_failure, waxcpp::SearchSource::kText),
+    Require(ContextHasSource(hybrid_after_failure, waxcpp::SearchSource::kText),
             "failed hybrid flush should keep text source visible");
-    Require(has_source(hybrid_after_failure, waxcpp::SearchSource::kVector),
+    Require(ContextHasSource(hybrid_after_failure, waxcpp::SearchSource::kVector),
             "failed hybrid flush should keep vector source visible");
     Require(embedder->batch_calls() == 0, "hybrid rebuild should reuse persisted embeddings without EmbedBatch");
     Require(embedder->embed_calls() == 0, "hybrid rebuild should reuse persisted embeddings without Embed");
@@ -3612,9 +3612,9 @@ void ScenarioHybridVectorIndexCommitFailureRecoversBothChannelsAndRetryNoOp(cons
     orchestrator.Flush();  // retry no-op path after externally visible commit
     const auto hybrid_after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
     Require(!hybrid_after_retry.items.empty(), "retry no-op should preserve hybrid visibility");
-    Require(has_source(hybrid_after_retry, waxcpp::SearchSource::kText),
+    Require(ContextHasSource(hybrid_after_retry, waxcpp::SearchSource::kText),
             "retry no-op should preserve text source");
-    Require(has_source(hybrid_after_retry, waxcpp::SearchSource::kVector),
+    Require(ContextHasSource(hybrid_after_retry, waxcpp::SearchSource::kVector),
             "retry no-op should preserve vector source");
     Require(embedder->batch_calls() == 0, "retry no-op should not trigger EmbedBatch");
     Require(embedder->embed_calls() == 0, "retry no-op should not trigger Embed");
@@ -3635,10 +3635,142 @@ void ScenarioHybridVectorIndexCommitFailureRecoversBothChannelsAndRetryNoOp(cons
     waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
     const auto hybrid_context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
     Require(!hybrid_context.items.empty(), "reopen should preserve hybrid recall visibility for retry no-op path");
-    Require(has_source(hybrid_context, waxcpp::SearchSource::kText),
+    Require(ContextHasSource(hybrid_context, waxcpp::SearchSource::kText),
             "reopen should preserve text source for hybrid retry no-op");
-    Require(has_source(hybrid_context, waxcpp::SearchSource::kVector),
+    Require(ContextHasSource(hybrid_context, waxcpp::SearchSource::kVector),
             "reopen should preserve vector source for hybrid retry no-op");
+    Require(reopen_embedder->batch_calls() == 0, "reopen should reuse persisted embeddings without EmbedBatch");
+    Require(reopen_embedder->embed_calls() == 0, "reopen should reuse persisted embeddings without Embed");
+    reopened.Close();
+  }
+}
+
+void ScenarioFlushCrashWindowTocOnlyRetryFlushPublishesOnSecondAttemptHybrid(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: hybrid flush crash-window TOC-only retry flush publishes on second attempt");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kHybrid, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("flush step1 retry hybrid apple", {});
+    embedder->Reset();
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(1);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw on injected hybrid crash-window step 1");
+
+    const auto after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(after_failure.items.empty(), "TOC-only hybrid crash-window should keep staged mutations hidden");
+    Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
+    Require(embedder->embed_calls() == 0, "explicit embedding recall should not trigger Embed");
+
+    orchestrator.Flush();
+    const auto after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!after_retry.items.empty(), "second flush attempt should publish hybrid mutations after TOC-only failure");
+    Require(ContextHasSource(after_retry, waxcpp::SearchSource::kText),
+            "hybrid retry publish should include text source");
+    Require(ContextHasSource(after_retry, waxcpp::SearchSource::kVector),
+            "hybrid retry publish should include vector source");
+    Require(embedder->batch_calls() == 0, "retry path should not trigger EmbedBatch");
+    Require(embedder->embed_calls() == 0, "retry path should not trigger Embed");
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    const auto stats = store.Stats();
+    Require(stats.frame_count == 2,
+            "hybrid TOC-only retry path should persist exactly one user frame plus one embedding record");
+    Require(stats.pending_frames == 0, "hybrid TOC-only retry path should leave zero pending WAL frames");
+    store.Close();
+  }
+
+  {
+    auto reopen_embedder = std::make_shared<CountingBatchEmbedder>();
+    waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
+    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "reopen should preserve hybrid recall after TOC-only retry publish");
+    Require(ContextHasSource(context, waxcpp::SearchSource::kText),
+            "reopen should preserve hybrid text source after TOC-only retry publish");
+    Require(ContextHasSource(context, waxcpp::SearchSource::kVector),
+            "reopen should preserve hybrid vector source after TOC-only retry publish");
+    Require(reopen_embedder->batch_calls() == 0, "reopen should reuse persisted embeddings without EmbedBatch");
+    Require(reopen_embedder->embed_calls() == 0, "reopen should reuse persisted embeddings without Embed");
+    reopened.Close();
+  }
+}
+
+void ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOpHybrid(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: hybrid flush crash-window after footer publish retry flush is no-op");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kHybrid, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("flush step2 retry hybrid apple", {});
+    embedder->Reset();
+
+    bool flush_threw = false;
+    waxcpp::core::testing::SetCommitFailStep(2);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::core::testing::ClearCommitFailStep();
+    Require(flush_threw, "flush should throw on injected hybrid crash-window step 2");
+
+    const auto after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!after_failure.items.empty(), "footer-published hybrid crash-window should expose committed state");
+    Require(ContextHasSource(after_failure, waxcpp::SearchSource::kText),
+            "footer-published hybrid crash-window should include text source");
+    Require(ContextHasSource(after_failure, waxcpp::SearchSource::kVector),
+            "footer-published hybrid crash-window should include vector source");
+    Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
+    Require(embedder->embed_calls() == 0, "explicit embedding recall should not trigger Embed");
+
+    orchestrator.Flush();
+    const auto after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!after_retry.items.empty(), "retry flush after hybrid externally visible commit should preserve visibility");
+    Require(ContextHasSource(after_retry, waxcpp::SearchSource::kText),
+            "hybrid retry no-op should preserve text source");
+    Require(ContextHasSource(after_retry, waxcpp::SearchSource::kVector),
+            "hybrid retry no-op should preserve vector source");
+    Require(embedder->batch_calls() == 0, "retry no-op should not trigger EmbedBatch");
+    Require(embedder->embed_calls() == 0, "retry no-op should not trigger Embed");
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    const auto stats = store.Stats();
+    Require(stats.frame_count == 2,
+            "hybrid footer retry no-op path should persist exactly one user frame plus one embedding record");
+    Require(stats.pending_frames == 0, "hybrid footer retry no-op path should leave zero pending WAL frames");
+    store.Close();
+  }
+
+  {
+    auto reopen_embedder = std::make_shared<CountingBatchEmbedder>();
+    waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
+    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "reopen should preserve hybrid recall after footer retry no-op");
+    Require(ContextHasSource(context, waxcpp::SearchSource::kText),
+            "reopen should preserve hybrid text source after footer retry no-op");
+    Require(ContextHasSource(context, waxcpp::SearchSource::kVector),
+            "reopen should preserve hybrid vector source after footer retry no-op");
     Require(reopen_embedder->batch_calls() == 0, "reopen should reuse persisted embeddings without EmbedBatch");
     Require(reopen_embedder->embed_calls() == 0, "reopen should reuse persisted embeddings without Embed");
     reopened.Close();
@@ -4787,6 +4919,8 @@ int main() {
     const auto path108 = UniquePath();
     const auto path109 = UniquePath();
     const auto path110 = UniquePath();
+    const auto path111 = UniquePath();
+    const auto path112 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -4875,6 +5009,8 @@ int main() {
     ScenarioFlushCrashWindowHeaderBPublishRetryFlushIsNoOpVector(path62);
     ScenarioFlushCrashWindowTocOnlyRetryFlushPublishesOnSecondAttempt(path63);
     ScenarioFlushCrashWindowTocOnlyRetryFlushPublishesOnSecondAttemptVector(path64);
+    ScenarioFlushCrashWindowTocOnlyRetryFlushPublishesOnSecondAttemptHybrid(path111);
+    ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOpHybrid(path112);
     ScenarioFlushCrashWindowStructuredFactRebuildsStep2(path65);
     ScenarioFlushCrashWindowStructuredFactRebuildsStep3(path66);
     ScenarioFlushCrashWindowStructuredFactRebuildsStep4(path67);
@@ -4911,7 +5047,7 @@ int main() {
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
         path94, path95, path96, path97, path98, path99, path100, path101, path102, path103, path104, path105,
-        path106, path107, path108, path109, path110,
+        path106, path107, path108, path109, path110, path111, path112,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
