@@ -73,7 +73,7 @@ Libtorch manifest checksum gate test (requires initialized `cpp/third_party/libt
 ```bash
 export WAXCPP_REQUIRE_LIBTORCH_MANIFEST=1
 export WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256=1
-export WAXCPP_LIBTORCH_MANIFEST=/abs/path/to/cpp/third_party/libtorch-dist/manifest/libtorch-manifest.json
+export WAXCPP_LIBTORCH_MANIFEST=/abs/path/to/cpp/manifest/libtorch-manifest.json
 export WAXCPP_LIBTORCH_DIST_ROOT=/abs/path/to/cpp/third_party/libtorch-dist
 ctest --test-dir cpp/build --output-on-failure -R waxcpp_libtorch_manifest_gate_test
 ```

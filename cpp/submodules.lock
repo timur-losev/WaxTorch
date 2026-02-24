@@ -28,10 +28,11 @@ submodules:
 
   - name: libtorch-dist
     path: cpp/third_party/libtorch-dist
-    remote: https://github.com/christopherkarani/libtorch-dist.git
-    pinned_commit: "<PIN_REQUIRED>"
+    remote: https://github.com/Kautenja/libtorch-binaries.git
+    pinned_commit: "84cc65a404c9c7803a8b612411a0e56ad3a1666d"
     verify_checksum: true
-    required_manifest: manifest/libtorch-manifest.json
+    required_manifest: ../../manifest/libtorch-manifest.json
     notes:
       - "Practical hybrid mode: pinned artifact manifest + SHA256 validation"
+      - "Manifest lives in cpp/manifest and references artifact files inside libtorch-dist submodule root"
 

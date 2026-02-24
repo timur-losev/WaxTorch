@@ -173,10 +173,14 @@ std::optional<std::filesystem::path> ResolveLibTorchManifestPath(bool* override_
 
   const auto cwd = std::filesystem::current_path();
   const std::vector<std::filesystem::path> candidates = {
+      cwd / "manifest" / "libtorch-manifest.json",
+      cwd / ".." / "manifest" / "libtorch-manifest.json",
+      cwd / ".." / ".." / "manifest" / "libtorch-manifest.json",
       cwd / "third_party" / "libtorch-dist" / "manifest" / "libtorch-manifest.json",
       cwd / ".." / "third_party" / "libtorch-dist" / "manifest" / "libtorch-manifest.json",
       cwd / ".." / ".." / "third_party" / "libtorch-dist" / "manifest" / "libtorch-manifest.json",
       cwd / "cpp" / "third_party" / "libtorch-dist" / "manifest" / "libtorch-manifest.json",
+      cwd / "cpp" / "manifest" / "libtorch-manifest.json",
   };
   for (const auto& candidate : candidates) {
     if (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate)) {

@@ -13,6 +13,7 @@ on:
       - "cpp/submodules.lock"
       - "cpp/scripts/verify_submodules.py"
       - "cpp/third_party/libtorch-dist/**"
+      - "cpp/manifest/libtorch-manifest.json"
       - ".github/workflows/dependency-integrity.yml"
   push:
     branches: [main]
@@ -21,6 +22,7 @@ on:
       - "cpp/submodules.lock"
       - "cpp/scripts/verify_submodules.py"
       - "cpp/third_party/libtorch-dist/**"
+      - "cpp/manifest/libtorch-manifest.json"
       - ".github/workflows/dependency-integrity.yml"
 
 jobs:
@@ -69,7 +71,7 @@ jobs:
           WAXCPP_TEST_LOG: "1"
           WAXCPP_REQUIRE_LIBTORCH_MANIFEST: "1"
           WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256: "1"
-          WAXCPP_LIBTORCH_MANIFEST: ${{ github.workspace }}/cpp/third_party/libtorch-dist/manifest/libtorch-manifest.json
+          WAXCPP_LIBTORCH_MANIFEST: ${{ github.workspace }}/cpp/manifest/libtorch-manifest.json
           WAXCPP_LIBTORCH_DIST_ROOT: ${{ github.workspace }}/cpp/third_party/libtorch-dist
           WAXCPP_TORCH_RUNTIME: ${{ matrix.torch_runtime }}
           WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE: ${{ matrix.cuda_available }}
