@@ -1,7 +1,7 @@
 # Context: C++ Core RAG Port (LibTorch)
 
 **Created**: 2026-02-18
-**Last Updated**: 2026-02-23
+**Last Updated**: 2026-02-24
 **Current Phase**: M7-M9 baseline complete, M11 hardening in progress
 **Next Agent**: wax-rag-specialist
 
@@ -102,6 +102,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Make `FTS5SearchEngine` tokenizer locale-independent (strict ASCII alnum + ASCII lowercase) and add regression for non-ASCII separator byte handling
 - [x] Add deterministic seeded fuzz regression for `FTS5SearchEngine` ensuring permutation-invariant search output across index insertion order, plus ranking/top_k invariants
 - [x] Add injected `FTS5SearchEngine::CommitStaged` failure regression to enforce two-phase behavior (no partial publish, pending mutations preserved for retry)
+- [x] Add precise `FTS5SearchEngine` fail-on-call test hook (`SetCommitFailOnCall`) to target deterministic nth-commit failures
 - [x] Add writer-lease baseline for `WaxStore::Open/Create` via lock-directory sentinel (`.writer.lock`) to block concurrent writers on same store path
 - [x] Add integration coverage for writer-lease exclusion and post-close reacquire path
 - [x] Replace `USearchVectorEngine` stub with deterministic in-memory cosine ranking baseline (`Add/AddBatch/Remove/Search`)
@@ -118,6 +119,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Wire orchestrator recall path to mode-aware unified search with text/vector candidate channel generation from store + embedder
 - [x] Add embedding memoization baseline in orchestrator (`frame_id -> embedding` cache, populated on remember and reused in vector recall path)
 - [x] Add orchestrator memoization test with counting embedder (repeated recalls reuse cached doc embeddings)
+- [x] Add orchestrator regression for structured-text commit failure (`FailOnCall(2)`) to verify in-process rebuild restores committed text + structured-memory visibility
+- [x] Add orchestrator retry-no-op flush regressions after externally-visible commit for text/vector/structured-text index failpoint paths (no duplicate writes, stable reopen parity)
+- [x] Add hybrid failpoint regression (`text+vector`) ensuring vector-index commit failure rebuild preserves both channels and subsequent retry `Flush()` remains no-op
 - [x] Add token-budget enforcement in `BuildFastRAGContext` (`snippet_max_tokens` and `max_context_tokens` with deterministic partial truncation)
 - [x] Add batch embedding path in orchestrator vector recall (`BatchEmbeddingProvider::EmbedBatch` for missing document embeddings)
 - [x] Add unit coverage for token-budget clamp and batch-provider vector recall behavior

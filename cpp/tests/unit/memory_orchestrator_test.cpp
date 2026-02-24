@@ -3563,6 +3563,88 @@ void ScenarioVectorIndexCommitFailureRetryFlushIsNoOp(const std::filesystem::pat
   }
 }
 
+void ScenarioHybridVectorIndexCommitFailureRecoversBothChannelsAndRetryNoOp(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: hybrid vector index commit failure recovers both channels and retry flush is no-op");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kHybrid, 0.5F};
+
+  auto has_source = [](const waxcpp::RAGContext& context, waxcpp::SearchSource source) {
+    for (const auto& item : context.items) {
+      for (const auto item_source : item.sources) {
+        if (item_source == source) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("hybrid retry apple", {});
+    embedder->Reset();
+
+    bool flush_threw = false;
+    waxcpp::vector::testing::SetCommitFailCountdown(1);  // fail on vector_index_->CommitStaged()
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::vector::testing::ClearCommitFailCountdown();
+    Require(flush_threw, "flush should throw when vector index commit failpoint is set");
+
+    Require(embedder->batch_calls() == 0, "hybrid rebuild should reuse persisted embeddings without EmbedBatch");
+    Require(embedder->embed_calls() == 0, "hybrid rebuild should reuse persisted embeddings without Embed");
+
+    const auto hybrid_after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!hybrid_after_failure.items.empty(), "failed hybrid flush should rebuild and keep hybrid recall visible");
+    Require(has_source(hybrid_after_failure, waxcpp::SearchSource::kText),
+            "failed hybrid flush should keep text source visible");
+    Require(has_source(hybrid_after_failure, waxcpp::SearchSource::kVector),
+            "failed hybrid flush should keep vector source visible");
+    Require(embedder->batch_calls() == 0, "hybrid rebuild should reuse persisted embeddings without EmbedBatch");
+    Require(embedder->embed_calls() == 0, "hybrid rebuild should reuse persisted embeddings without Embed");
+
+    orchestrator.Flush();  // retry no-op path after externally visible commit
+    const auto hybrid_after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!hybrid_after_retry.items.empty(), "retry no-op should preserve hybrid visibility");
+    Require(has_source(hybrid_after_retry, waxcpp::SearchSource::kText),
+            "retry no-op should preserve text source");
+    Require(has_source(hybrid_after_retry, waxcpp::SearchSource::kVector),
+            "retry no-op should preserve vector source");
+    Require(embedder->batch_calls() == 0, "retry no-op should not trigger EmbedBatch");
+    Require(embedder->embed_calls() == 0, "retry no-op should not trigger Embed");
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    const auto stats = store.Stats();
+    Require(stats.frame_count == 2,
+            "hybrid vector retry no-op path should persist exactly one user frame plus one embedding record");
+    Require(stats.pending_frames == 0, "hybrid vector retry no-op path should leave zero pending WAL frames");
+    store.Close();
+  }
+
+  {
+    auto reopen_embedder = std::make_shared<CountingBatchEmbedder>();
+    waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
+    const auto hybrid_context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!hybrid_context.items.empty(), "reopen should preserve hybrid recall visibility for retry no-op path");
+    Require(has_source(hybrid_context, waxcpp::SearchSource::kText),
+            "reopen should preserve text source for hybrid retry no-op");
+    Require(has_source(hybrid_context, waxcpp::SearchSource::kVector),
+            "reopen should preserve vector source for hybrid retry no-op");
+    Require(reopen_embedder->batch_calls() == 0, "reopen should reuse persisted embeddings without EmbedBatch");
+    Require(reopen_embedder->embed_calls() == 0, "reopen should reuse persisted embeddings without Embed");
+    reopened.Close();
+  }
+}
+
 void ScenarioStructuredTextIndexCommitFailureRecoversFromCommittedStore(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: structured text index commit failure recovers from committed store");
   waxcpp::OrchestratorConfig config{};
@@ -4704,6 +4786,7 @@ int main() {
     const auto path107 = UniquePath();
     const auto path108 = UniquePath();
     const auto path109 = UniquePath();
+    const auto path110 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -4806,6 +4889,7 @@ int main() {
     ScenarioTextIndexCommitFailureRetryFlushIsNoOp(path109);
     ScenarioVectorIndexCommitFailureRecoversFromCommittedStore(path34);
     ScenarioVectorIndexCommitFailureRetryFlushIsNoOp(path108);
+    ScenarioHybridVectorIndexCommitFailureRecoversBothChannelsAndRetryNoOp(path110);
     ScenarioStructuredTextIndexCommitFailureRecoversFromCommittedStore(path106);
     ScenarioStructuredTextIndexCommitFailureRetryFlushIsNoOp(path107);
     ScenarioUseAfterCloseThrows(path26);
@@ -4827,7 +4911,7 @@ int main() {
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
         path94, path95, path96, path97, path98, path99, path100, path101, path102, path103, path104, path105,
-        path106, path107, path108, path109,
+        path106, path107, path108, path109, path110,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
