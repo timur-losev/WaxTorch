@@ -84,15 +84,38 @@ struct ChunkingStrategy {
   int overlap_tokens = 40;
 };
 
+/// Assembly mode for FastRAG context builder.
+enum class FastRAGMode {
+  kFast,          // Expansion + snippets.
+  kDenseCached,   // Expansion + surrogates + snippets.
+};
+
 struct FastRAGConfig {
+  FastRAGMode mode = FastRAGMode::kFast;
+
   int max_context_tokens = 1500;
   int expansion_max_tokens = 600;
+  int expansion_max_bytes = 2 * 1024 * 1024;
   int snippet_max_tokens = 200;
   int max_snippets = 24;
+  int max_surrogates = 8;
+  int surrogate_max_tokens = 60;
   int search_top_k = 24;
   SearchMode search_mode{SearchModeKind::kHybrid, 0.5f};
   int rrf_k = 60;
   int preview_max_bytes = 512;
+
+  /// Enable deterministic query-aware reranking for context item ordering.
+  bool enable_answer_focused_ranking = true;
+  int answer_rerank_window = 12;
+  float answer_distractor_penalty = 0.30f;
+
+  /// Enable query-aware tier selection (boosts tier for specific queries).
+  bool enable_query_aware_tier_selection = true;
+
+  /// Optional fixed "now" timestamp for deterministic tier selection.
+  /// When nullopt, uses wall clock time.
+  std::optional<std::int64_t> deterministic_now_ms;
 };
 
 struct OrchestratorConfig {

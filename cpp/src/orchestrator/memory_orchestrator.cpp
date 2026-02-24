@@ -1081,10 +1081,12 @@ void RebuildRuntimeStateFromStore(WaxStore& store,
 
 MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
                                        const OrchestratorConfig& config,
-                                       std::shared_ptr<EmbeddingProvider> embedder)
+                                       std::shared_ptr<EmbeddingProvider> embedder,
+                                       const TokenCounter* token_counter)
     : config_(config),
       store_(std::filesystem::exists(path) ? WaxStore::Open(path) : WaxStore::Create(path)),
-      embedder_(std::move(embedder)) {
+      embedder_(std::move(embedder)),
+      token_counter_(token_counter) {
   if (config_.rag.search_mode.kind == SearchModeKind::kTextOnly && !config_.enable_text_search) {
     throw std::runtime_error("text-only search mode requires text search to be enabled");
   }
@@ -1124,7 +1126,11 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
   std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
   EnsureEmbedderRequiredForRemember(config_, embedder_);
-  const auto chunks = ChunkContent(content, config_.chunking.target_tokens, config_.chunking.overlap_tokens);
+  // Use BPE-aware chunking when a loaded TokenCounter is available;
+  // otherwise fall back to whitespace-based chunking for backward compatibility.
+  const auto chunks = ChunkContentTokenAware(token_counter_, content,
+                                             config_.chunking.target_tokens,
+                                             config_.chunking.overlap_tokens);
 
   std::optional<std::vector<std::vector<float>>> chunk_embeddings{};
   const auto embedder_identity_tag =

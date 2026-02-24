@@ -19,4 +19,28 @@ SearchResponse UnifiedSearchAdaptive(const SearchRequest& request,
 
 RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchResponse& response);
 
+/// Shared text-matching helpers for reranking (used by both UnifiedSearch
+/// and FastRAGContextBuilder rerankers). Stateless predicates only.
+namespace RerankingHelpers {
+
+/// True when text contains language indicating a tentative / unconfirmed date.
+bool ContainsTentativeLaunchLanguage(std::string_view text);
+
+/// True when text matches "moved/move to <Capitalized>" pattern.
+bool ContainsMovedToLocationPattern(std::string_view text);
+
+/// True when text looks like a distractor result.
+bool LooksDistractorLike(std::string_view text);
+
+}  // namespace RerankingHelpers
+
+/// Intent-aware reranking: boosts/penalizes search results based on
+/// query intents (location, date, ownership) and entity/date/phrase overlap.
+/// Only activates when target intents AND disambiguation signals are present.
+std::vector<SearchResult> IntentAwareRerank(
+    const std::vector<SearchResult>& results,
+    std::string_view query,
+    int max_window,
+    const QueryAnalyzer& analyzer = QueryAnalyzer());
+
 }  // namespace waxcpp

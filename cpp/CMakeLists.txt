@@ -19,8 +19,10 @@ set(WAXCPP_LIBTORCH_ROOT "" CACHE PATH "Optional path to an unpacked LibTorch di
 set(WAXCPP_TORCH_RUNTIME_DEFINE 0)
 
 set(WAXCPP_PUBLIC_HEADERS
+  include/waxcpp/access_stats.hpp
   include/waxcpp/embeddings.hpp
   include/waxcpp/fts5_search_engine.hpp
+  include/waxcpp/importance_scorer.hpp
   include/waxcpp/memory_orchestrator.hpp
   include/waxcpp/mv2v_format.hpp
   include/waxcpp/pch.hpp
@@ -28,6 +30,7 @@ set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/search.hpp
   include/waxcpp/maintenance.hpp
   include/waxcpp/surrogate_generator.hpp
+  include/waxcpp/tier_selector.hpp
   include/waxcpp/token_counter.hpp
   include/waxcpp/structured_memory.hpp
   include/waxcpp/types.hpp
@@ -44,10 +47,13 @@ add_library(waxcpp STATIC
   src/text/structured_memory_store.cpp
   src/vector/usearch_vector_engine.cpp
   src/vector/mv2v_format.cpp
+  src/rag/access_stats.cpp
+  src/rag/importance_scorer.cpp
   src/rag/maintenance.cpp
   src/rag/query_analyzer.cpp
   src/rag/search.cpp
   src/rag/surrogate_generator.cpp
+  src/rag/tier_selector.cpp
   src/rag/token_counter.cpp
   src/rag/embeddings.cpp
   src/orchestrator/memory_orchestrator.cpp
@@ -342,6 +348,36 @@ if (WAXCPP_BUILD_TESTS)
   endif()
   target_precompile_headers(waxcpp_maintenance_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_maintenance_test COMMAND waxcpp_maintenance_test)
+
+  add_executable(waxcpp_access_stats_test tests/unit/access_stats_test.cpp)
+  target_link_libraries(waxcpp_access_stats_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_access_stats_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_access_stats_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_access_stats_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_access_stats_test COMMAND waxcpp_access_stats_test)
+
+  add_executable(waxcpp_importance_scorer_test tests/unit/importance_scorer_test.cpp)
+  target_link_libraries(waxcpp_importance_scorer_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_importance_scorer_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_importance_scorer_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_importance_scorer_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_importance_scorer_test COMMAND waxcpp_importance_scorer_test)
+
+  add_executable(waxcpp_tier_selector_test tests/unit/tier_selector_test.cpp)
+  target_link_libraries(waxcpp_tier_selector_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_tier_selector_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_tier_selector_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_tier_selector_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_tier_selector_test COMMAND waxcpp_tier_selector_test)
 
   add_executable(waxcpp_mv2s_parity_test tests/parity/mv2s_fixture_parity_test.cpp)
   target_link_libraries(waxcpp_mv2s_parity_test PRIVATE waxcpp)

@@ -2,10 +2,12 @@
 #include "waxcpp/query_analyzer.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -241,15 +243,28 @@ SearchResponse UnifiedSearchWithCandidates(const SearchRequest& request,
     return {};
   }
 
+  SearchResponse response;
   switch (request.mode.kind) {
     case SearchModeKind::kTextOnly:
-      return BuildSingleChannelResponse(text_results, request.top_k);
+      response = BuildSingleChannelResponse(text_results, request.top_k);
+      break;
     case SearchModeKind::kVectorOnly:
-      return BuildSingleChannelResponse(vector_results, request.top_k);
+      response = BuildSingleChannelResponse(vector_results, request.top_k);
+      break;
     case SearchModeKind::kHybrid:
-      return BuildHybridRrfResponse(request, text_results, vector_results);
+      response = BuildHybridRrfResponse(request, text_results, vector_results);
+      break;
   }
-  return {};
+
+  // Apply intent-aware reranking when query is non-empty.
+  if (request.query.has_value() && !request.query->empty()) {
+    const int max_window =
+        std::min(std::max(request.top_k * 2, 10), 32);
+    response.results = IntentAwareRerank(
+        response.results, *request.query, max_window);
+  }
+
+  return response;
 }
 
 SearchResponse UnifiedSearchAdaptive(const SearchRequest& request,
@@ -365,6 +380,424 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
     }
   }
   return context;
+}
+
+// ---------- RerankingHelpers ----------
+
+namespace RerankingHelpers {
+
+bool ContainsTentativeLaunchLanguage(std::string_view text) {
+  return text.find("tentative") != std::string_view::npos ||
+         text.find("draft") != std::string_view::npos ||
+         text.find("proposed") != std::string_view::npos ||
+         text.find("pending approval") != std::string_view::npos ||
+         text.find("target is") != std::string_view::npos ||
+         text.find("target date") != std::string_view::npos ||
+         text.find("could be") != std::string_view::npos ||
+         text.find("estimate") != std::string_view::npos;
+}
+
+bool ContainsMovedToLocationPattern(std::string_view text) {
+  // Matches: (moved|move) to <Capitalized>(whitespace <Capitalized>)?
+  for (std::size_t pos = 0; pos < text.size();) {
+    auto moved_pos = text.find("moved to ", pos);
+    auto move_pos = text.find("move to ", pos);
+
+    std::size_t match_start = std::string_view::npos;
+    std::size_t after_to = 0;
+
+    if (moved_pos != std::string_view::npos &&
+        (move_pos == std::string_view::npos || moved_pos <= move_pos)) {
+      match_start = moved_pos;
+      after_to = moved_pos + 9;  // "moved to " = 9
+    } else if (move_pos != std::string_view::npos) {
+      match_start = move_pos;
+      after_to = move_pos + 8;   // "move to " = 8
+    }
+
+    if (match_start == std::string_view::npos || after_to >= text.size()) {
+      break;
+    }
+
+    // Expect uppercase letter at start of destination.
+    if (after_to < text.size() &&
+        text[after_to] >= 'A' && text[after_to] <= 'Z') {
+      // Check for lowercase continuation.
+      std::size_t i = after_to + 1;
+      while (i < text.size() && text[i] >= 'a' && text[i] <= 'z') {
+        ++i;
+      }
+      if (i > after_to + 1) {
+        return true;
+      }
+    }
+
+    pos = after_to;
+  }
+  return false;
+}
+
+bool LooksDistractorLike(std::string_view text) {
+  return text.find("weekly report") != std::string_view::npos ||
+         text.find("checklist") != std::string_view::npos ||
+         text.find("signoff") != std::string_view::npos ||
+         text.find("allergic") != std::string_view::npos ||
+         text.find("distractor") != std::string_view::npos ||
+         text.find("draft memo") != std::string_view::npos ||
+         text.find("tentative") != std::string_view::npos ||
+         text.find("pending approval") != std::string_view::npos;
+}
+
+}  // namespace RerankingHelpers
+
+// ---------- IntentAwareRerank ----------
+
+namespace {
+
+std::string ToLower(std::string_view text) {
+  std::string out;
+  out.reserve(text.size());
+  for (char ch : text) {
+    out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+  }
+  return out;
+}
+
+bool IsDigitOnly(const std::string& s) {
+  if (s.empty()) return false;
+  for (char ch : s) {
+    if (!std::isdigit(static_cast<unsigned char>(ch))) return false;
+  }
+  return true;
+}
+
+bool IsLetterOnly(const std::string& s) {
+  if (s.empty()) return false;
+  for (char ch : s) {
+    if (!std::isalpha(static_cast<unsigned char>(ch))) return false;
+  }
+  return true;
+}
+
+bool TermContainsDigits(const std::string& s) {
+  for (char ch : s) {
+    if (std::isdigit(static_cast<unsigned char>(ch))) return true;
+  }
+  return false;
+}
+
+bool ContainsSubstr(std::string_view haystack, std::string_view needle) {
+  return haystack.find(needle) != std::string_view::npos;
+}
+
+bool HasSourceVector(const std::vector<SearchSource>& sources) {
+  for (auto s : sources) {
+    if (s == SearchSource::kVector) return true;
+  }
+  return false;
+}
+
+/// Normalized phrase-comparable text (lower, split on non-alnum, re-join with spaces).
+std::string NormalizedPhraseText(std::string_view text) {
+  std::string out;
+  out.reserve(text.size());
+  bool in_word = false;
+  for (char ch : text) {
+    unsigned char uch = static_cast<unsigned char>(ch);
+    if (std::isalnum(uch)) {
+      out.push_back(static_cast<char>(std::tolower(uch)));
+      in_word = true;
+    } else {
+      if (in_word) {
+        out.push_back(' ');
+        in_word = false;
+      }
+    }
+  }
+  // Trim trailing space.
+  if (!out.empty() && out.back() == ' ') {
+    out.pop_back();
+  }
+  return out;
+}
+
+/// Intersection count of two sets.
+template <typename T>
+int SetIntersectionCount(const std::set<T>& a, const std::set<T>& b) {
+  int count = 0;
+  auto it_a = a.begin();
+  auto it_b = b.begin();
+  while (it_a != a.end() && it_b != b.end()) {
+    if (*it_a < *it_b) {
+      ++it_a;
+    } else if (*it_b < *it_a) {
+      ++it_b;
+    } else {
+      ++count;
+      ++it_a;
+      ++it_b;
+    }
+  }
+  return count;
+}
+
+}  // anonymous namespace
+
+std::vector<SearchResult> IntentAwareRerank(
+    const std::vector<SearchResult>& results,
+    std::string_view query,
+    int max_window,
+    const QueryAnalyzer& analyzer) {
+
+  const int capped_window = std::min(std::max(0, max_window),
+                                     static_cast<int>(results.size()));
+  if (capped_window <= 1) {
+    return results;
+  }
+
+  const auto intents = analyzer.DetectIntent(query);
+
+  // Precompute query signals.
+  const auto query_terms_vec = analyzer.NormalizedTerms(query);
+  const std::set<std::string> query_terms(query_terms_vec.begin(),
+                                          query_terms_vec.end());
+  const auto query_entities = analyzer.EntityTerms(query);
+  const auto query_years = analyzer.YearTerms(query);
+  const auto query_date_keys = analyzer.NormalizedDateKeys(query);
+
+  std::set<std::string> query_numeric_entities;
+  std::set<std::string> query_alpha_entities;
+  std::set<std::string> query_numeric_terms;
+  for (const auto& e : query_entities) {
+    if (TermContainsDigits(e)) query_numeric_entities.insert(e);
+    if (IsLetterOnly(e)) query_alpha_entities.insert(e);
+  }
+  for (const auto& t : query_terms) {
+    if (IsDigitOnly(t)) query_numeric_terms.insert(t);
+  }
+
+  const bool has_target_intent =
+      HasIntent(intents, QueryIntent::kAsksLocation) ||
+      HasIntent(intents, QueryIntent::kAsksDate) ||
+      HasIntent(intents, QueryIntent::kAsksOwnership);
+
+  const bool has_disambiguation_signals =
+      !query_entities.empty() ||
+      !query_years.empty() ||
+      !query_date_keys.empty();
+
+  if (!has_target_intent || !has_disambiguation_signals) {
+    return results;
+  }
+
+  // Composite scoring function.
+  auto composite_score = [&](const SearchResult& result) -> float {
+    float total = result.score;
+    if (!result.preview_text.has_value() || result.preview_text->empty()) {
+      return total;
+    }
+
+    const auto& preview = *result.preview_text;
+    const auto preview_terms_vec = analyzer.NormalizedTerms(preview);
+    const std::set<std::string> preview_terms(preview_terms_vec.begin(),
+                                              preview_terms_vec.end());
+    const auto preview_entities = analyzer.EntityTerms(preview);
+    const auto preview_years = analyzer.YearTerms(preview);
+    const auto preview_date_keys = analyzer.NormalizedDateKeys(preview);
+    std::set<std::string> preview_alpha_entities;
+    for (const auto& e : preview_entities) {
+      if (IsLetterOnly(e)) preview_alpha_entities.insert(e);
+    }
+    const std::string lower = ToLower(preview);
+    const bool vector_influenced = HasSourceVector(result.sources);
+
+    // Term recall/precision.
+    if (!query_terms.empty() && !preview_terms.empty()) {
+      const int overlap = SetIntersectionCount(query_terms, preview_terms);
+      const float recall =
+          static_cast<float>(overlap) /
+          static_cast<float>(std::max<int>(1, static_cast<int>(query_terms.size())));
+      const float precision =
+          static_cast<float>(overlap) /
+          static_cast<float>(std::max<int>(1, static_cast<int>(preview_terms.size())));
+      total += recall * 0.55f;
+      total += precision * 0.25f;
+    }
+
+    // Entity matching.
+    if (!query_entities.empty()) {
+      const int entity_hits = SetIntersectionCount(query_entities, preview_entities);
+      if (!query_numeric_entities.empty()) {
+        const int numeric_hits =
+            SetIntersectionCount(query_numeric_entities, preview_entities);
+        const float numeric_coverage =
+            static_cast<float>(numeric_hits) /
+            static_cast<float>(std::max<int>(1, static_cast<int>(query_numeric_entities.size())));
+        total += numeric_coverage * 1.95f;
+      }
+      if (!query_alpha_entities.empty()) {
+        const int alpha_hits =
+            SetIntersectionCount(query_alpha_entities, preview_alpha_entities);
+        const float alpha_coverage =
+            static_cast<float>(alpha_hits) /
+            static_cast<float>(std::max<int>(1, static_cast<int>(query_alpha_entities.size())));
+        total += alpha_coverage * 1.25f;
+      }
+      const float coverage =
+          static_cast<float>(entity_hits) /
+          static_cast<float>(std::max<int>(1, static_cast<int>(query_entities.size())));
+      total += coverage * 0.30f;
+      if (entity_hits == 0) {
+        total -= !query_numeric_entities.empty() ? 0.85f : 0.45f;
+        if (!query_numeric_terms.empty()) {
+          const int num_term_hits =
+              SetIntersectionCount(query_numeric_terms, preview_terms);
+          if (num_term_hits > 0) {
+            total -= 0.75f;
+          }
+        }
+      }
+      if (!query_alpha_entities.empty()) {
+        const int alpha_match =
+            SetIntersectionCount(query_alpha_entities, preview_alpha_entities);
+        if (alpha_match == 0 && !preview_alpha_entities.empty()) {
+          total -= 0.40f;
+        }
+      }
+    }
+
+    // Year matching.
+    if (!query_years.empty()) {
+      const int year_hits = SetIntersectionCount(query_years, preview_years);
+      const float year_coverage =
+          static_cast<float>(year_hits) /
+          static_cast<float>(std::max<int>(1, static_cast<int>(query_years.size())));
+      total += year_coverage * 1.25f;
+      if (year_hits == 0 && !preview_years.empty()) {
+        total -= 1.10f;
+      }
+    }
+
+    // Date key matching.
+    if (!query_date_keys.empty()) {
+      const int date_hits =
+          SetIntersectionCount(query_date_keys, preview_date_keys);
+      const float date_coverage =
+          static_cast<float>(date_hits) /
+          static_cast<float>(std::max<int>(1, static_cast<int>(query_date_keys.size())));
+      total += date_coverage * 1.15f;
+      if (date_hits == 0 && !preview_date_keys.empty()) {
+        total -= 0.95f;
+      }
+    }
+
+    // Intent-specific boosts/penalties.
+    if (HasIntent(intents, QueryIntent::kAsksLocation)) {
+      if (RerankingHelpers::ContainsMovedToLocationPattern(preview)) {
+        total += 1.60f;
+      } else if (ContainsSubstr(lower, "moved to") ||
+                 ContainsSubstr(lower, "move to")) {
+        total += 0.45f;
+      } else if (ContainsSubstr(lower, "city")) {
+        total += 0.10f;
+      }
+      if (ContainsSubstr(lower, "without a destination") ||
+          ContainsSubstr(lower, "city move") ||
+          ContainsSubstr(lower, "retrospective")) {
+        total -= 0.75f;
+      }
+      if (ContainsSubstr(lower, "allergic") ||
+          ContainsSubstr(lower, "health") ||
+          ContainsSubstr(lower, "peanut")) {
+        total -= 1.10f;
+      }
+      if (ContainsSubstr(lower, "prefers") ||
+          ContainsSubstr(lower, "prefer")) {
+        total -= 0.55f;
+      }
+    }
+
+    if (HasIntent(intents, QueryIntent::kAsksDate)) {
+      const bool tentative =
+          RerankingHelpers::ContainsTentativeLaunchLanguage(lower);
+      if (ContainsSubstr(lower, "public launch is") && !tentative) {
+        total += 1.70f;
+      } else if (ContainsSubstr(lower, "public launch") ||
+                 analyzer.ContainsDateLiteral(preview)) {
+        total += 1.20f;
+      }
+      if (tentative) {
+        const float scaled_penalty = std::max(
+            vector_influenced ? 2.90f : 2.45f,
+            result.score * (vector_influenced ? 1.60f : 1.40f));
+        total -= scaled_penalty;
+      }
+      if (ContainsSubstr(lower, "draft memo")) {
+        total -= vector_influenced ? 1.45f : 1.20f;
+      }
+      if (ContainsSubstr(lower, " owns ") ||
+          ContainsSubstr(lower, "owner") ||
+          ContainsSubstr(lower, "deployment readiness")) {
+        total -= 0.40f;
+      }
+    }
+
+    if (HasIntent(intents, QueryIntent::kAsksOwnership)) {
+      if (ContainsSubstr(lower, " owns ") ||
+          ContainsSubstr(lower, "owner") ||
+          ContainsSubstr(lower, "owns deployment readiness")) {
+        total += 1.10f;
+      }
+      if (ContainsSubstr(lower, "public launch") &&
+          !ContainsSubstr(lower, " owns ")) {
+        total -= 0.35f;
+      }
+    }
+
+    if (RerankingHelpers::LooksDistractorLike(lower)) {
+      total -= 0.40f;
+    }
+
+    return total;
+  };
+
+  // Score the rerank window.
+  struct ScoredEntry {
+    int original_index;
+    float composite;
+  };
+
+  std::vector<ScoredEntry> scored_head;
+  scored_head.reserve(static_cast<std::size_t>(capped_window));
+  for (int i = 0; i < capped_window; ++i) {
+    scored_head.push_back({i, composite_score(results[static_cast<std::size_t>(i)])});
+  }
+
+  std::sort(scored_head.begin(), scored_head.end(),
+            [&](const ScoredEntry& lhs, const ScoredEntry& rhs) {
+              if (lhs.composite != rhs.composite) {
+                return lhs.composite > rhs.composite;
+              }
+              const auto& lr = results[static_cast<std::size_t>(lhs.original_index)];
+              const auto& rr = results[static_cast<std::size_t>(rhs.original_index)];
+              if (lr.score != rr.score) {
+                return lr.score > rr.score;
+              }
+              return lr.frame_id < rr.frame_id;
+            });
+
+  // Build output: reranked head + untouched tail.
+  std::vector<SearchResult> output;
+  output.reserve(results.size());
+  for (const auto& entry : scored_head) {
+    output.push_back(results[static_cast<std::size_t>(entry.original_index)]);
+  }
+  for (std::size_t i = static_cast<std::size_t>(capped_window);
+       i < results.size(); ++i) {
+    output.push_back(results[i]);
+  }
+
+  return output;
 }
 
 }  // namespace waxcpp

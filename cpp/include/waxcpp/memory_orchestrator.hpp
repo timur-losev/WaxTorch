@@ -2,6 +2,7 @@
 
 #include "waxcpp/embeddings.hpp"
 #include "waxcpp/fts5_search_engine.hpp"
+#include "waxcpp/token_counter.hpp"
 #include "waxcpp/types.hpp"
 #include "waxcpp/structured_memory.hpp"
 #include "waxcpp/vector_engine.hpp"
@@ -20,7 +21,8 @@ class MemoryOrchestrator {
  public:
   MemoryOrchestrator(const std::filesystem::path& path,
                      const OrchestratorConfig& config,
-                     std::shared_ptr<EmbeddingProvider> embedder = nullptr);
+                     std::shared_ptr<EmbeddingProvider> embedder = nullptr,
+                     const TokenCounter* token_counter = nullptr);
 
   void Remember(const std::string& content, const Metadata& metadata = {});
   RAGContext Recall(const std::string& query);
@@ -39,6 +41,7 @@ class MemoryOrchestrator {
   OrchestratorConfig config_;
   WaxStore store_;
   std::shared_ptr<EmbeddingProvider> embedder_;
+  const TokenCounter* token_counter_ = nullptr;
   std::unordered_map<std::uint64_t, std::vector<float>> embedding_cache_;
   StructuredMemoryStore structured_memory_;
   FTS5SearchEngine store_text_index_;
