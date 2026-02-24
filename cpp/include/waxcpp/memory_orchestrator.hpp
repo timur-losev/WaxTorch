@@ -1,7 +1,9 @@
 #pragma once
 
+#include "waxcpp/access_stats.hpp"
 #include "waxcpp/embeddings.hpp"
 #include "waxcpp/fts5_search_engine.hpp"
+#include "waxcpp/tier_selector.hpp"
 #include "waxcpp/token_counter.hpp"
 #include "waxcpp/types.hpp"
 #include "waxcpp/structured_memory.hpp"
@@ -37,6 +39,11 @@ class MemoryOrchestrator {
   void Flush();
   void Close();
 
+  /// Access the frame access stats manager (thread-safe).
+  /// May be used to export/import stats for persistence.
+  AccessStatsManager& GetAccessStats() { return access_stats_; }
+  const AccessStatsManager& GetAccessStats() const { return access_stats_; }
+
  private:
   OrchestratorConfig config_;
   WaxStore store_;
@@ -47,6 +54,8 @@ class MemoryOrchestrator {
   FTS5SearchEngine store_text_index_;
   FTS5SearchEngine structured_text_index_;
   std::unique_ptr<USearchVectorEngine> vector_index_;
+  AccessStatsManager access_stats_;
+  SurrogateTierSelector tier_selector_;
   bool closed_ = false;
   mutable std::mutex mutex_{};
 };

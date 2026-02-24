@@ -1086,7 +1086,10 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
     : config_(config),
       store_(std::filesystem::exists(path) ? WaxStore::Open(path) : WaxStore::Create(path)),
       embedder_(std::move(embedder)),
-      token_counter_(token_counter) {
+      token_counter_(token_counter),
+      tier_selector_(config.rag.enable_query_aware_tier_selection
+                         ? TierPolicyImportanceBalanced()
+                         : TierSelectionPolicy{TierPolicyDisabled{}}) {
   if (config_.rag.search_mode.kind == SearchModeKind::kTextOnly && !config_.enable_text_search) {
     throw std::runtime_error("text-only search mode requires text search to be enabled");
   }
@@ -1213,6 +1216,15 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
       config_.enable_vector_search,
       req);
   const auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
+
+  // Record frame accesses for importance-based tier selection.
+  if (!response.results.empty()) {
+    std::vector<std::uint64_t> accessed_ids;
+    accessed_ids.reserve(response.results.size());
+    for (const auto& r : response.results) accessed_ids.push_back(r.frame_id);
+    access_stats_.RecordAccesses(accessed_ids);
+  }
+
   return BuildFastRAGContext(req, response);
 }
 
@@ -1251,6 +1263,15 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
       config_.enable_vector_search,
       req);
   const auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
+
+  // Record frame accesses for importance-based tier selection.
+  if (!response.results.empty()) {
+    std::vector<std::uint64_t> accessed_ids;
+    accessed_ids.reserve(response.results.size());
+    for (const auto& r : response.results) accessed_ids.push_back(r.frame_id);
+    access_stats_.RecordAccesses(accessed_ids);
+  }
+
   return BuildFastRAGContext(req, response);
 }
 

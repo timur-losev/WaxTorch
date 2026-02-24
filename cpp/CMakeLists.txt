@@ -23,6 +23,7 @@ set(WAXCPP_TORCH_RUNTIME_DEFINE 0)
 
 set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/access_stats.hpp
+  include/waxcpp/answer_extractor.hpp
   include/waxcpp/embeddings.hpp
   include/waxcpp/fts5_search_engine.hpp
   include/waxcpp/importance_scorer.hpp
@@ -33,6 +34,8 @@ set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/search.hpp
   include/waxcpp/maintenance.hpp
   include/waxcpp/surrogate_generator.hpp
+  include/waxcpp/live_set_rewrite.hpp
+  include/waxcpp/text_chunker.hpp
   include/waxcpp/tier_selector.hpp
   include/waxcpp/token_counter.hpp
   include/waxcpp/structured_memory.hpp
@@ -51,11 +54,13 @@ add_library(waxcpp STATIC
   src/vector/usearch_vector_engine.cpp
   src/vector/mv2v_format.cpp
   src/rag/access_stats.cpp
+  src/rag/answer_extractor.cpp
   src/rag/importance_scorer.cpp
   src/rag/maintenance.cpp
   src/rag/query_analyzer.cpp
   src/rag/search.cpp
   src/rag/surrogate_generator.cpp
+  src/rag/text_chunker.cpp
   src/rag/tier_selector.cpp
   src/rag/token_counter.cpp
   src/rag/embeddings.cpp
@@ -386,6 +391,26 @@ if (WAXCPP_BUILD_TESTS)
   endif()
   target_precompile_headers(waxcpp_importance_scorer_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_importance_scorer_test COMMAND waxcpp_importance_scorer_test)
+
+  add_executable(waxcpp_answer_extractor_test tests/unit/answer_extractor_test.cpp)
+  target_link_libraries(waxcpp_answer_extractor_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_answer_extractor_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_answer_extractor_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_answer_extractor_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_answer_extractor_test COMMAND waxcpp_answer_extractor_test)
+
+  add_executable(waxcpp_text_chunker_test tests/unit/text_chunker_test.cpp)
+  target_link_libraries(waxcpp_text_chunker_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_text_chunker_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_text_chunker_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_text_chunker_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_text_chunker_test COMMAND waxcpp_text_chunker_test)
 
   add_executable(waxcpp_tier_selector_test tests/unit/tier_selector_test.cpp)
   target_link_libraries(waxcpp_tier_selector_test PRIVATE waxcpp)
