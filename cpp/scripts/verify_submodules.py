@@ -19,6 +19,7 @@ REQUIRED_PATHS = {
     'cpp/third_party/sqlite',
     'cpp/third_party/googletest',
     'cpp/third_party/libtorch-dist',
+    'cpp/third_party/poco',
 }
 
 

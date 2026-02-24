@@ -11,3 +11,6 @@
 	path = cpp/third_party/libtorch-dist
 	url = https://github.com/Kautenja/libtorch-binaries.git
 
+[submodule "cpp/third_party/poco"]
+	path = cpp/third_party/poco
+	url = https://github.com/pocoproject/poco

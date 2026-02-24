@@ -36,3 +36,11 @@ submodules:
       - "Practical hybrid mode: pinned artifact manifest + SHA256 validation"
       - "Manifest lives in cpp/manifest and references artifact files inside libtorch-dist submodule root"
 
+  - name: poco
+    path: cpp/third_party/poco
+    remote: https://github.com/pocoproject/poco
+    pinned_commit: "37dd841a666b96a3c18dfe27fc964d672c11843f"
+    verify_checksum: false
+    notes:
+      - "Used by cpp/server for HTTP + JSON RPC transport layer"
+

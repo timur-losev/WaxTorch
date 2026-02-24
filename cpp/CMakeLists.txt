@@ -7,10 +7,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 if (MSVC)
   # Avoid parallel compiler writes to shared PDBs when reusing PCH across targets.
-  add_compile_options(/FS)
+  # /MP enables multi-process compilation per target.
+  # /FS keeps shared-PDB access safe under parallel cl.exe workers.
+  add_compile_options(/FS /MP)
 endif()
 
 option(WAXCPP_BUILD_TESTS "Build waxcpp tests" ON)
+option(WAXCPP_BUILD_SERVER "Build waxcpp server targets" ON)
 option(WAXCPP_REQUIRE_PARITY_FIXTURES "Fail parity test if no .mv2s fixtures are found" OFF)
 option(WAXCPP_REQUIRE_SWIFT_FIXTURES "Fail parity test if no non-synthetic fixtures are found" OFF)
 option(WAXCPP_ENABLE_SQLITE_BACKEND "Enable SQLite/FTS5 backend when bundled sqlite amalgamation exists (experimental; OFF by default)" OFF)
@@ -157,6 +160,21 @@ if (MSVC)
   target_compile_options(waxcpp PRIVATE /W4 /permissive-)
 else()
   target_compile_options(waxcpp PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if (WAXCPP_BUILD_SERVER)
+  add_subdirectory(server)
+
+  add_custom_target(run_rag_server
+    COMMAND ${CMAKE_COMMAND} -E env
+      WAXCPP_TEST_LOG=$<IF:$<BOOL:$ENV{WAXCPP_TEST_LOG}>,1,0>
+      WAXCPP_LIBTORCH_MANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/manifest/libtorch-manifest.json
+      $<TARGET_FILE:waxcpp_rag_server>
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    DEPENDS waxcpp_rag_server
+    COMMENT "Start WAX RAG server on port 8080"
+    VERBATIM
+  )
 endif()
 
 if (WAXCPP_BUILD_TESTS)
