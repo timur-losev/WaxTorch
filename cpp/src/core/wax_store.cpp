@@ -1047,7 +1047,10 @@ void WaxStore::PutEmbeddingBatch(const std::vector<std::uint64_t>& frame_ids,
     }
     wal_payloads.push_back(BuildWalPutEmbeddingPayload(frame_ids[i], vectors[i]));
   }
-  (void)writer.AppendBatch(wal_payloads);
+  const auto sequences = writer.AppendBatch(wal_payloads);
+  if (sequences.size() != frame_ids.size()) {
+    throw StoreError("wal embedding appendBatch sequence count mismatch");
+  }
 
   wal_write_pos_ = writer.write_pos();
   wal_checkpoint_pos_ = writer.checkpoint_pos();
@@ -1058,6 +1061,13 @@ void WaxStore::PutEmbeddingBatch(const std::vector<std::uint64_t>& frame_ids,
   wal_sentinel_write_count_ = writer.sentinel_write_count();
   wal_write_call_count_ = writer.write_call_count();
   wal_pending_embedding_mutations_ += static_cast<std::uint64_t>(frame_ids.size());
+  for (std::size_t i = 0; i < frame_ids.size(); ++i) {
+    WaxPendingEmbedding entry{};
+    entry.frame_id = frame_ids[i];
+    entry.dimension = static_cast<std::uint32_t>(vectors[i].size());
+    entry.vector = vectors[i];
+    pending_embedding_sequence_cache_.emplace_back(sequences[i], std::move(entry));
+  }
   dirty_ = true;
   has_local_mutations_ = true;
 }
@@ -1257,6 +1267,7 @@ void WaxStore::Commit() {
   wal_pending_embedding_mutations_ = 0;
   wal_pending_delete_mutations_ = 0;
   wal_pending_supersede_mutations_ = 0;
+  pending_embedding_sequence_cache_.clear();
   footer_offset_ = footer_offset;
   dirty_ = false;
   has_local_mutations_ = false;
@@ -1376,32 +1387,13 @@ WaxPendingEmbeddingSnapshot WaxStore::PendingEmbeddingMutations(
     throw StoreError("store is closed");
   }
 
-  core::wal::WalPendingScanResult pending_scan{};
-  try {
-    pending_scan = core::wal::ScanPendingMutationsWithState(
-        path_,
-        wal_offset_,
-        wal_size_,
-        wal_checkpoint_pos_,
-        wal_committed_seq_);
-  } catch (const std::exception& ex) {
-    throw StoreError(std::string("wal scan failed: ") + ex.what());
-  }
-
   WaxPendingEmbeddingSnapshot snapshot{};
-  for (const auto& mutation : pending_scan.pending_mutations) {
-    if (!mutation.put_embedding.has_value()) {
+  for (const auto& [sequence, pending_embedding] : pending_embedding_sequence_cache_) {
+    snapshot.latest_sequence = sequence;
+    if (since_sequence.has_value() && sequence <= *since_sequence) {
       continue;
     }
-    snapshot.latest_sequence = mutation.sequence;
-    if (since_sequence.has_value() && mutation.sequence <= *since_sequence) {
-      continue;
-    }
-    WaxPendingEmbedding embedding{};
-    embedding.frame_id = mutation.put_embedding->frame_id;
-    embedding.dimension = mutation.put_embedding->dimension;
-    embedding.vector = mutation.put_embedding->vector;
-    snapshot.embeddings.push_back(std::move(embedding));
+    snapshot.embeddings.push_back(pending_embedding);
   }
   return snapshot;
 }
@@ -1546,6 +1538,22 @@ void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
   wal_replay_snapshot_hit_count_ = used_replay_snapshot ? 1U : 0U;
   footer_offset_ = footer_slice->footer_offset;
   next_frame_id_ = pending_analysis.max_frame_id_plus_one;
+  pending_embedding_sequence_cache_.clear();
+  if (pending_analysis.pending_embedding_mutations >
+      static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+    throw StoreError("pending embedding mutation count exceeds addressable memory");
+  }
+  pending_embedding_sequence_cache_.reserve(static_cast<std::size_t>(pending_analysis.pending_embedding_mutations));
+  for (const auto& mutation : pending_mutations) {
+    if (!mutation.put_embedding.has_value()) {
+      continue;
+    }
+    WaxPendingEmbedding entry{};
+    entry.frame_id = mutation.put_embedding->frame_id;
+    entry.dimension = mutation.put_embedding->dimension;
+    entry.vector = mutation.put_embedding->vector;
+    pending_embedding_sequence_cache_.emplace_back(mutation.sequence, std::move(entry));
+  }
   dirty_ = wal_scan_state.last_sequence > committed_seq;
   has_local_mutations_ = false;
   is_open_ = true;

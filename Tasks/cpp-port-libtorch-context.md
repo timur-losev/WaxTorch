@@ -641,6 +641,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `.gitmodules` + `cpp/submodules.lock` | Repaired `libtorch-dist` submodule wiring to a resolvable remote with pinned commit (`84cc65a...`) and strict checksum policy kept enabled | Codex |
 | `cpp/manifest/libtorch-manifest.json` + CI workflows | Moved manifest source-of-truth to `cpp/manifest` and updated CI checksum gate paths to keep integrity checks deterministic even when upstream submodule layout differs | Codex |
 | `cpp/CMakeLists.txt` + `scripts/generate-cmake.bat` + `cpp/README.md` | Added deterministic local LibTorch runtime configuration (`WAXCPP_LIBTORCH_ROOT` / `Torch_DIR`) with explicit no-auto-download behavior and Windows generator-script flags | Codex |
+| `cpp/include/waxcpp/wax_store.hpp` + `cpp/src/core/wax_store.cpp` | Materialized pending `putEmbedding` WAL replay state into in-memory cache on open and local append paths; `PendingEmbeddingMutations` now serves deterministic cache state without re-scanning WAL on each call | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added regression `pending embedding snapshot uses in-memory cache`: snapshot remains stable after on-disk pending WAL header corruption within same process/session | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |

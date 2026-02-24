@@ -410,6 +410,40 @@ void RunScenarioPendingEmbeddingSnapshotReopenRecovery(const std::filesystem::pa
   }
 }
 
+void RunScenarioPendingEmbeddingSnapshotUsesInMemoryCache(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: pending embedding snapshot uses in-memory cache");
+  auto store = waxcpp::WaxStore::Create(path);
+  const auto frame_id = store.Put({std::byte{0xE7}});
+  store.Commit();
+  store.PutEmbedding(frame_id, {9.1F, 9.2F});
+
+  const auto before = store.PendingEmbeddingMutations();
+  const auto wal_before = store.WalStats();
+  Require(before.embeddings.size() == 1, "expected one pending embedding before wal corruption");
+  Require(before.latest_sequence.has_value(), "expected latest_sequence before wal corruption");
+  Require(wal_before.pending_embedding_mutations == 1, "expected one pending embedding mutation before wal corruption");
+  Require(wal_before.pending_bytes > 0, "expected pending WAL bytes before wal corruption");
+
+  // Corrupt the first pending WAL record header after state has been materialized in-memory.
+  const auto corrupt_offset = waxcpp::core::mv2s::kWalOffset + wal_before.checkpoint_pos;
+  const std::array<std::byte, 1> corrupt = {std::byte{0xFF}};
+  WriteBytesAt(path, corrupt_offset, std::span<const std::byte>(corrupt.data(), corrupt.size()));
+
+  const auto after = store.PendingEmbeddingMutations();
+  Require(after.embeddings.size() == 1,
+          "pending embedding snapshot should remain stable from in-memory cache after wal corruption");
+  Require(after.latest_sequence == before.latest_sequence,
+          "pending embedding latest_sequence should remain stable from in-memory cache");
+  Require(after.embeddings[0].frame_id == before.embeddings[0].frame_id,
+          "pending embedding frame_id should remain stable from in-memory cache");
+  Require(after.embeddings[0].dimension == before.embeddings[0].dimension,
+          "pending embedding dimension should remain stable from in-memory cache");
+  Require(after.embeddings[0].vector == before.embeddings[0].vector,
+          "pending embedding payload should remain stable from in-memory cache");
+
+  // Do not close: close would auto-commit local pending state and intentionally touch corrupted WAL bytes.
+}
+
 void RunScenarioCloseAutoCommitsLocalEmbeddingMutations(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: close auto-commits local embedding mutations");
   std::uint64_t frame_id = 0;
@@ -1737,6 +1771,7 @@ int main(int argc, char** argv) {
     RunScenarioPutEmbeddingContracts(path);
     RunScenarioPendingEmbeddingSnapshot(path);
     RunScenarioPendingEmbeddingSnapshotReopenRecovery(path);
+    RunScenarioPendingEmbeddingSnapshotUsesInMemoryCache(path);
     RunScenarioCloseAutoCommitsLocalEmbeddingMutations(path);
     RunScenarioRecoveredPendingEmbeddingPlusLocalMutationCloseCommit(path);
     RunScenarioRecoveredPendingDeletePlusLocalMutationCloseCommit(path);

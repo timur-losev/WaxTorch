@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -115,6 +116,7 @@ class WaxStore {
   std::uint64_t wal_replay_snapshot_hit_count_ = 0;
   std::uint64_t footer_offset_ = 0;
   std::uint64_t next_frame_id_ = 0;
+  std::vector<std::pair<std::uint64_t, WaxPendingEmbedding>> pending_embedding_sequence_cache_{};
   bool dirty_ = false;
   bool has_local_mutations_ = false;
   bool is_open_ = false;
