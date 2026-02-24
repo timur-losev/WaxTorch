@@ -1,4 +1,5 @@
 #include "waxcpp/search.hpp"
+#include "waxcpp/query_analyzer.hpp"
 
 #include "../test_logger.hpp"
 
@@ -889,6 +890,124 @@ void ScenarioSeededFuzzPermutationInvariance() {
   }
 }
 
+void ScenarioAdaptiveFusionSelectsWeightsByQueryType() {
+  waxcpp::tests::Log("scenario: adaptive fusion selects weights by query type");
+
+  // Text and vector candidates with clear separation.
+  std::vector<waxcpp::SearchResult> text_results = {
+      {.frame_id = 1, .score = 10.0F, .preview_text = std::string("text hit"), .sources = {waxcpp::SearchSource::kText}},
+      {.frame_id = 2, .score = 5.0F, .preview_text = std::string("text hit 2"), .sources = {waxcpp::SearchSource::kText}},
+  };
+  std::vector<waxcpp::SearchResult> vector_results = {
+      {.frame_id = 3, .score = 10.0F, .preview_text = std::string("vector hit"), .sources = {waxcpp::SearchSource::kVector}},
+      {.frame_id = 4, .score = 5.0F, .preview_text = std::string("vector hit 2"), .sources = {waxcpp::SearchSource::kVector}},
+  };
+
+  // Factual query -> bm25=0.7, vector=0.3 (text-heavy).
+  waxcpp::SearchRequest factual_req{};
+  factual_req.query = "what is a vector database?";
+  factual_req.mode = {waxcpp::SearchModeKind::kHybrid, 0.5f};
+  factual_req.top_k = 4;
+  factual_req.rrf_k = 60;
+
+  auto factual_response = waxcpp::UnifiedSearchAdaptive(factual_req, text_results, vector_results);
+  Require(!factual_response.results.empty(), "factual should return results");
+
+  // Semantic query -> bm25=0.3, vector=0.7 (vector-heavy).
+  waxcpp::SearchRequest semantic_req{};
+  semantic_req.query = "how does the search algorithm work?";
+  semantic_req.mode = {waxcpp::SearchModeKind::kHybrid, 0.5f};
+  semantic_req.top_k = 4;
+  semantic_req.rrf_k = 60;
+
+  auto semantic_response = waxcpp::UnifiedSearchAdaptive(semantic_req, text_results, vector_results);
+  Require(!semantic_response.results.empty(), "semantic should return results");
+
+  // Verify that the factual query boosts text results more than the semantic query.
+  // In factual: alpha=0.7 (text weight), so text frames should have higher RRF scores.
+  // In semantic: alpha=0.3 (text weight), so vector frames should have higher RRF scores.
+  float factual_text_score = 0.0f;
+  float factual_vector_score = 0.0f;
+  for (const auto& r : factual_response.results) {
+    if (r.frame_id == 1) factual_text_score = r.score;
+    if (r.frame_id == 3) factual_vector_score = r.score;
+  }
+
+  float semantic_text_score = 0.0f;
+  float semantic_vector_score = 0.0f;
+  for (const auto& r : semantic_response.results) {
+    if (r.frame_id == 1) semantic_text_score = r.score;
+    if (r.frame_id == 3) semantic_vector_score = r.score;
+  }
+
+  // Factual: text rank-1 score = 0.7 / (60+1) > vector rank-1 score = 0.3 / (60+1).
+  Require(factual_text_score > factual_vector_score,
+          "factual query should weight text higher than vector");
+
+  // Semantic: vector rank-1 score = 0.7 / (60+1) > text rank-1 score = 0.3 / (60+1).
+  Require(semantic_vector_score > semantic_text_score,
+          "semantic query should weight vector higher than text");
+}
+
+void ScenarioAdaptiveFusionNonHybridPassthrough() {
+  waxcpp::tests::Log("scenario: adaptive fusion passes through for non-hybrid modes");
+
+  std::vector<waxcpp::SearchResult> text_results = {
+      {.frame_id = 1, .score = 1.0F, .preview_text = std::string("text"), .sources = {waxcpp::SearchSource::kText}},
+  };
+  std::vector<waxcpp::SearchResult> vector_results = {
+      {.frame_id = 2, .score = 1.0F, .preview_text = std::string("vec"), .sources = {waxcpp::SearchSource::kVector}},
+  };
+
+  // Text-only mode should ignore adaptive weights.
+  waxcpp::SearchRequest text_req{};
+  text_req.query = "how does it work?";  // semantic -> would be vector-heavy
+  text_req.mode = {waxcpp::SearchModeKind::kTextOnly, 0.5f};
+  text_req.top_k = 10;
+
+  auto response = waxcpp::UnifiedSearchAdaptive(text_req, text_results, vector_results);
+  Require(response.results.size() == 1, "text-only should return text result only");
+  Require(response.results[0].frame_id == 1, "should be the text frame");
+
+  // Vector-only mode.
+  waxcpp::SearchRequest vec_req{};
+  vec_req.query = "what is a thing?";  // factual -> would be text-heavy
+  vec_req.mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5f};
+  vec_req.top_k = 10;
+
+  auto vec_response = waxcpp::UnifiedSearchAdaptive(vec_req, text_results, vector_results);
+  Require(vec_response.results.size() == 1, "vector-only should return vector result only");
+  Require(vec_response.results[0].frame_id == 2, "should be the vector frame");
+}
+
+void ScenarioAdaptiveFusionCustomConfig() {
+  waxcpp::tests::Log("scenario: adaptive fusion with custom config");
+
+  std::vector<waxcpp::SearchResult> text_results = {
+      {.frame_id = 1, .score = 10.0F, .preview_text = std::string("text"), .sources = {waxcpp::SearchSource::kText}},
+  };
+  std::vector<waxcpp::SearchResult> vector_results = {
+      {.frame_id = 2, .score = 10.0F, .preview_text = std::string("vec"), .sources = {waxcpp::SearchSource::kVector}},
+  };
+
+  // Custom config: factual queries should be 100% vector.
+  std::unordered_map<waxcpp::QueryType, waxcpp::FusionWeights> custom = {
+      {waxcpp::QueryType::kFactual, {0.0f, 1.0f, 0.0f}},
+  };
+  waxcpp::AdaptiveFusionConfig custom_config(custom);
+
+  waxcpp::SearchRequest req{};
+  req.query = "what is RAG?";  // factual
+  req.mode = {waxcpp::SearchModeKind::kHybrid, 0.5f};
+  req.top_k = 10;
+  req.rrf_k = 60;
+
+  auto response = waxcpp::UnifiedSearchAdaptive(req, text_results, vector_results, custom_config);
+  // With alpha=0 (bm25=0), text weight is 0 so only vector contributes.
+  Require(response.results.size() == 1, "zero text weight should exclude text-only results");
+  Require(response.results[0].frame_id == 2, "only vector result should appear");
+}
+
 }  // namespace
 
 int main() {
@@ -917,6 +1036,9 @@ int main() {
     ScenarioEqualScoreDuplicateMergesSourcesDeterministically();
     ScenarioLowerScorePreviewFallbackIsOrderIndependent();
     ScenarioSeededFuzzPermutationInvariance();
+    ScenarioAdaptiveFusionSelectsWeightsByQueryType();
+    ScenarioAdaptiveFusionNonHybridPassthrough();
+    ScenarioAdaptiveFusionCustomConfig();
     waxcpp::tests::Log("search_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

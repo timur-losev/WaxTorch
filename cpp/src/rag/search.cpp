@@ -1,4 +1,5 @@
 #include "waxcpp/search.hpp"
+#include "waxcpp/query_analyzer.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -249,6 +250,35 @@ SearchResponse UnifiedSearchWithCandidates(const SearchRequest& request,
       return BuildHybridRrfResponse(request, text_results, vector_results);
   }
   return {};
+}
+
+SearchResponse UnifiedSearchAdaptive(const SearchRequest& request,
+                                     const std::vector<SearchResult>& text_results,
+                                     const std::vector<SearchResult>& vector_results,
+                                     const AdaptiveFusionConfig& fusion_config) {
+  if (request.top_k <= 0) {
+    return {};
+  }
+
+  // For non-hybrid modes, adaptive fusion doesn't apply.
+  if (request.mode.kind != SearchModeKind::kHybrid) {
+    return UnifiedSearchWithCandidates(request, text_results, vector_results);
+  }
+
+  // Classify query and select adaptive weights.
+  std::string_view query_text;
+  if (request.query.has_value()) {
+    query_text = *request.query;
+  }
+
+  const auto query_type = ClassifyQuery(query_text);
+  const auto weights = fusion_config.weights(query_type);
+
+  // Build a modified request with the adaptive alpha (bm25 weight).
+  SearchRequest adapted = request;
+  adapted.mode.alpha = weights.bm25;
+
+  return UnifiedSearchWithCandidates(adapted, text_results, vector_results);
 }
 
 RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchResponse& response) {
