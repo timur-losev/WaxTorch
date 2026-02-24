@@ -3445,6 +3445,78 @@ void ScenarioVectorIndexCommitFailureRecoversFromCommittedStore(const std::files
   }
 }
 
+void ScenarioVectorIndexCommitFailureRetryFlushIsNoOp(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: vector index commit failure retry flush is no-op");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = false;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kVectorOnly, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("vector retry apple", {});
+    embedder->Reset();
+
+    bool flush_threw = false;
+    waxcpp::vector::testing::SetCommitFailCountdown(1);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::vector::testing::ClearCommitFailCountdown();
+    Require(flush_threw, "flush should throw when vector index commit failpoint is set");
+
+    const auto after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!after_failure.items.empty(), "failed vector index commit should rebuild and keep vector recall visible");
+    Require(embedder->batch_calls() == 0, "rebuild should use persisted embeddings without EmbedBatch");
+    Require(embedder->embed_calls() == 0, "rebuild should use persisted embeddings without Embed");
+
+    orchestrator.Flush();  // retry should be no-op after externally visible commit
+    const auto after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!after_retry.items.empty(), "retry flush should keep vector recall visible");
+    Require(embedder->batch_calls() == 0, "retry no-op flush should not call EmbedBatch");
+    Require(embedder->embed_calls() == 0, "retry no-op flush should not call Embed");
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    const auto stats = store.Stats();
+    Require(stats.frame_count == 2, "vector retry no-op path should persist exactly one user frame plus one embedding record");
+    Require(stats.pending_frames == 0, "vector retry no-op path should not leave pending WAL mutations");
+
+    std::uint64_t user_payload_frames = 0;
+    std::uint64_t embedding_payload_frames = 0;
+    for (const auto& meta : store.FrameMetas()) {
+      if (meta.status != 0) {
+        continue;
+      }
+      const auto payload = store.FrameContent(meta.id);
+      if (StartsWithMagic(payload, "WAXEM1", 6) || StartsWithMagic(payload, "WAXEM2", 6)) {
+        ++embedding_payload_frames;
+      } else {
+        ++user_payload_frames;
+      }
+    }
+    Require(user_payload_frames == 1, "vector retry no-op path should keep exactly one committed user payload frame");
+    Require(embedding_payload_frames == 1,
+            "vector retry no-op path should keep exactly one committed embedding payload frame");
+    store.Close();
+  }
+
+  {
+    auto reopen_embedder = std::make_shared<CountingBatchEmbedder>();
+    waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
+    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "reopen after vector retry no-op path should preserve vector recall visibility");
+    Require(reopen_embedder->batch_calls() == 0, "reopen should use persisted embeddings without EmbedBatch");
+    Require(reopen_embedder->embed_calls() == 0, "reopen should use persisted embeddings without Embed");
+    reopened.Close();
+  }
+}
+
 void ScenarioStructuredTextIndexCommitFailureRecoversFromCommittedStore(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: structured text index commit failure recovers from committed store");
   waxcpp::OrchestratorConfig config{};
@@ -4584,6 +4656,7 @@ int main() {
     const auto path105 = UniquePath();
     const auto path106 = UniquePath();
     const auto path107 = UniquePath();
+    const auto path108 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -4684,6 +4757,7 @@ int main() {
     ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(path32);
     ScenarioTextIndexCommitFailureRecoversFromCommittedStore(path33);
     ScenarioVectorIndexCommitFailureRecoversFromCommittedStore(path34);
+    ScenarioVectorIndexCommitFailureRetryFlushIsNoOp(path108);
     ScenarioStructuredTextIndexCommitFailureRecoversFromCommittedStore(path106);
     ScenarioStructuredTextIndexCommitFailureRetryFlushIsNoOp(path107);
     ScenarioUseAfterCloseThrows(path26);
@@ -4705,7 +4779,7 @@ int main() {
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
         path94, path95, path96, path97, path98, path99, path100, path101, path102, path103, path104, path105,
-        path106, path107,
+        path106, path107, path108,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
