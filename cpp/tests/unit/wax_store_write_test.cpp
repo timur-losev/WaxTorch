@@ -441,7 +441,14 @@ void RunScenarioPendingEmbeddingSnapshotUsesInMemoryCache(const std::filesystem:
   Require(after.embeddings[0].vector == before.embeddings[0].vector,
           "pending embedding payload should remain stable from in-memory cache");
 
-  // Do not close: close would auto-commit local pending state and intentionally touch corrupted WAL bytes.
+  store.Close();
+  auto reopened = waxcpp::WaxStore::Open(path);
+  const auto reopened_stats = reopened.Stats();
+  const auto reopened_wal = reopened.WalStats();
+  Require(reopened_stats.frame_count == 1, "corrupted pending WAL should still allow close auto-commit via in-memory cache");
+  Require(reopened_stats.pending_frames == 0, "close auto-commit should clear pending_frames");
+  Require(reopened_wal.pending_embedding_mutations == 0, "close auto-commit should clear pending embedding counter");
+  reopened.Close();
 }
 
 void RunScenarioCloseAutoCommitsLocalEmbeddingMutations(const std::filesystem::path& path) {
@@ -511,6 +518,56 @@ void RunScenarioRecoveredPendingEmbeddingPlusLocalMutationCloseCommit(const std:
             "mixed close auto-commit should leave no pending embedding mutations after reopen");
     reopened.Close();
   }
+}
+
+void RunScenarioLocalMixedPendingCorruptWalCloseCommit(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: local mixed pending survives wal corruption via in-memory cache");
+  waxcpp::WaxWALStats closed_wal{};
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    const auto id0 = store.Put({std::byte{0xA0}});
+    const auto id1 = store.Put({std::byte{0xA1}});
+    const auto id2 = store.Put({std::byte{0xA2}});
+    store.Commit();
+
+    const auto id3 = store.Put({std::byte{0xA3}});
+    Require(id3 == 3, "expected dense id for local pending put");
+    store.Delete(id0);
+    store.Supersede(id1, id2);
+    store.PutEmbedding(id2, {7.0F, 8.0F});
+
+    const auto before = store.WalStats();
+    Require(before.pending_bytes > 0, "expected pending WAL bytes before corruption");
+    Require(before.pending_delete_mutations == 1, "expected one pending delete before corruption");
+    Require(before.pending_supersede_mutations == 1, "expected one pending supersede before corruption");
+    Require(before.pending_embedding_mutations == 1, "expected one pending embedding before corruption");
+    Require(store.Stats().pending_frames == 1, "expected one pending put before corruption");
+
+    const auto corrupt_offset = waxcpp::core::mv2s::kWalOffset + before.checkpoint_pos;
+    const std::array<std::byte, 1> corrupt = {std::byte{0xFF}};
+    WriteBytesAt(path, corrupt_offset, std::span<const std::byte>(corrupt.data(), corrupt.size()));
+
+    store.Close();
+    closed_wal = store.WalStats();
+  }
+
+  Require(closed_wal.auto_commit_count == 1, "close should auto-commit local mixed pending state");
+  Require(closed_wal.pending_delete_mutations == 0, "close auto-commit should clear pending delete counter");
+  Require(closed_wal.pending_supersede_mutations == 0, "close auto-commit should clear pending supersede counter");
+  Require(closed_wal.pending_embedding_mutations == 0, "close auto-commit should clear pending embedding counter");
+
+  auto reopened = waxcpp::WaxStore::Open(path);
+  const auto stats = reopened.Stats();
+  Require(stats.frame_count == 4, "close auto-commit should persist pending put despite wal corruption");
+  Require(stats.pending_frames == 0, "no pending frames expected after close auto-commit");
+  const auto toc = ReadCommittedToc(path);
+  Require(toc.frames.size() == 4, "expected four committed frames after mixed close auto-commit");
+  Require(toc.frames[0].status == 1, "pending delete must be applied during close auto-commit");
+  Require(toc.frames[1].superseded_by.has_value() && *toc.frames[1].superseded_by == 2,
+          "pending supersede must set superseded_by edge");
+  Require(toc.frames[2].supersedes.has_value() && *toc.frames[2].supersedes == 1,
+          "pending supersede must set supersedes edge");
+  reopened.Close();
 }
 
 void RunScenarioRecoveredPendingDeletePlusLocalMutationCloseCommit(const std::filesystem::path& path) {
@@ -1379,12 +1436,13 @@ void RunScenarioVisibleCommitProbeIgnoresCorruptFooterMagicTail(const std::files
 }
 
 void RunScenarioCommitDoesNotRegressCommittedSequenceOnCorruptPendingHeader(const std::filesystem::path& path) {
-  waxcpp::tests::Log("scenario: commit keeps committed_seq monotonic when pending WAL header is corrupt");
+  waxcpp::tests::Log("scenario: local pending commit survives corrupt WAL header via in-memory cache");
   auto store = waxcpp::WaxStore::Create(path);
   (void)store.Put({std::byte{0x01}});
   store.Commit();
   const auto baseline_wal = store.WalStats();
   Require(baseline_wal.committed_seq > 0, "baseline committed_seq must be positive after first commit");
+  const auto baseline_stats = store.Stats();
 
   (void)store.Put({std::byte{0x02}});
   const auto staged_wal = store.WalStats();
@@ -1393,9 +1451,16 @@ void RunScenarioCommitDoesNotRegressCommittedSequenceOnCorruptPendingHeader(cons
   WriteBytesAt(path, pending_header_offset, std::span<const std::byte>(zero_sequence.data(), zero_sequence.size()));
 
   store.Commit();
+  const auto after_commit_stats = store.Stats();
   const auto after_commit_wal = store.WalStats();
-  Require(after_commit_wal.committed_seq == baseline_wal.committed_seq,
-          "commit must not regress committed_seq when WAL scan sees terminal/corrupt pending header");
+  Require(after_commit_stats.frame_count == baseline_stats.frame_count + 1,
+          "commit must apply local pending mutation even when WAL pending header is corrupt");
+  Require(after_commit_stats.pending_frames == 0,
+          "commit must clear pending_frames after in-memory pending apply");
+  Require(after_commit_wal.committed_seq >= staged_wal.last_seq,
+          "commit must advance committed_seq to include local pending WAL sequence");
+  Require(after_commit_wal.committed_seq >= baseline_wal.committed_seq,
+          "commit must keep committed_seq monotonic across corrupt pending header scenario");
   Require(after_commit_wal.committed_seq <= after_commit_wal.last_seq,
           "wal last_seq must stay >= committed_seq after corruption-tolerant commit");
   store.Close();
@@ -1773,6 +1838,7 @@ int main(int argc, char** argv) {
     RunScenarioPendingEmbeddingSnapshotReopenRecovery(path);
     RunScenarioPendingEmbeddingSnapshotUsesInMemoryCache(path);
     RunScenarioCloseAutoCommitsLocalEmbeddingMutations(path);
+    RunScenarioLocalMixedPendingCorruptWalCloseCommit(path);
     RunScenarioRecoveredPendingEmbeddingPlusLocalMutationCloseCommit(path);
     RunScenarioRecoveredPendingDeletePlusLocalMutationCloseCommit(path);
     RunScenarioRecoveredPendingSupersedePlusLocalMutationCloseCommit(path);

@@ -916,7 +916,7 @@ std::uint64_t WaxStore::Put(const std::vector<std::byte>& content, const Metadat
                                                    canonical_length,
                                                    canonical_checksum,
                                                    stored_checksum);
-  (void)writer.Append(wal_payload);
+  const auto sequence = writer.Append(wal_payload);
 
   wal_write_pos_ = writer.write_pos();
   wal_checkpoint_pos_ = writer.checkpoint_pos();
@@ -926,6 +926,20 @@ std::uint64_t WaxStore::Put(const std::vector<std::byte>& content, const Metadat
   wal_checkpoint_count_ = writer.checkpoint_count();
   wal_sentinel_write_count_ = writer.sentinel_write_count();
   wal_write_call_count_ = writer.write_call_count();
+  pending_mutation_order_cache_.emplace_back(sequence, PendingMutationKind::kPutFrame);
+  const auto put_inserted = pending_put_frame_cache_.emplace(sequence,
+                                                              PendingPutFrameCache{
+                                                                  .frame_id = frame_id,
+                                                                  .payload_offset = payload_offset,
+                                                                  .payload_length = payload_length,
+                                                                  .canonical_encoding = canonical_encoding,
+                                                                  .canonical_length = canonical_length,
+                                                                  .canonical_checksum = canonical_checksum,
+                                                                  .stored_checksum = stored_checksum,
+                                                              });
+  if (!put_inserted.second) {
+    throw StoreError("duplicate pending putFrame sequence in cache");
+  }
 
   stats_.pending_frames += 1;
   next_frame_id_ = frame_id + 1;
@@ -963,6 +977,8 @@ std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std:
   std::uint64_t payload_offset = FileSize(path_);
   std::vector<std::vector<std::byte>> wal_payloads{};
   wal_payloads.reserve(contents.size());
+  std::vector<PendingPutFrameCache> pending_puts{};
+  pending_puts.reserve(contents.size());
   for (std::size_t i = 0; i < contents.size(); ++i) {
     const auto frame_id = next_frame_id_ + static_cast<std::uint64_t>(i);
     const auto payload_length = static_cast<std::uint64_t>(contents[i].size());
@@ -981,13 +997,25 @@ std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std:
                                                       canonical_length,
                                                       canonical_checksum,
                                                       stored_checksum));
+    pending_puts.push_back(PendingPutFrameCache{
+        .frame_id = frame_id,
+        .payload_offset = payload_offset,
+        .payload_length = payload_length,
+        .canonical_encoding = canonical_encoding,
+        .canonical_length = canonical_length,
+        .canonical_checksum = canonical_checksum,
+        .stored_checksum = stored_checksum,
+    });
     ids.push_back(frame_id);
     if (payload_offset > std::numeric_limits<std::uint64_t>::max() - payload_length) {
       throw StoreError("putBatch payload offset overflow");
     }
     payload_offset += payload_length;
   }
-  (void)writer.AppendBatch(wal_payloads);
+  const auto sequences = writer.AppendBatch(wal_payloads);
+  if (sequences.size() != contents.size()) {
+    throw StoreError("wal putBatch append sequence count mismatch");
+  }
 
   wal_write_pos_ = writer.write_pos();
   wal_checkpoint_pos_ = writer.checkpoint_pos();
@@ -997,6 +1025,14 @@ std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std:
   wal_checkpoint_count_ = writer.checkpoint_count();
   wal_sentinel_write_count_ = writer.sentinel_write_count();
   wal_write_call_count_ = writer.write_call_count();
+  for (std::size_t i = 0; i < contents.size(); ++i) {
+    const auto sequence = sequences[i];
+    pending_mutation_order_cache_.emplace_back(sequence, PendingMutationKind::kPutFrame);
+    const auto put_inserted = pending_put_frame_cache_.emplace(sequence, pending_puts[i]);
+    if (!put_inserted.second) {
+      throw StoreError("duplicate pending putFrame sequence in cache");
+    }
+  }
 
   stats_.pending_frames += static_cast<std::uint64_t>(contents.size());
   next_frame_id_ += static_cast<std::uint64_t>(contents.size());
@@ -1062,11 +1098,16 @@ void WaxStore::PutEmbeddingBatch(const std::vector<std::uint64_t>& frame_ids,
   wal_write_call_count_ = writer.write_call_count();
   wal_pending_embedding_mutations_ += static_cast<std::uint64_t>(frame_ids.size());
   for (std::size_t i = 0; i < frame_ids.size(); ++i) {
+    const auto sequence = sequences[i];
+    pending_mutation_order_cache_.emplace_back(sequence, PendingMutationKind::kPutEmbedding);
     WaxPendingEmbedding entry{};
     entry.frame_id = frame_ids[i];
     entry.dimension = static_cast<std::uint32_t>(vectors[i].size());
     entry.vector = vectors[i];
-    pending_embedding_sequence_cache_.emplace_back(sequences[i], std::move(entry));
+    const auto embedding_inserted = pending_embedding_cache_.emplace(sequence, std::move(entry));
+    if (!embedding_inserted.second) {
+      throw StoreError("duplicate pending putEmbedding sequence in cache");
+    }
   }
   dirty_ = true;
   has_local_mutations_ = true;
@@ -1092,7 +1133,7 @@ void WaxStore::Delete(std::uint64_t frame_id) {
                                   wal_sentinel_write_count_,
                                   wal_write_call_count_);
   const auto wal_payload = BuildWalDeletePayload(frame_id);
-  (void)writer.Append(wal_payload);
+  const auto sequence = writer.Append(wal_payload);
 
   wal_write_pos_ = writer.write_pos();
   wal_checkpoint_pos_ = writer.checkpoint_pos();
@@ -1102,6 +1143,12 @@ void WaxStore::Delete(std::uint64_t frame_id) {
   wal_checkpoint_count_ = writer.checkpoint_count();
   wal_sentinel_write_count_ = writer.sentinel_write_count();
   wal_write_call_count_ = writer.write_call_count();
+  pending_mutation_order_cache_.emplace_back(sequence, PendingMutationKind::kDeleteFrame);
+  const auto delete_inserted =
+      pending_delete_frame_cache_.emplace(sequence, PendingDeleteFrameCache{.frame_id = frame_id});
+  if (!delete_inserted.second) {
+    throw StoreError("duplicate pending deleteFrame sequence in cache");
+  }
   wal_pending_delete_mutations_ += 1;
   dirty_ = true;
   has_local_mutations_ = true;
@@ -1130,7 +1177,7 @@ void WaxStore::Supersede(std::uint64_t superseded_id, std::uint64_t superseding_
                                   wal_sentinel_write_count_,
                                   wal_write_call_count_);
   const auto wal_payload = BuildWalSupersedePayload(superseded_id, superseding_id);
-  (void)writer.Append(wal_payload);
+  const auto sequence = writer.Append(wal_payload);
 
   wal_write_pos_ = writer.write_pos();
   wal_checkpoint_pos_ = writer.checkpoint_pos();
@@ -1140,6 +1187,16 @@ void WaxStore::Supersede(std::uint64_t superseded_id, std::uint64_t superseding_
   wal_checkpoint_count_ = writer.checkpoint_count();
   wal_sentinel_write_count_ = writer.sentinel_write_count();
   wal_write_call_count_ = writer.write_call_count();
+  pending_mutation_order_cache_.emplace_back(sequence, PendingMutationKind::kSupersedeFrame);
+  const auto supersede_inserted = pending_supersede_frame_cache_.emplace(
+      sequence,
+      PendingSupersedeFrameCache{
+          .superseded_id = superseded_id,
+          .superseding_id = superseding_id,
+      });
+  if (!supersede_inserted.second) {
+    throw StoreError("duplicate pending supersedeFrame sequence in cache");
+  }
   wal_pending_supersede_mutations_ += 1;
   dirty_ = true;
   has_local_mutations_ = true;
@@ -1161,14 +1218,73 @@ void WaxStore::Commit() {
   auto toc_summary = core::mv2s::DecodeToc(footer_slice->toc_bytes);
   auto frames = toc_summary.frames;
 
-  auto pending_scan = core::wal::ScanPendingMutationsWithState(path_,
-                                                                wal_offset_,
-                                                                wal_size_,
-                                                                wal_checkpoint_pos_,
-                                                                wal_committed_seq_);
-  const auto committed_seq_after_scan = std::max(wal_committed_seq_, pending_scan.state.last_sequence);
+  std::vector<core::wal::WalPendingMutationInfo> pending_mutations{};
+  pending_mutations.reserve(pending_mutation_order_cache_.size());
+  for (const auto& [sequence, kind] : pending_mutation_order_cache_) {
+    core::wal::WalPendingMutationInfo mutation{};
+    mutation.sequence = sequence;
+    switch (kind) {
+      case PendingMutationKind::kPutFrame: {
+        const auto it = pending_put_frame_cache_.find(sequence);
+        if (it == pending_put_frame_cache_.end()) {
+          throw StoreError("pending mutation cache missing putFrame payload");
+        }
+        const auto& cached = it->second;
+        mutation.kind = core::wal::WalMutationKind::kPutFrame;
+        mutation.put_frame = core::wal::WalPutFrameInfo{
+            .frame_id = cached.frame_id,
+            .payload_offset = cached.payload_offset,
+            .payload_length = cached.payload_length,
+            .canonical_encoding = cached.canonical_encoding,
+            .canonical_length = cached.canonical_length,
+            .canonical_checksum = cached.canonical_checksum,
+            .stored_checksum = cached.stored_checksum,
+        };
+        break;
+      }
+      case PendingMutationKind::kDeleteFrame: {
+        const auto it = pending_delete_frame_cache_.find(sequence);
+        if (it == pending_delete_frame_cache_.end()) {
+          throw StoreError("pending mutation cache missing deleteFrame payload");
+        }
+        mutation.kind = core::wal::WalMutationKind::kDeleteFrame;
+        mutation.delete_frame = core::wal::WalDeleteFrameInfo{
+            .frame_id = it->second.frame_id,
+        };
+        break;
+      }
+      case PendingMutationKind::kSupersedeFrame: {
+        const auto it = pending_supersede_frame_cache_.find(sequence);
+        if (it == pending_supersede_frame_cache_.end()) {
+          throw StoreError("pending mutation cache missing supersedeFrame payload");
+        }
+        mutation.kind = core::wal::WalMutationKind::kSupersedeFrame;
+        mutation.supersede_frame = core::wal::WalSupersedeFrameInfo{
+            .superseded_id = it->second.superseded_id,
+            .superseding_id = it->second.superseding_id,
+        };
+        break;
+      }
+      case PendingMutationKind::kPutEmbedding: {
+        const auto it = pending_embedding_cache_.find(sequence);
+        if (it == pending_embedding_cache_.end()) {
+          throw StoreError("pending mutation cache missing putEmbedding payload");
+        }
+        mutation.kind = core::wal::WalMutationKind::kPutEmbedding;
+        mutation.put_embedding = core::wal::WalPutEmbeddingInfo{
+            .frame_id = it->second.frame_id,
+            .dimension = it->second.dimension,
+            .vector = it->second.vector,
+        };
+        break;
+      }
+    }
+    pending_mutations.push_back(std::move(mutation));
+  }
+
+  const auto committed_seq_after_scan = std::max(wal_committed_seq_, wal_last_sequence_);
   const auto pending_apply = AnalyzePendingWalMutations(frames,
-                                                        pending_scan.pending_mutations,
+                                                        pending_mutations,
                                                         true,
                                                         footer_slice->footer_offset + core::mv2s::kFooterSize);
   frames = pending_apply.frames_after_apply;
@@ -1213,9 +1329,9 @@ void WaxStore::Commit() {
   core::wal::WalRingWriter writer(path_,
                                   wal_offset_,
                                   wal_size_,
-                                  pending_scan.state.write_pos,
+                                  wal_write_pos_,
                                   wal_checkpoint_pos_,
-                                  pending_scan.state.pending_bytes,
+                                  wal_pending_bytes_,
                                   committed_seq_after_scan,
                                   wal_wrap_count_,
                                   wal_checkpoint_count_,
@@ -1267,7 +1383,11 @@ void WaxStore::Commit() {
   wal_pending_embedding_mutations_ = 0;
   wal_pending_delete_mutations_ = 0;
   wal_pending_supersede_mutations_ = 0;
-  pending_embedding_sequence_cache_.clear();
+  pending_mutation_order_cache_.clear();
+  pending_put_frame_cache_.clear();
+  pending_delete_frame_cache_.clear();
+  pending_supersede_frame_cache_.clear();
+  pending_embedding_cache_.clear();
   footer_offset_ = footer_offset;
   dirty_ = false;
   has_local_mutations_ = false;
@@ -1388,12 +1508,19 @@ WaxPendingEmbeddingSnapshot WaxStore::PendingEmbeddingMutations(
   }
 
   WaxPendingEmbeddingSnapshot snapshot{};
-  for (const auto& [sequence, pending_embedding] : pending_embedding_sequence_cache_) {
+  for (const auto& [sequence, kind] : pending_mutation_order_cache_) {
+    if (kind != PendingMutationKind::kPutEmbedding) {
+      continue;
+    }
+    const auto it = pending_embedding_cache_.find(sequence);
+    if (it == pending_embedding_cache_.end()) {
+      throw StoreError("pending embedding cache entry missing payload");
+    }
     snapshot.latest_sequence = sequence;
     if (since_sequence.has_value() && sequence <= *since_sequence) {
       continue;
     }
-    snapshot.embeddings.push_back(pending_embedding);
+    snapshot.embeddings.push_back(it->second);
   }
   return snapshot;
 }
@@ -1538,21 +1665,87 @@ void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
   wal_replay_snapshot_hit_count_ = used_replay_snapshot ? 1U : 0U;
   footer_offset_ = footer_slice->footer_offset;
   next_frame_id_ = pending_analysis.max_frame_id_plus_one;
-  pending_embedding_sequence_cache_.clear();
-  if (pending_analysis.pending_embedding_mutations >
-      static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
-    throw StoreError("pending embedding mutation count exceeds addressable memory");
+  pending_mutation_order_cache_.clear();
+  pending_put_frame_cache_.clear();
+  pending_delete_frame_cache_.clear();
+  pending_supersede_frame_cache_.clear();
+  pending_embedding_cache_.clear();
+
+  if (pending_mutations.size() > static_cast<std::size_t>(std::numeric_limits<std::uint64_t>::max())) {
+    throw StoreError("pending mutation count exceeds UInt64.max");
   }
-  pending_embedding_sequence_cache_.reserve(static_cast<std::size_t>(pending_analysis.pending_embedding_mutations));
+  pending_mutation_order_cache_.reserve(pending_mutations.size());
   for (const auto& mutation : pending_mutations) {
-    if (!mutation.put_embedding.has_value()) {
-      continue;
+    switch (mutation.kind) {
+      case core::wal::WalMutationKind::kPutFrame: {
+        if (!mutation.put_frame.has_value()) {
+          throw StoreError("pending putFrame mutation missing payload");
+        }
+        const auto& put = *mutation.put_frame;
+        pending_mutation_order_cache_.emplace_back(mutation.sequence, PendingMutationKind::kPutFrame);
+        const auto put_inserted = pending_put_frame_cache_.emplace(
+            mutation.sequence,
+            PendingPutFrameCache{
+                .frame_id = put.frame_id,
+                .payload_offset = put.payload_offset,
+                .payload_length = put.payload_length,
+                .canonical_encoding = put.canonical_encoding,
+                .canonical_length = put.canonical_length,
+                .canonical_checksum = put.canonical_checksum,
+                .stored_checksum = put.stored_checksum,
+            });
+        if (!put_inserted.second) {
+          throw StoreError("duplicate pending putFrame sequence in recovery cache");
+        }
+        break;
+      }
+      case core::wal::WalMutationKind::kDeleteFrame: {
+        if (!mutation.delete_frame.has_value()) {
+          throw StoreError("pending deleteFrame mutation missing payload");
+        }
+        pending_mutation_order_cache_.emplace_back(mutation.sequence, PendingMutationKind::kDeleteFrame);
+        const auto delete_inserted = pending_delete_frame_cache_.emplace(
+            mutation.sequence,
+            PendingDeleteFrameCache{
+                .frame_id = mutation.delete_frame->frame_id,
+            });
+        if (!delete_inserted.second) {
+          throw StoreError("duplicate pending deleteFrame sequence in recovery cache");
+        }
+        break;
+      }
+      case core::wal::WalMutationKind::kSupersedeFrame: {
+        if (!mutation.supersede_frame.has_value()) {
+          throw StoreError("pending supersedeFrame mutation missing payload");
+        }
+        pending_mutation_order_cache_.emplace_back(mutation.sequence, PendingMutationKind::kSupersedeFrame);
+        const auto supersede_inserted = pending_supersede_frame_cache_.emplace(
+            mutation.sequence,
+            PendingSupersedeFrameCache{
+                .superseded_id = mutation.supersede_frame->superseded_id,
+                .superseding_id = mutation.supersede_frame->superseding_id,
+            });
+        if (!supersede_inserted.second) {
+          throw StoreError("duplicate pending supersedeFrame sequence in recovery cache");
+        }
+        break;
+      }
+      case core::wal::WalMutationKind::kPutEmbedding: {
+        if (!mutation.put_embedding.has_value()) {
+          throw StoreError("pending putEmbedding mutation missing payload");
+        }
+        pending_mutation_order_cache_.emplace_back(mutation.sequence, PendingMutationKind::kPutEmbedding);
+        WaxPendingEmbedding entry{};
+        entry.frame_id = mutation.put_embedding->frame_id;
+        entry.dimension = mutation.put_embedding->dimension;
+        entry.vector = mutation.put_embedding->vector;
+        const auto embedding_inserted = pending_embedding_cache_.emplace(mutation.sequence, std::move(entry));
+        if (!embedding_inserted.second) {
+          throw StoreError("duplicate pending putEmbedding sequence in recovery cache");
+        }
+        break;
+      }
     }
-    WaxPendingEmbedding entry{};
-    entry.frame_id = mutation.put_embedding->frame_id;
-    entry.dimension = mutation.put_embedding->dimension;
-    entry.vector = mutation.put_embedding->vector;
-    pending_embedding_sequence_cache_.emplace_back(mutation.sequence, std::move(entry));
   }
   dirty_ = wal_scan_state.last_sequence > committed_seq;
   has_local_mutations_ = false;

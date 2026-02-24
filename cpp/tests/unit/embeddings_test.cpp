@@ -237,8 +237,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
     waxcpp::MiniLMEmbedderTorch embedder;
     const auto info = embedder.runtime_info();
     Require(info.cuda_runtime_available, "assumed CUDA runtime should be reflected in runtime info");
-    Require(info.selected_backend == "fallback_cuda",
-            "cuda_preferred with available CUDA runtime should choose fallback_cuda backend");
+    const bool manifest_blocks_cuda =
+        info.libtorch_manifest_detected && info.libtorch_manifest_cuda_artifact_count == 0;
+    Require(info.selected_backend == (manifest_blocks_cuda ? "fallback_cpu" : "fallback_cuda"),
+            "cuda_preferred backend must respect detected manifest CUDA artifact availability");
   }
 
   {

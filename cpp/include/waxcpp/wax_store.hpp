@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <array>
+#include <optional>
 #include <utility>
 #include <unordered_map>
 #include <vector>
@@ -116,7 +118,39 @@ class WaxStore {
   std::uint64_t wal_replay_snapshot_hit_count_ = 0;
   std::uint64_t footer_offset_ = 0;
   std::uint64_t next_frame_id_ = 0;
-  std::vector<std::pair<std::uint64_t, WaxPendingEmbedding>> pending_embedding_sequence_cache_{};
+
+  enum class PendingMutationKind : std::uint8_t {
+    kPutFrame = 1,
+    kDeleteFrame = 2,
+    kSupersedeFrame = 3,
+    kPutEmbedding = 4,
+  };
+
+  struct PendingPutFrameCache {
+    std::uint64_t frame_id = 0;
+    std::uint64_t payload_offset = 0;
+    std::uint64_t payload_length = 0;
+    std::uint8_t canonical_encoding = 0;
+    std::uint64_t canonical_length = 0;
+    std::array<std::byte, 32> canonical_checksum{};
+    std::array<std::byte, 32> stored_checksum{};
+  };
+
+  struct PendingDeleteFrameCache {
+    std::uint64_t frame_id = 0;
+  };
+
+  struct PendingSupersedeFrameCache {
+    std::uint64_t superseded_id = 0;
+    std::uint64_t superseding_id = 0;
+  };
+
+  std::vector<std::pair<std::uint64_t, PendingMutationKind>> pending_mutation_order_cache_{};
+  std::unordered_map<std::uint64_t, PendingPutFrameCache> pending_put_frame_cache_{};
+  std::unordered_map<std::uint64_t, PendingDeleteFrameCache> pending_delete_frame_cache_{};
+  std::unordered_map<std::uint64_t, PendingSupersedeFrameCache> pending_supersede_frame_cache_{};
+  std::unordered_map<std::uint64_t, WaxPendingEmbedding> pending_embedding_cache_{};
+
   bool dirty_ = false;
   bool has_local_mutations_ = false;
   bool is_open_ = false;
