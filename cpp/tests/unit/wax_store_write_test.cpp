@@ -1116,6 +1116,74 @@ void RunScenarioPendingLifecycleMutationCountersRecovered(const std::filesystem:
   }
 }
 
+void RunScenarioCrashWindowStep2WithMixedRecoveredAndLocalPending(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: crash-window step2 with mixed recovered+local pending");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    const auto ids = store.PutBatch(
+        {{std::byte{0xB1}}, {std::byte{0xB2}}, {std::byte{0xB3}}},
+        {});
+    Require(ids.size() == 3 && ids[0] == 0 && ids[1] == 1 && ids[2] == 2, "expected dense ids for mixed step2");
+    store.Commit();
+
+    store.Delete(0);
+    const auto id3 = store.Put({std::byte{0xB4}});
+    Require(id3 == 3, "expected dense pending id3 before mixed step2 crash");
+    store.PutEmbedding(2, {0.1F, 0.2F, 0.3F});
+    // Crash simulation: recovered pending set should be reconstructed on reopen.
+  }
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto before_stats = reopened.Stats();
+    const auto before_wal = reopened.WalStats();
+    Require(before_stats.pending_frames == 1, "reopen should recover one pending put before mixed step2");
+    Require(before_wal.pending_delete_mutations == 1, "reopen should recover one pending delete before mixed step2");
+    Require(before_wal.pending_embedding_mutations == 1,
+            "reopen should recover one pending embedding before mixed step2");
+
+    reopened.Supersede(1, 2);
+    reopened.PutEmbedding(3, {0.4F, 0.5F, 0.6F});
+    bool threw = false;
+    {
+      ScopedCommitFailStep fail_step(2);
+      try {
+        reopened.Commit();
+      } catch (const std::exception&) {
+        threw = true;
+      }
+    }
+    Require(threw, "commit should fail at step2 for mixed recovered/local scenario");
+    // Simulate crash: do not close (avoid auto-commit path masking publication semantics).
+  }
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    reopened.Verify(true);
+    const auto stats = reopened.Stats();
+    const auto wal = reopened.WalStats();
+    Require(stats.frame_count == 4, "step2 mixed recovered/local crash should publish new frame");
+    Require(stats.pending_frames == 0, "step2 mixed recovered/local crash should clear pending put state");
+    Require(wal.pending_delete_mutations == 0, "step2 mixed recovered/local crash should clear delete counter");
+    Require(wal.pending_supersede_mutations == 0,
+            "step2 mixed recovered/local crash should clear supersede counter");
+    Require(wal.pending_embedding_mutations == 0,
+            "step2 mixed recovered/local crash should clear embedding counter");
+
+    const auto frame0 = reopened.FrameMeta(0);
+    const auto frame1 = reopened.FrameMeta(1);
+    const auto frame2 = reopened.FrameMeta(2);
+    Require(frame0.has_value() && frame1.has_value() && frame2.has_value(),
+            "step2 mixed recovered/local should expose frame metas after reopen");
+    Require(frame0->status == 1, "step2 mixed recovered/local should apply delete on frame 0");
+    Require(frame1->superseded_by.has_value() && *frame1->superseded_by == 2,
+            "step2 mixed recovered/local should apply supersede edge 1<-2");
+    Require(frame2->supersedes.has_value() && *frame2->supersedes == 1,
+            "step2 mixed recovered/local should apply supersede edge 2->1");
+    reopened.Close();
+  }
+}
+
 void RunScenarioCrashWindowAfterTocWrite(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: crash-window after TOC write (before footer)");
   {
@@ -1955,6 +2023,7 @@ int main(int argc, char** argv) {
     RunScenarioDeleteAndSupersedePersist(path);
     RunScenarioPendingLifecycleMutationCountersLocal(path);
     RunScenarioPendingLifecycleMutationCountersRecovered(path);
+    RunScenarioCrashWindowStep2WithMixedRecoveredAndLocalPending(path);
     RunScenarioCrashWindowAfterTocWrite(path);
     RunScenarioCrashWindowAfterFooterWrite(path);
     RunScenarioCrashWindowAfterCheckpointBeforeHeaders(path);
