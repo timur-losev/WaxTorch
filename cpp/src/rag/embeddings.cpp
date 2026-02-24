@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <cstdlib>
 #include <cmath>
 #include <cstddef>
@@ -19,6 +20,14 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+#ifndef WAXCPP_HAS_TORCH_RUNTIME
+#define WAXCPP_HAS_TORCH_RUNTIME 0
+#endif
+
+#if WAXCPP_HAS_TORCH_RUNTIME
+#include <torch/torch.h>
+#endif
 
 namespace waxcpp {
 namespace {
@@ -70,6 +79,21 @@ bool EnvIsTruthy(const char* name) {
   return value == "1" || value == "true" || value == "yes" || value == "on";
 }
 
+std::optional<bool> ParseOptionalBoolEnv(const char* name) {
+  const auto raw = GetEnvValue(name);
+  if (!raw.has_value()) {
+    return std::nullopt;
+  }
+  const auto value = ToAsciiLowerString(*raw);
+  if (value == "1" || value == "true" || value == "yes" || value == "on") {
+    return true;
+  }
+  if (value == "0" || value == "false" || value == "no" || value == "off") {
+    return false;
+  }
+  throw std::runtime_error(std::string("invalid boolean env value for ") + name + ": " + *raw);
+}
+
 std::string ResolveTorchRuntimePolicy() {
   const auto raw = GetEnvValue("WAXCPP_TORCH_RUNTIME");
   if (!raw.has_value()) {
@@ -83,9 +107,33 @@ std::string ResolveTorchRuntimePolicy() {
 }
 
 bool DetectCudaRuntimeAvailable() {
-  // Real CUDA probing will be wired with libtorch runtime integration.
-  // For now, allow explicit opt-in signal for deterministic policy testing.
-  return EnvIsTruthy("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE");
+  if (const auto assumed = ParseOptionalBoolEnv("WAXCPP_TORCH_ASSUME_CUDA_AVAILABLE"); assumed.has_value()) {
+    return *assumed;
+  }
+
+#if WAXCPP_HAS_TORCH_RUNTIME
+  try {
+    return torch::cuda::is_available();
+  } catch (...) {
+    return false;
+  }
+#else
+  return false;
+#endif
+}
+
+bool ResolveRealTorchRuntimeEnabled() {
+#if WAXCPP_HAS_TORCH_RUNTIME
+  if (const auto enabled = ParseOptionalBoolEnv("WAXCPP_ENABLE_REAL_TORCH_RUNTIME"); enabled.has_value()) {
+    return *enabled;
+  }
+  return true;
+#else
+  if (const auto enabled = ParseOptionalBoolEnv("WAXCPP_ENABLE_REAL_TORCH_RUNTIME"); enabled.has_value() && *enabled) {
+    return true;
+  }
+  return false;
+#endif
 }
 
 bool IsAsciiHex(char ch) {
@@ -906,14 +954,85 @@ void NormalizeL2(std::vector<float>& v) {
   }
 }
 
+std::vector<float> BuildFallbackEmbedding(std::string_view text, int dims, bool do_normalize) {
+  std::vector<float> embedding(static_cast<std::size_t>(dims), 0.0F);
+  const auto tokens = Tokenize(text);
+  for (const auto& token : tokens) {
+    const auto hash = HashToken(token);
+    const auto index = static_cast<std::size_t>(hash % static_cast<std::uint64_t>(dims));
+    const float sign = ((hash >> 63U) != 0U) ? -1.0F : 1.0F;
+    embedding[index] += sign;
+  }
+
+  if (do_normalize) {
+    NormalizeL2(embedding);
+  }
+  return embedding;
+}
+
+#if WAXCPP_HAS_TORCH_RUNTIME
+std::vector<float> BuildTorchRuntimeEmbedding(std::string_view text, int dims, bool use_cuda, bool do_normalize) {
+  const auto tokens = Tokenize(text);
+  if (tokens.empty()) {
+    return std::vector<float>(static_cast<std::size_t>(dims), 0.0F);
+  }
+
+  std::vector<std::int64_t> indices{};
+  std::vector<float> values{};
+  indices.reserve(tokens.size());
+  values.reserve(tokens.size());
+  for (const auto& token : tokens) {
+    const auto hash = HashToken(token);
+    indices.push_back(static_cast<std::int64_t>(hash % static_cast<std::uint64_t>(dims)));
+    const float sign = ((hash >> 63U) != 0U) ? -1.0F : 1.0F;
+    values.push_back(sign);
+  }
+
+  const auto device = use_cuda ? torch::Device(torch::kCUDA, 0) : torch::Device(torch::kCPU);
+  auto embedding = torch::zeros({dims}, torch::TensorOptions().dtype(torch::kFloat32).device(device));
+  auto idx_tensor =
+      torch::from_blob(indices.data(), {static_cast<std::int64_t>(indices.size())}, torch::TensorOptions().dtype(torch::kInt64))
+          .clone()
+          .to(device);
+  auto val_tensor =
+      torch::from_blob(values.data(), {static_cast<std::int64_t>(values.size())}, torch::TensorOptions().dtype(torch::kFloat32))
+          .clone()
+          .to(device);
+
+  embedding.index_add_(0, idx_tensor, val_tensor);
+  if (do_normalize) {
+    const auto norm = embedding.norm(2);
+    const auto norm_scalar = norm.item<float>();
+    if (norm_scalar > 0.0F) {
+      embedding = embedding / norm;
+    }
+  }
+
+  auto cpu_embedding = embedding.to(torch::kCPU).contiguous();
+  std::vector<float> out(static_cast<std::size_t>(dims), 0.0F);
+  std::memcpy(out.data(), cpu_embedding.data_ptr<float>(), static_cast<std::size_t>(dims) * sizeof(float));
+  return out;
+}
+#endif
+
 }  // namespace
 
 MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
     : memoization_capacity_(memoization_capacity) {
+  runtime_info_.libtorch_runtime_compiled = WAXCPP_HAS_TORCH_RUNTIME != 0;
   runtime_info_.runtime_policy = ResolveTorchRuntimePolicy();
   runtime_info_.cuda_preferred_requested = runtime_info_.runtime_policy == "cuda_preferred";
+  runtime_info_.libtorch_runtime_strict = EnvIsTruthy("WAXCPP_REQUIRE_REAL_TORCH_RUNTIME");
+  runtime_info_.libtorch_runtime_enabled = ResolveRealTorchRuntimeEnabled();
+  if (runtime_info_.libtorch_runtime_strict) {
+    runtime_info_.libtorch_runtime_enabled = true;
+  }
+  if (runtime_info_.libtorch_runtime_enabled && !runtime_info_.libtorch_runtime_compiled) {
+    throw std::runtime_error("real libtorch runtime is requested but this build was compiled without libtorch");
+  }
   runtime_info_.cuda_runtime_available = DetectCudaRuntimeAvailable();
   runtime_info_.selected_backend = "fallback_cpu";
+  runtime_info_.fallback_active = true;
 
   bool override_was_set = false;
   std::optional<ManifestArtifactSelection> manifest_any_artifact{};
@@ -952,8 +1071,16 @@ MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
     const bool manifest_allows_cuda =
         !runtime_info_.libtorch_manifest_detected || runtime_info_.libtorch_manifest_cuda_artifact_count > 0;
     if (manifest_allows_cuda) {
-      runtime_info_.selected_backend = "fallback_cuda";
+      if (runtime_info_.libtorch_runtime_enabled) {
+        runtime_info_.selected_backend = "libtorch_cuda";
+        runtime_info_.fallback_active = false;
+      } else {
+        runtime_info_.selected_backend = "fallback_cuda";
+      }
     }
+  } else if (runtime_info_.libtorch_runtime_enabled) {
+    runtime_info_.selected_backend = "libtorch_cpu";
+    runtime_info_.fallback_active = false;
   }
 
   if (runtime_info_.libtorch_manifest_detected && runtime_info_.libtorch_manifest_valid) {
@@ -1009,18 +1136,30 @@ std::vector<float> MiniLMEmbedderTorch::Embed(const std::string& text) {
   }
 
   constexpr int kDims = 384;
-  std::vector<float> embedding(static_cast<std::size_t>(kDims), 0.0F);
-
-  const auto tokens = Tokenize(text);
-  for (const auto& token : tokens) {
-    const auto hash = HashToken(token);
-    const auto index = static_cast<std::size_t>(hash % static_cast<std::uint64_t>(kDims));
-    const float sign = ((hash >> 63U) != 0U) ? -1.0F : 1.0F;
-    embedding[index] += sign;
-  }
-
-  if (normalize()) {
-    NormalizeL2(embedding);
+  std::vector<float> embedding{};
+  if (!runtime_info_.fallback_active && runtime_info_.libtorch_runtime_enabled) {
+#if WAXCPP_HAS_TORCH_RUNTIME
+    const bool use_cuda_backend = runtime_info_.selected_backend == "libtorch_cuda";
+    try {
+      embedding = BuildTorchRuntimeEmbedding(text, kDims, use_cuda_backend, normalize());
+    } catch (const std::exception& ex) {
+      if (runtime_info_.libtorch_runtime_strict) {
+        throw std::runtime_error(std::string("real libtorch runtime embedding failed: ") + ex.what());
+      }
+      {
+        std::lock_guard<std::mutex> lock(memoization_mutex_);
+        runtime_info_.libtorch_runtime_error = ex.what();
+      }
+      embedding = BuildFallbackEmbedding(text, kDims, normalize());
+    }
+#else
+    if (runtime_info_.libtorch_runtime_strict) {
+      throw std::runtime_error("real libtorch runtime embedding is unavailable in this build");
+    }
+    embedding = BuildFallbackEmbedding(text, kDims, normalize());
+#endif
+  } else {
+    embedding = BuildFallbackEmbedding(text, kDims, normalize());
   }
 
   if (memoization_capacity_ > 0) {

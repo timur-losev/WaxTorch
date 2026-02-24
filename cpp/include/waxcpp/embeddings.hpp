@@ -23,6 +23,9 @@ struct MiniLMRuntimeInfo {
   bool fallback_active = true;
   bool cuda_preferred_requested = false;
   bool cuda_runtime_available = false;
+  bool libtorch_runtime_compiled = false;
+  bool libtorch_runtime_enabled = false;
+  bool libtorch_runtime_strict = false;
   std::string runtime_policy = "cpu_only";
   std::string selected_backend = "fallback_cpu";
   bool libtorch_manifest_detected = false;
@@ -36,6 +39,7 @@ struct MiniLMRuntimeInfo {
   std::optional<std::string> libtorch_selected_artifact_sha256;
   std::optional<std::string> libtorch_selected_artifact_class;
   bool libtorch_selected_artifact_sha256_verified = false;
+  std::optional<std::string> libtorch_runtime_error;
 };
 
 class EmbeddingProvider {

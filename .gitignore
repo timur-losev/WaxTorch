@@ -19,3 +19,5 @@ DerivedData/
 /cpp/.cache/
 build/
 *.writer.lease
+cpp/build_alt2/
+cpp/build_vs/

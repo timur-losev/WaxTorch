@@ -175,6 +175,8 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
   {
     waxcpp::MiniLMEmbedderTorch embedder;
     const auto info = embedder.runtime_info();
+    Require(!info.libtorch_runtime_compiled, "default test build should not have libtorch runtime compiled");
+    Require(!info.libtorch_runtime_enabled, "default test build should not enable real libtorch runtime");
     Require(info.fallback_active, "fallback backend should remain active in current build");
     Require(info.runtime_policy == "cpu_only", "default torch runtime policy should be cpu_only");
     Require(!info.cuda_preferred_requested, "default runtime should not request cuda");
@@ -202,6 +204,18 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       Require(!info.libtorch_selected_artifact_sha256_verified,
               "artifact sha256 verification must remain false without manifest");
     }
+  }
+
+  {
+    const ScopedEnvVar require_real("WAXCPP_REQUIRE_REAL_TORCH_RUNTIME", std::string("1"));
+    bool threw = false;
+    try {
+      waxcpp::MiniLMEmbedderTorch embedder;
+      (void)embedder;
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    Require(threw, "strict real-runtime policy should fail when libtorch runtime is not compiled");
   }
 
   {

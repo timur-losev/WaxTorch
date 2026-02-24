@@ -14,6 +14,8 @@ option(WAXCPP_BUILD_TESTS "Build waxcpp tests" ON)
 option(WAXCPP_REQUIRE_PARITY_FIXTURES "Fail parity test if no .mv2s fixtures are found" OFF)
 option(WAXCPP_REQUIRE_SWIFT_FIXTURES "Fail parity test if no non-synthetic fixtures are found" OFF)
 option(WAXCPP_ENABLE_SQLITE_BACKEND "Enable SQLite/FTS5 backend when bundled sqlite amalgamation exists (experimental; OFF by default)" OFF)
+option(WAXCPP_ENABLE_LIBTORCH_RUNTIME "Enable real LibTorch runtime backend for MiniLMEmbedderTorch (experimental; OFF by default)" OFF)
+set(WAXCPP_TORCH_RUNTIME_DEFINE 0)
 
 set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/embeddings.hpp
@@ -72,6 +74,21 @@ if (TARGET waxcpp_sqlite3)
   target_link_libraries(waxcpp PRIVATE waxcpp_sqlite3)
   target_compile_definitions(waxcpp PRIVATE WAXCPP_HAS_SQLITE=1)
 endif()
+
+if (WAXCPP_ENABLE_LIBTORCH_RUNTIME)
+  find_package(Torch REQUIRED)
+  target_link_libraries(waxcpp PRIVATE ${TORCH_LIBRARIES})
+  if (DEFINED TORCH_INCLUDE_DIRS)
+    target_include_directories(waxcpp PRIVATE ${TORCH_INCLUDE_DIRS})
+  endif()
+  if (DEFINED TORCH_CXX_FLAGS)
+    separate_arguments(WAXCPP_TORCH_CXX_FLAGS NATIVE_COMMAND "${TORCH_CXX_FLAGS}")
+    target_compile_options(waxcpp PRIVATE ${WAXCPP_TORCH_CXX_FLAGS})
+  endif()
+  set(WAXCPP_TORCH_RUNTIME_DEFINE 1)
+endif()
+
+target_compile_definitions(waxcpp PUBLIC WAXCPP_HAS_TORCH_RUNTIME=${WAXCPP_TORCH_RUNTIME_DEFINE})
 
 target_compile_features(waxcpp PUBLIC cxx_std_20)
 target_precompile_headers(waxcpp

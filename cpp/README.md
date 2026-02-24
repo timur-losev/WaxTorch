@@ -39,11 +39,20 @@ ctest --test-dir cpp/build -R waxcpp_mv2s_format_test --output-on-failure
 
 MiniLM runtime manifest policy (optional):
 ```bash
+# Optional: enable real libtorch runtime backend at build time
+cmake -S cpp -B cpp/build -DWAXCPP_ENABLE_LIBTORCH_RUNTIME=ON
+
 # Override manifest lookup path
 export WAXCPP_LIBTORCH_MANIFEST=/abs/path/to/libtorch-manifest.json
 
 # Require manifest presence during MiniLM embedder construction
 export WAXCPP_REQUIRE_LIBTORCH_MANIFEST=1
+
+# Optional: force-enable/disable real libtorch runtime path at runtime
+export WAXCPP_ENABLE_REAL_TORCH_RUNTIME=1
+
+# Optional: require real runtime (throw if libtorch runtime is unavailable or runtime init fails)
+export WAXCPP_REQUIRE_REAL_TORCH_RUNTIME=1
 
 # Optional: override root directory used to resolve selected artifact relative paths
 export WAXCPP_LIBTORCH_DIST_ROOT=/abs/path/to/cpp/third_party/libtorch-dist
