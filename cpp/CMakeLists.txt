@@ -26,6 +26,7 @@ set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/pch.hpp
   include/waxcpp/query_analyzer.hpp
   include/waxcpp/search.hpp
+  include/waxcpp/maintenance.hpp
   include/waxcpp/surrogate_generator.hpp
   include/waxcpp/token_counter.hpp
   include/waxcpp/structured_memory.hpp
@@ -43,6 +44,7 @@ add_library(waxcpp STATIC
   src/text/structured_memory_store.cpp
   src/vector/usearch_vector_engine.cpp
   src/vector/mv2v_format.cpp
+  src/rag/maintenance.cpp
   src/rag/query_analyzer.cpp
   src/rag/search.cpp
   src/rag/surrogate_generator.cpp
@@ -330,6 +332,16 @@ if (WAXCPP_BUILD_TESTS)
   endif()
   target_precompile_headers(waxcpp_surrogate_generator_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_surrogate_generator_test COMMAND waxcpp_surrogate_generator_test)
+
+  add_executable(waxcpp_maintenance_test tests/unit/maintenance_test.cpp)
+  target_link_libraries(waxcpp_maintenance_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_maintenance_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_maintenance_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_maintenance_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_maintenance_test COMMAND waxcpp_maintenance_test)
 
   add_executable(waxcpp_mv2s_parity_test tests/parity/mv2s_fixture_parity_test.cpp)
   target_link_libraries(waxcpp_mv2s_parity_test PRIVATE waxcpp)

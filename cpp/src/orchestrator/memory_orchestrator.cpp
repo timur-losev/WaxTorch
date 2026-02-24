@@ -1,6 +1,7 @@
 #include "waxcpp/memory_orchestrator.hpp"
 #include "waxcpp/fts5_search_engine.hpp"
 #include "waxcpp/search.hpp"
+#include "waxcpp/token_counter.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -577,10 +578,8 @@ void ThrowIfClosed(bool closed) {
   }
 }
 
-std::vector<std::string> ChunkContent(const std::string& content, int target_tokens, int overlap_tokens) {
-  if (target_tokens <= 0) {
-    return {content};
-  }
+/// Chunk content using whitespace word boundaries (default path).
+std::vector<std::string> ChunkContentWhitespace(const std::string& content, int target_tokens, int overlap_tokens) {
   auto tokens = TokenizeWhitespace(content);
   if (tokens.empty()) {
     return {content};
@@ -588,7 +587,6 @@ std::vector<std::string> ChunkContent(const std::string& content, int target_tok
   if (tokens.size() <= static_cast<std::size_t>(target_tokens)) {
     return {JoinTokenRange(tokens, 0, tokens.size())};
   }
-
   const int step = std::max(1, target_tokens - std::max(0, overlap_tokens));
   std::vector<std::string> chunks{};
   for (std::size_t start = 0; start < tokens.size(); start += static_cast<std::size_t>(step)) {
@@ -599,6 +597,35 @@ std::vector<std::string> ChunkContent(const std::string& content, int target_tok
     }
   }
   return chunks;
+}
+
+/// Chunk content using a real TokenCounter (BPE-aware path).
+/// Falls back to whitespace chunking when counter is nullptr.
+std::vector<std::string> ChunkContentTokenAware(const TokenCounter* counter,
+                                                  const std::string& content,
+                                                  int target_tokens,
+                                                  int overlap_tokens) {
+  if (counter == nullptr || !counter->HasVocab()) {
+    return ChunkContentWhitespace(content, target_tokens, overlap_tokens);
+  }
+  ChunkingConfig config;
+  config.target_tokens = target_tokens;
+  config.overlap_tokens = std::max(0, overlap_tokens);
+  auto chunks = ChunkText(*counter, content, config);
+  if (chunks.empty()) {
+    return {content};
+  }
+  return chunks;
+}
+
+std::vector<std::string> ChunkContent(const std::string& content, int target_tokens, int overlap_tokens) {
+  if (target_tokens <= 0) {
+    return {content};
+  }
+  // Default path: whitespace-based chunking (backward compatible).
+  // When a BPE vocab-loaded TokenCounter is available, callers should
+  // use ChunkContentTokenAware instead.
+  return ChunkContentWhitespace(content, target_tokens, overlap_tokens);
 }
 
 struct StoreSearchChannels {
