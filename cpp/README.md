@@ -92,6 +92,18 @@ export WAXCPP_LIBTORCH_DIST_ROOT=/abs/path/to/cpp/third_party/libtorch-dist
 ctest --test-dir cpp/build --output-on-failure -R waxcpp_libtorch_manifest_gate_test
 ```
 
+Windows CUDA artifact prep (PowerShell):
+```powershell
+# From repo root. Downloads/copies a CUDA libtorch zip into cpp/third_party/libtorch-dist
+# and updates cpp/manifest/libtorch-manifest.json with path+sha256.
+.\scripts\build-libtorch-windows-cuda.ps1 `
+  -Url "https://download.pytorch.org/libtorch/cu124/libtorch-win-shared-with-deps-2.5.1%2Bcu124.zip"
+
+# Or use a local zip you downloaded manually:
+.\scripts\build-libtorch-windows-cuda.ps1 `
+  -ZipPath "C:\Downloads\libtorch-win-shared-with-deps-2.5.1+cu124.zip"
+```
+
 SQLite backend (optional, currently disabled by default in favor of WAL-focused track):
 ```bash
 cmake -S cpp -B cpp/build -DWAXCPP_ENABLE_SQLITE_BACKEND=ON

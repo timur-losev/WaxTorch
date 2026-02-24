@@ -649,6 +649,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added crash-window regression for failpoint step2 (footer published) on mixed recovered+local pending mutations, validating externally visible reopen state and cleared pending WAL counters | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Stabilized CUDA-policy regression against repo-default manifest detection by making expected backend selection depend on detected manifest CUDA artifact availability | Codex |
 | `cpp/CMakeLists.txt` + `scripts/generate-cmake.bat` + `cpp/README.md` | Enforced deterministic LibTorch runtime configuration: runtime ON now requires explicit `WAXCPP_LIBTORCH_ROOT` or `Torch_DIR`, disables implicit system Torch auto-discovery, and validates `TorchConfig.cmake` path early | Codex |
+| `scripts/build-libtorch-windows-cuda.ps1` + `cpp/README.md` | Added Windows helper to stage CUDA libtorch zip into `cpp/third_party/libtorch-dist`, compute SHA256, and upsert deterministic `path+sha256` entry in `cpp/manifest/libtorch-manifest.json` for runtime/checksum gates | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
