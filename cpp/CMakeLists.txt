@@ -26,6 +26,7 @@ set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/pch.hpp
   include/waxcpp/query_analyzer.hpp
   include/waxcpp/search.hpp
+  include/waxcpp/surrogate_generator.hpp
   include/waxcpp/token_counter.hpp
   include/waxcpp/structured_memory.hpp
   include/waxcpp/types.hpp
@@ -44,6 +45,7 @@ add_library(waxcpp STATIC
   src/vector/mv2v_format.cpp
   src/rag/query_analyzer.cpp
   src/rag/search.cpp
+  src/rag/surrogate_generator.cpp
   src/rag/token_counter.cpp
   src/rag/embeddings.cpp
   src/orchestrator/memory_orchestrator.cpp
@@ -318,6 +320,16 @@ if (WAXCPP_BUILD_TESTS)
   endif()
   target_precompile_headers(waxcpp_token_counter_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_token_counter_test COMMAND waxcpp_token_counter_test)
+
+  add_executable(waxcpp_surrogate_generator_test tests/unit/surrogate_generator_test.cpp)
+  target_link_libraries(waxcpp_surrogate_generator_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_surrogate_generator_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_surrogate_generator_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_surrogate_generator_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_surrogate_generator_test COMMAND waxcpp_surrogate_generator_test)
 
   add_executable(waxcpp_mv2s_parity_test tests/parity/mv2s_fixture_parity_test.cpp)
   target_link_libraries(waxcpp_mv2s_parity_test PRIVATE waxcpp)
