@@ -15,6 +15,7 @@ option(WAXCPP_REQUIRE_PARITY_FIXTURES "Fail parity test if no .mv2s fixtures are
 option(WAXCPP_REQUIRE_SWIFT_FIXTURES "Fail parity test if no non-synthetic fixtures are found" OFF)
 option(WAXCPP_ENABLE_SQLITE_BACKEND "Enable SQLite/FTS5 backend when bundled sqlite amalgamation exists (experimental; OFF by default)" OFF)
 option(WAXCPP_ENABLE_LIBTORCH_RUNTIME "Enable real LibTorch runtime backend for MiniLMEmbedderTorch (experimental; OFF by default)" OFF)
+set(WAXCPP_LIBTORCH_ROOT "" CACHE PATH "Optional path to an unpacked LibTorch distribution root")
 set(WAXCPP_TORCH_RUNTIME_DEFINE 0)
 
 set(WAXCPP_PUBLIC_HEADERS
@@ -76,7 +77,31 @@ if (TARGET waxcpp_sqlite3)
 endif()
 
 if (WAXCPP_ENABLE_LIBTORCH_RUNTIME)
-  find_package(Torch REQUIRED)
+  if (WAXCPP_LIBTORCH_ROOT)
+    file(TO_CMAKE_PATH "${WAXCPP_LIBTORCH_ROOT}" WAXCPP_LIBTORCH_ROOT_NORMALIZED)
+    set(WAXCPP_LIBTORCH_TORCH_DIR_A "${WAXCPP_LIBTORCH_ROOT_NORMALIZED}/share/cmake/Torch")
+    set(WAXCPP_LIBTORCH_TORCH_DIR_B "${WAXCPP_LIBTORCH_ROOT_NORMALIZED}/libtorch/share/cmake/Torch")
+
+    if (DEFINED Torch_DIR AND NOT Torch_DIR STREQUAL "")
+      message(STATUS "WAXCPP_LIBTORCH_ROOT is set; using explicit Torch_DIR='${Torch_DIR}'")
+    elseif (EXISTS "${WAXCPP_LIBTORCH_TORCH_DIR_A}/TorchConfig.cmake")
+      set(Torch_DIR "${WAXCPP_LIBTORCH_TORCH_DIR_A}")
+      list(PREPEND CMAKE_PREFIX_PATH "${WAXCPP_LIBTORCH_ROOT_NORMALIZED}")
+      message(STATUS "Resolved Torch_DIR from WAXCPP_LIBTORCH_ROOT: ${Torch_DIR}")
+    elseif (EXISTS "${WAXCPP_LIBTORCH_TORCH_DIR_B}/TorchConfig.cmake")
+      set(Torch_DIR "${WAXCPP_LIBTORCH_TORCH_DIR_B}")
+      list(PREPEND CMAKE_PREFIX_PATH "${WAXCPP_LIBTORCH_ROOT_NORMALIZED}/libtorch")
+      message(STATUS "Resolved Torch_DIR from nested WAXCPP_LIBTORCH_ROOT/libtorch: ${Torch_DIR}")
+    else()
+      message(FATAL_ERROR
+        "WAXCPP_ENABLE_LIBTORCH_RUNTIME=ON but WAXCPP_LIBTORCH_ROOT does not contain TorchConfig.cmake.\n"
+        "Expected one of:\n"
+        "  ${WAXCPP_LIBTORCH_TORCH_DIR_A}/TorchConfig.cmake\n"
+        "  ${WAXCPP_LIBTORCH_TORCH_DIR_B}/TorchConfig.cmake")
+    endif()
+  endif()
+
+  find_package(Torch REQUIRED CONFIG)
   target_link_libraries(waxcpp PRIVATE ${TORCH_LIBRARIES})
   if (DEFINED TORCH_INCLUDE_DIRS)
     target_include_directories(waxcpp PRIVATE ${TORCH_INCLUDE_DIRS})

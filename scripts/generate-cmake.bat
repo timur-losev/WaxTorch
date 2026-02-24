@@ -13,6 +13,9 @@ set "TOOLSET="
 set "BUILD_TESTS=ON"
 set "REQUIRE_PARITY_FIXTURES=OFF"
 set "REQUIRE_SWIFT_FIXTURES=OFF"
+set "ENABLE_LIBTORCH_RUNTIME=OFF"
+set "LIBTORCH_ROOT="
+set "EXTRA_TORCH_DIR="
 
 :parse_args
 if "%~1"=="" goto run
@@ -82,6 +85,30 @@ if /I "%~1"=="--require-swift-fixtures" (
   goto parse_args
 )
 
+if /I "%~1"=="--enable-libtorch-runtime" (
+  if "%~2"=="" goto missing_value
+  set "ENABLE_LIBTORCH_RUNTIME=%~2"
+  shift
+  shift
+  goto parse_args
+)
+
+if /I "%~1"=="--libtorch-root" (
+  if "%~2"=="" goto missing_value
+  set "LIBTORCH_ROOT=%~2"
+  shift
+  shift
+  goto parse_args
+)
+
+if /I "%~1"=="--torch-dir" (
+  if "%~2"=="" goto missing_value
+  set "EXTRA_TORCH_DIR=%~2"
+  shift
+  shift
+  goto parse_args
+)
+
 echo [ERROR] Unknown argument: %~1
 echo.
 goto usage_err
@@ -111,24 +138,33 @@ if defined TOOLSET (
 echo   tests    : "%BUILD_TESTS%"
 echo   parity   : "%REQUIRE_PARITY_FIXTURES%"
 echo   swift    : "%REQUIRE_SWIFT_FIXTURES%"
+echo   libtorch : "%ENABLE_LIBTORCH_RUNTIME%"
+if defined LIBTORCH_ROOT (
+  echo   libroot : "%LIBTORCH_ROOT%"
+)
+if defined EXTRA_TORCH_DIR (
+  echo   torchdir: "%EXTRA_TORCH_DIR%"
+)
+
+set "COMMON_CMAKE_ARGS=-DCMAKE_CONFIGURATION_TYPES=%CONFIG% -DWAXCPP_BUILD_TESTS=%BUILD_TESTS% -DWAXCPP_REQUIRE_PARITY_FIXTURES=%REQUIRE_PARITY_FIXTURES% -DWAXCPP_REQUIRE_SWIFT_FIXTURES=%REQUIRE_SWIFT_FIXTURES% -DWAXCPP_ENABLE_LIBTORCH_RUNTIME=%ENABLE_LIBTORCH_RUNTIME%"
+if defined LIBTORCH_ROOT (
+  set "COMMON_CMAKE_ARGS=%COMMON_CMAKE_ARGS% -DWAXCPP_LIBTORCH_ROOT=""%LIBTORCH_ROOT%"""
+)
+if defined EXTRA_TORCH_DIR (
+  set "COMMON_CMAKE_ARGS=%COMMON_CMAKE_ARGS% -DTorch_DIR=""%EXTRA_TORCH_DIR%"""
+)
 
 if defined TOOLSET (
   cmake -S "%SOURCE_DIR%" -B "%BUILD_DIR%" ^
     -G "%GENERATOR%" ^
     -A "%ARCH%" ^
     -T "%TOOLSET%" ^
-    -DCMAKE_CONFIGURATION_TYPES=%CONFIG% ^
-    -DWAXCPP_BUILD_TESTS=%BUILD_TESTS% ^
-    -DWAXCPP_REQUIRE_PARITY_FIXTURES=%REQUIRE_PARITY_FIXTURES% ^
-    -DWAXCPP_REQUIRE_SWIFT_FIXTURES=%REQUIRE_SWIFT_FIXTURES%
+    %COMMON_CMAKE_ARGS%
 ) else (
   cmake -S "%SOURCE_DIR%" -B "%BUILD_DIR%" ^
     -G "%GENERATOR%" ^
     -A "%ARCH%" ^
-    -DCMAKE_CONFIGURATION_TYPES=%CONFIG% ^
-    -DWAXCPP_BUILD_TESTS=%BUILD_TESTS% ^
-    -DWAXCPP_REQUIRE_PARITY_FIXTURES=%REQUIRE_PARITY_FIXTURES% ^
-    -DWAXCPP_REQUIRE_SWIFT_FIXTURES=%REQUIRE_SWIFT_FIXTURES%
+    %COMMON_CMAKE_ARGS%
 )
 
 if errorlevel 1 (
@@ -161,10 +197,14 @@ echo   --clangcl                         Use ClangCL toolset for Visual Studio
 echo   --build-tests ON^|OFF             Build test targets (default: ON)
 echo   --require-parity-fixtures ON^|OFF Require parity fixtures (default: OFF)
 echo   --require-swift-fixtures ON^|OFF  Require Swift fixtures (default: OFF)
+echo   --enable-libtorch-runtime ON^|OFF Enable real libtorch runtime build (default: OFF)
+echo   --libtorch-root PATH              Root of unpacked libtorch distribution (optional)
+echo   --torch-dir PATH                  Explicit Torch_DIR override (optional)
 echo   --help                            Show this message
 echo.
 echo Examples:
 echo   scripts\generate-cmake.bat
 echo   scripts\generate-cmake.bat --config Release
 echo   scripts\generate-cmake.bat --clangcl --build-dir cpp\build-clang
+echo   scripts\generate-cmake.bat --enable-libtorch-runtime ON --libtorch-root C:\deps\libtorch
 exit /b %USAGE_CODE%

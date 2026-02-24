@@ -42,6 +42,19 @@ MiniLM runtime manifest policy (optional):
 # Optional: enable real libtorch runtime backend at build time
 cmake -S cpp -B cpp/build -DWAXCPP_ENABLE_LIBTORCH_RUNTIME=ON
 
+# Optional: point CMake to an unpacked local libtorch folder (no auto-download in CMake)
+# Valid layouts:
+#   <root>/share/cmake/Torch/TorchConfig.cmake
+#   <root>/libtorch/share/cmake/Torch/TorchConfig.cmake
+cmake -S cpp -B cpp/build \
+  -DWAXCPP_ENABLE_LIBTORCH_RUNTIME=ON \
+  -DWAXCPP_LIBTORCH_ROOT=/abs/path/to/libtorch
+
+# Optional: explicit Torch package config directory override
+cmake -S cpp -B cpp/build \
+  -DWAXCPP_ENABLE_LIBTORCH_RUNTIME=ON \
+  -DTorch_DIR=/abs/path/to/libtorch/share/cmake/Torch
+
 # Override manifest lookup path
 export WAXCPP_LIBTORCH_MANIFEST=/abs/path/to/libtorch-manifest.json
 

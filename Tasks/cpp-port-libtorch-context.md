@@ -638,6 +638,9 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/README.md` | Documented optional TorchScript module env control (`WAXCPP_TORCH_SCRIPT_MODULE`) for real runtime overlay path | Codex |
 | `cpp/CMakeLists.txt` | Added global MSVC `/FS` compile option to reduce parallel PDB contention risk when reusing PCH across many test targets | Codex |
 | `cpp/CMakeLists.txt` | Added `waxcpp_verify_submodules_policy_test` CTest entry (Python3) to run `scripts/verify_submodules.py` inside default C++ test matrix | Codex |
+| `.gitmodules` + `cpp/submodules.lock` | Repaired `libtorch-dist` submodule wiring to a resolvable remote with pinned commit (`84cc65a...`) and strict checksum policy kept enabled | Codex |
+| `cpp/manifest/libtorch-manifest.json` + CI workflows | Moved manifest source-of-truth to `cpp/manifest` and updated CI checksum gate paths to keep integrity checks deterministic even when upstream submodule layout differs | Codex |
+| `cpp/CMakeLists.txt` + `scripts/generate-cmake.bat` + `cpp/README.md` | Added deterministic local LibTorch runtime configuration (`WAXCPP_LIBTORCH_ROOT` / `Torch_DIR`) with explicit no-auto-download behavior and Windows generator-script flags | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
@@ -658,6 +661,6 @@ M1 and M2 are complete. M3 baseline is in place: C++ parses WAL headers, detects
 
 ## Open Questions
 1. Final remote for `cpp/third_party/libtorch-dist` should be replaced with dedicated artifact mirror before release.
-2. `usearch/sqlite/googletest` pins are now concrete; `libtorch-dist` pin in `cpp/submodules.lock` remains placeholder until dedicated artifact mirror is finalized.
+2. `usearch/sqlite/googletest/libtorch-dist` pins are concrete in `cpp/submodules.lock`; release decision still needed on whether to keep current interim `libtorch-dist` source or cut over to a dedicated project-owned artifact mirror.
 3. Implement full WAL replay apply path (materialize decoded pending mutations into store/index state and commit/checkpoint transitions).
 
