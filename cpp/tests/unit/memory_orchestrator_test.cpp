@@ -3777,6 +3777,44 @@ void ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOpHybrid(const std::file
   }
 }
 
+void ScenarioNoOpFlushSkipsIndexCommitCalls(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: no-op flush skips index commit calls");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = true;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kHybrid, 0.5F};
+
+  auto embedder = std::make_shared<CountingBatchEmbedder>();
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+    orchestrator.Remember("no-op flush hybrid apple", {});
+    orchestrator.Flush();
+    embedder->Reset();
+
+    bool flush_threw = false;
+    waxcpp::text::testing::SetCommitFailOnCall(1);
+    waxcpp::vector::testing::SetCommitFailOnCall(1);
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::text::testing::ClearCommitFailOnCall();
+    waxcpp::vector::testing::ClearCommitFailOnCall();
+    Require(!flush_threw, "no-op flush should skip index CommitStaged when no pending mutations exist");
+
+    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    Require(!context.items.empty(), "no-op flush path should preserve hybrid recall visibility");
+    Require(ContextHasSource(context, waxcpp::SearchSource::kText),
+            "no-op flush path should preserve text source visibility");
+    Require(ContextHasSource(context, waxcpp::SearchSource::kVector),
+            "no-op flush path should preserve vector source visibility");
+    Require(embedder->batch_calls() == 0, "no-op flush should not trigger EmbedBatch");
+    Require(embedder->embed_calls() == 0, "no-op flush should not trigger Embed");
+    orchestrator.Close();
+  }
+}
+
 void ScenarioStructuredTextIndexCommitFailureRecoversFromCommittedStore(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: structured text index commit failure recovers from committed store");
   waxcpp::OrchestratorConfig config{};
@@ -4921,6 +4959,7 @@ int main() {
     const auto path110 = UniquePath();
     const auto path111 = UniquePath();
     const auto path112 = UniquePath();
+    const auto path113 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -5026,6 +5065,7 @@ int main() {
     ScenarioVectorIndexCommitFailureRecoversFromCommittedStore(path34);
     ScenarioVectorIndexCommitFailureRetryFlushIsNoOp(path108);
     ScenarioHybridVectorIndexCommitFailureRecoversBothChannelsAndRetryNoOp(path110);
+    ScenarioNoOpFlushSkipsIndexCommitCalls(path113);
     ScenarioStructuredTextIndexCommitFailureRecoversFromCommittedStore(path106);
     ScenarioStructuredTextIndexCommitFailureRetryFlushIsNoOp(path107);
     ScenarioUseAfterCloseThrows(path26);
@@ -5047,7 +5087,7 @@ int main() {
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
         path94, path95, path96, path97, path98, path99, path100, path101, path102, path103, path104, path105,
-        path106, path107, path108, path109, path110, path111, path112,
+        path106, path107, path108, path109, path110, path111, path112, path113,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

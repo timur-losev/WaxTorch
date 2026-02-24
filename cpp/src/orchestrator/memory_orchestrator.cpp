@@ -1292,12 +1292,16 @@ void MemoryOrchestrator::Flush() {
   try {
     store_.Commit();
     store_commit_completed = true;
-    structured_memory_.CommitStaged();
-    if (config_.enable_text_search) {
+    if (structured_memory_.PendingMutationCount() > 0) {
+      structured_memory_.CommitStaged();
+    }
+    if (config_.enable_text_search && store_text_index_.PendingMutationCount() > 0) {
       store_text_index_.CommitStaged();
+    }
+    if (config_.enable_text_search && structured_text_index_.PendingMutationCount() > 0) {
       structured_text_index_.CommitStaged();
     }
-    if (vector_index_ != nullptr) {
+    if (vector_index_ != nullptr && vector_index_->PendingMutationCount() > 0) {
       vector_index_->CommitStaged();
     }
   } catch (const std::exception& ex) {
