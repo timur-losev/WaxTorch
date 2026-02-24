@@ -38,6 +38,8 @@ struct MiniLMRuntimeInfo {
   std::optional<std::string> libtorch_selected_artifact_resolved_path;
   std::optional<std::string> libtorch_selected_artifact_sha256;
   std::optional<std::string> libtorch_selected_artifact_class;
+  std::optional<std::string> libtorch_script_module_path;
+  bool libtorch_script_module_loaded = false;
   bool libtorch_selected_artifact_sha256_verified = false;
   std::optional<std::string> libtorch_runtime_error;
 };

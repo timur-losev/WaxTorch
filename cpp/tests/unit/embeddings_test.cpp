@@ -204,6 +204,10 @@ void ScenarioRuntimeInfoAndManifestPolicy() {
       Require(!info.libtorch_selected_artifact_sha256_verified,
               "artifact sha256 verification must remain false without manifest");
     }
+    Require(!info.libtorch_script_module_path.has_value(),
+            "script module path should be empty when WAXCPP_TORCH_SCRIPT_MODULE is unset");
+    Require(!info.libtorch_script_module_loaded,
+            "script module loaded flag should be false at construction");
   }
 
   {

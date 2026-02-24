@@ -54,6 +54,9 @@ export WAXCPP_ENABLE_REAL_TORCH_RUNTIME=1
 # Optional: require real runtime (throw if libtorch runtime is unavailable or runtime init fails)
 export WAXCPP_REQUIRE_REAL_TORCH_RUNTIME=1
 
+# Optional: TorchScript module path (if set, module forward is applied over runtime embedding tensor)
+export WAXCPP_TORCH_SCRIPT_MODULE=/abs/path/to/embedder.pt
+
 # Optional: override root directory used to resolve selected artifact relative paths
 export WAXCPP_LIBTORCH_DIST_ROOT=/abs/path/to/cpp/third_party/libtorch-dist
 

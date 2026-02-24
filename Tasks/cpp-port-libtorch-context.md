@@ -631,8 +631,11 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/CMakeLists.txt` | Added optional real LibTorch build switch (`WAXCPP_ENABLE_LIBTORCH_RUNTIME`) with Torch link/flags and propagated compile marker (`WAXCPP_HAS_TORCH_RUNTIME`) for runtime/backend code paths | Codex |
 | `cpp/src/rag/embeddings.cpp` | Added optional real runtime gating for `MiniLMEmbedderTorch` (`WAXCPP_ENABLE_REAL_TORCH_RUNTIME` + strict `WAXCPP_REQUIRE_REAL_TORCH_RUNTIME`) and backend selection (`libtorch_cpu|libtorch_cuda` vs fallback) | Codex |
 | `cpp/src/rag/embeddings.cpp` | Added LibTorch tensor execution embedding path (device-aware CPU/CUDA `index_add_` + optional L2 normalization) with deterministic per-call fallback unless strict mode is enabled | Codex |
+| `cpp/src/rag/embeddings.cpp` | Added optional TorchScript module execution overlay (`WAXCPP_TORCH_SCRIPT_MODULE`) with cached module loading per device and output-shape validation (`[384]`/`[1,384]`) | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Added strict-policy regression: requiring real runtime must fail deterministically on non-libtorch builds | Codex |
+| `cpp/tests/unit/embeddings_test.cpp` | Extended runtime-info assertions with TorchScript diagnostics defaults (`libtorch_script_module_path` unset, `libtorch_script_module_loaded=false`) | Codex |
 | `cpp/README.md` | Documented real runtime build/runtime controls for MiniLM (`WAXCPP_ENABLE_LIBTORCH_RUNTIME`, `WAXCPP_ENABLE_REAL_TORCH_RUNTIME`, `WAXCPP_REQUIRE_REAL_TORCH_RUNTIME`) | Codex |
+| `cpp/README.md` | Documented optional TorchScript module env control (`WAXCPP_TORCH_SCRIPT_MODULE`) for real runtime overlay path | Codex |
 | `cpp/CMakeLists.txt` | Added global MSVC `/FS` compile option to reduce parallel PDB contention risk when reusing PCH across many test targets | Codex |
 | `cpp/CMakeLists.txt` | Added `waxcpp_verify_submodules_policy_test` CTest entry (Python3) to run `scripts/verify_submodules.py` inside default C++ test matrix | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |

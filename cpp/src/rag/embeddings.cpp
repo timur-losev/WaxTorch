@@ -12,6 +12,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -27,6 +28,7 @@
 
 #if WAXCPP_HAS_TORCH_RUNTIME
 #include <torch/torch.h>
+#include <torch/script.h>
 #endif
 
 namespace waxcpp {
@@ -120,6 +122,19 @@ bool DetectCudaRuntimeAvailable() {
 #else
   return false;
 #endif
+}
+
+std::optional<std::filesystem::path> ResolveTorchScriptModulePath() {
+  const auto raw = GetEnvValue("WAXCPP_TORCH_SCRIPT_MODULE");
+  if (!raw.has_value()) {
+    return std::nullopt;
+  }
+
+  const std::filesystem::path candidate(*raw);
+  if (!std::filesystem::exists(candidate) || !std::filesystem::is_regular_file(candidate)) {
+    throw std::runtime_error("WAXCPP_TORCH_SCRIPT_MODULE does not exist or is not a regular file");
+  }
+  return std::filesystem::absolute(candidate);
 }
 
 bool ResolveRealTorchRuntimeEnabled() {
@@ -971,6 +986,35 @@ std::vector<float> BuildFallbackEmbedding(std::string_view text, int dims, bool 
 }
 
 #if WAXCPP_HAS_TORCH_RUNTIME
+std::string TorchModuleCacheKey(const std::filesystem::path& module_path, bool use_cuda) {
+  return module_path.string() + "|" + (use_cuda ? "cuda" : "cpu");
+}
+
+std::shared_ptr<torch::jit::script::Module> LoadCachedTorchScriptModule(const std::filesystem::path& module_path,
+                                                                         bool use_cuda) {
+  static std::mutex cache_mutex{};
+  static std::unordered_map<std::string, std::shared_ptr<torch::jit::script::Module>> cache{};
+
+  const auto key = TorchModuleCacheKey(module_path, use_cuda);
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    const auto it = cache.find(key);
+    if (it != cache.end()) {
+      return it->second;
+    }
+  }
+
+  const auto device = use_cuda ? torch::Device(torch::kCUDA, 0) : torch::Device(torch::kCPU);
+  auto module = std::make_shared<torch::jit::script::Module>(torch::jit::load(module_path.string(), device));
+  module->eval();
+
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    auto [it, _inserted] = cache.emplace(key, module);
+    return it->second;
+  }
+}
+
 std::vector<float> BuildTorchRuntimeEmbedding(std::string_view text, int dims, bool use_cuda, bool do_normalize) {
   const auto tokens = Tokenize(text);
   if (tokens.empty()) {
@@ -1000,6 +1044,35 @@ std::vector<float> BuildTorchRuntimeEmbedding(std::string_view text, int dims, b
           .to(device);
 
   embedding.index_add_(0, idx_tensor, val_tensor);
+
+  if (const auto module_path = ResolveTorchScriptModulePath(); module_path.has_value()) {
+    auto module = LoadCachedTorchScriptModule(*module_path, use_cuda);
+    std::vector<torch::jit::IValue> inputs{};
+    inputs.emplace_back(embedding.unsqueeze(0));
+    auto output_ivalue = module->forward(inputs);
+
+    torch::Tensor output{};
+    if (output_ivalue.isTensor()) {
+      output = output_ivalue.toTensor();
+    } else if (output_ivalue.isTuple()) {
+      const auto tuple = output_ivalue.toTuple();
+      if (tuple != nullptr && !tuple->elements().empty() && tuple->elements().front().isTensor()) {
+        output = tuple->elements().front().toTensor();
+      }
+    }
+    if (!output.defined()) {
+      throw std::runtime_error("torchscript module forward did not return a tensor");
+    }
+    output = output.to(device, torch::kFloat32);
+    if (output.dim() == 2 && output.size(0) == 1) {
+      output = output.squeeze(0);
+    }
+    if (output.dim() != 1 || output.size(0) != dims) {
+      throw std::runtime_error("torchscript module output shape mismatch; expected [384] or [1,384]");
+    }
+    embedding = output.contiguous();
+  }
+
   if (do_normalize) {
     const auto norm = embedding.norm(2);
     const auto norm_scalar = norm.item<float>();
@@ -1029,6 +1102,9 @@ MiniLMEmbedderTorch::MiniLMEmbedderTorch(std::size_t memoization_capacity)
   }
   if (runtime_info_.libtorch_runtime_enabled && !runtime_info_.libtorch_runtime_compiled) {
     throw std::runtime_error("real libtorch runtime is requested but this build was compiled without libtorch");
+  }
+  if (const auto script_module_path = ResolveTorchScriptModulePath(); script_module_path.has_value()) {
+    runtime_info_.libtorch_script_module_path = script_module_path->string();
   }
   runtime_info_.cuda_runtime_available = DetectCudaRuntimeAvailable();
   runtime_info_.selected_backend = "fallback_cpu";
@@ -1142,6 +1218,9 @@ std::vector<float> MiniLMEmbedderTorch::Embed(const std::string& text) {
     const bool use_cuda_backend = runtime_info_.selected_backend == "libtorch_cuda";
     try {
       embedding = BuildTorchRuntimeEmbedding(text, kDims, use_cuda_backend, normalize());
+      if (runtime_info_.libtorch_script_module_path.has_value()) {
+        runtime_info_.libtorch_script_module_loaded = true;
+      }
     } catch (const std::exception& ex) {
       if (runtime_info_.libtorch_runtime_strict) {
         throw std::runtime_error(std::string("real libtorch runtime embedding failed: ") + ex.what());
@@ -1149,6 +1228,7 @@ std::vector<float> MiniLMEmbedderTorch::Embed(const std::string& text) {
       {
         std::lock_guard<std::mutex> lock(memoization_mutex_);
         runtime_info_.libtorch_runtime_error = ex.what();
+        runtime_info_.libtorch_script_module_loaded = false;
       }
       embedding = BuildFallbackEmbedding(text, kDims, normalize());
     }
