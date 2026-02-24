@@ -924,6 +924,107 @@ void RunScenarioPendingMixedLifecycleReplayDeterminism(const std::filesystem::pa
   }
 }
 
+void RunScenarioMixedRecoveredAndLocalReplayAcrossReopenCycles(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: mixed recovered+local replay across reopen cycles");
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    const auto ids = store.PutBatch(
+        {{std::byte{0xA1}}, {std::byte{0xA2}}, {std::byte{0xA3}}},
+        {});
+    Require(ids.size() == 3 && ids[0] == 0 && ids[1] == 1 && ids[2] == 2, "expected dense baseline ids");
+    store.Commit();
+
+    const auto id3 = store.Put({std::byte{0xA4}});
+    Require(id3 == 3, "expected dense pending id3 in first cycle");
+    store.Delete(0);
+    store.Supersede(1, 2);
+    store.PutEmbedding(2, {0.11F, 0.22F});
+    // Crash simulation: no close/commit.
+  }
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto before_stats = reopened.Stats();
+    const auto before_wal = reopened.WalStats();
+    Require(before_stats.pending_frames == 1, "reopen must recover one pending put in first cycle");
+    Require(before_wal.pending_delete_mutations == 1, "reopen must recover one pending delete in first cycle");
+    Require(before_wal.pending_supersede_mutations == 1, "reopen must recover one pending supersede in first cycle");
+    Require(before_wal.pending_embedding_mutations == 1, "reopen must recover one pending embedding in first cycle");
+
+    const auto id4 = reopened.Put({std::byte{0xA5}});
+    Require(id4 == 4, "expected dense local id4 in mixed first cycle");
+    reopened.Supersede(2, id4);
+    reopened.PutEmbedding(id4, {0.33F, 0.44F});
+    reopened.Commit();
+    reopened.Close();
+  }
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto stats = reopened.Stats();
+    const auto wal = reopened.WalStats();
+    Require(stats.frame_count == 5, "first mixed replay commit must persist five frames");
+    Require(stats.pending_frames == 0, "first mixed replay commit must clear pending put state");
+    Require(wal.pending_delete_mutations == 0, "first mixed replay commit must clear pending delete counter");
+    Require(wal.pending_supersede_mutations == 0, "first mixed replay commit must clear pending supersede counter");
+    Require(wal.pending_embedding_mutations == 0, "first mixed replay commit must clear pending embedding counter");
+
+    const auto toc = ReadCommittedToc(path);
+    Require(toc.frames.size() == 5, "first mixed replay commit TOC frame count mismatch");
+    Require(toc.frames[0].status == 1, "first mixed replay commit should apply delete on frame 0");
+    Require(toc.frames[1].superseded_by.has_value() && *toc.frames[1].superseded_by == 2,
+            "first mixed replay commit should apply supersede edge 1<-2");
+    Require(toc.frames[2].supersedes.has_value() && *toc.frames[2].supersedes == 1,
+            "first mixed replay commit should apply supersede edge 2->1");
+    Require(toc.frames[2].superseded_by.has_value() && *toc.frames[2].superseded_by == 4,
+            "first mixed replay commit should apply supersede edge 2<-4");
+    Require(toc.frames[4].supersedes.has_value() && *toc.frames[4].supersedes == 2,
+            "first mixed replay commit should apply supersede edge 4->2");
+
+    reopened.Delete(4);
+    reopened.PutEmbedding(2, {0.55F, 0.66F});
+    const auto id5 = reopened.Put({std::byte{0xA6}});
+    Require(id5 == 5, "expected dense pending id5 in second cycle");
+    // Crash simulation: no close/commit.
+  }
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto before_stats = reopened.Stats();
+    const auto before_wal = reopened.WalStats();
+    Require(before_stats.pending_frames == 1, "second-cycle reopen must recover one pending put");
+    Require(before_wal.pending_delete_mutations == 1, "second-cycle reopen must recover one pending delete");
+    Require(before_wal.pending_embedding_mutations == 1, "second-cycle reopen must recover one pending embedding");
+    Require(before_wal.pending_supersede_mutations == 0, "second-cycle reopen should start with zero supersede");
+
+    reopened.Supersede(3, 5);
+    reopened.Commit();
+    reopened.Close();
+  }
+
+  {
+    auto final_store = waxcpp::WaxStore::Open(path);
+    const auto final_stats = final_store.Stats();
+    const auto final_wal = final_store.WalStats();
+    Require(final_stats.frame_count == 6, "second mixed replay commit must persist six frames");
+    Require(final_stats.pending_frames == 0, "second mixed replay commit must clear pending put state");
+    Require(final_wal.pending_delete_mutations == 0, "second mixed replay commit must clear pending delete counter");
+    Require(final_wal.pending_supersede_mutations == 0,
+            "second mixed replay commit must clear pending supersede counter");
+    Require(final_wal.pending_embedding_mutations == 0,
+            "second mixed replay commit must clear pending embedding counter");
+
+    const auto toc = ReadCommittedToc(path);
+    Require(toc.frames.size() == 6, "second mixed replay commit TOC frame count mismatch");
+    Require(toc.frames[4].status == 1, "second mixed replay commit should apply delete on frame 4");
+    Require(toc.frames[3].superseded_by.has_value() && *toc.frames[3].superseded_by == 5,
+            "second mixed replay commit should apply supersede edge 3<-5");
+    Require(toc.frames[5].supersedes.has_value() && *toc.frames[5].supersedes == 3,
+            "second mixed replay commit should apply supersede edge 5->3");
+    final_store.Close();
+  }
+}
+
 void RunScenarioDeleteAndSupersedePersist(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: delete/supersede persist in TOC");
   auto store = waxcpp::WaxStore::Create(path);
@@ -1850,6 +1951,7 @@ int main(int argc, char** argv) {
     RunScenarioPendingRecoveryIgnoresPartialTail(path);
     RunScenarioPendingLifecycleRecoverySkipsUndecodableTail(path);
     RunScenarioPendingMixedLifecycleReplayDeterminism(path);
+    RunScenarioMixedRecoveredAndLocalReplayAcrossReopenCycles(path);
     RunScenarioDeleteAndSupersedePersist(path);
     RunScenarioPendingLifecycleMutationCountersLocal(path);
     RunScenarioPendingLifecycleMutationCountersRecovered(path);

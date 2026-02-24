@@ -645,6 +645,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added regression `pending embedding snapshot uses in-memory cache`: snapshot remains stable after on-disk pending WAL header corruption within same process/session | Codex |
 | `cpp/include/waxcpp/wax_store.hpp` + `cpp/src/core/wax_store.cpp` | Expanded pending in-memory cache from embeddings-only to full WAL mutation set (`putFrame/delete/supersede/putEmbedding`) and switched commit apply path to deterministic cache replay (no re-scan dependency at commit time) | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added mixed-mutation corruption resilience coverage and updated corrupt-pending-header scenario to assert local pending commit success via in-memory cache while preserving monotonic `committed_seq` | Codex |
+| `cpp/tests/unit/wax_store_write_test.cpp` | Added multi-cycle regression for mixed recovered+local pending replay across repeated reopen/commit cycles, validating counters and TOC lifecycle edges after each cycle | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Stabilized CUDA-policy regression against repo-default manifest detection by making expected backend selection depend on detected manifest CUDA artifact availability | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
