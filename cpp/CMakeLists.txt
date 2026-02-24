@@ -24,6 +24,7 @@ set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/memory_orchestrator.hpp
   include/waxcpp/mv2v_format.hpp
   include/waxcpp/pch.hpp
+  include/waxcpp/query_analyzer.hpp
   include/waxcpp/search.hpp
   include/waxcpp/structured_memory.hpp
   include/waxcpp/types.hpp
@@ -40,6 +41,7 @@ add_library(waxcpp STATIC
   src/text/structured_memory_store.cpp
   src/vector/usearch_vector_engine.cpp
   src/vector/mv2v_format.cpp
+  src/rag/query_analyzer.cpp
   src/rag/search.cpp
   src/rag/embeddings.cpp
   src/orchestrator/memory_orchestrator.cpp
@@ -294,6 +296,16 @@ if (WAXCPP_BUILD_TESTS)
   endif()
   target_precompile_headers(waxcpp_wal_ring_writer_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_wal_ring_writer_test COMMAND waxcpp_wal_ring_writer_test)
+
+  add_executable(waxcpp_query_analyzer_test tests/unit/query_analyzer_test.cpp)
+  target_link_libraries(waxcpp_query_analyzer_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_query_analyzer_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_query_analyzer_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_query_analyzer_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_query_analyzer_test COMMAND waxcpp_query_analyzer_test)
 
   add_executable(waxcpp_mv2s_parity_test tests/parity/mv2s_fixture_parity_test.cpp)
   target_link_libraries(waxcpp_mv2s_parity_test PRIVATE waxcpp)
