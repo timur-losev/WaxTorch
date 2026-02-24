@@ -69,6 +69,8 @@ namespace vector::testing {
 
 void SetCommitFailCountdown(std::uint32_t countdown);
 void ClearCommitFailCountdown();
+void SetCommitFailOnCall(std::uint32_t call_index);
+void ClearCommitFailOnCall();
 
 }  // namespace vector::testing
 

@@ -170,6 +170,53 @@ void ScenarioStagedOrderDeterminism() {
   Require(results[0].first == 7, "unexpected frame_id after staged mutation order apply");
 }
 
+void ScenarioCommitFailOnCallHook() {
+  waxcpp::tests::Log("scenario: commit fail-on-call hook");
+  waxcpp::USearchVectorEngine engine(2);
+
+  engine.StageAdd(10, {1.0F, 0.0F});
+  waxcpp::vector::testing::SetCommitFailOnCall(2);
+  engine.CommitStaged();  // call #1 succeeds
+
+  engine.StageAdd(11, {0.0F, 1.0F});
+  bool threw = false;
+  try {
+    engine.CommitStaged();  // call #2 fails
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  waxcpp::vector::testing::ClearCommitFailOnCall();
+  Require(threw, "CommitStaged must fail on configured second call");
+  Require(engine.PendingMutationCount() == 1, "failed commit must preserve pending staged mutation");
+
+  const auto after_fail = engine.Search({1.0F, 0.0F}, 10);
+  Require(after_fail.size() == 1, "failed second commit must keep only first committed vector");
+  Require(after_fail[0].first == 10, "failed second commit should not publish second staged vector");
+
+  engine.CommitStaged();
+  Require(engine.PendingMutationCount() == 0, "successful retry commit must clear pending mutations");
+  const auto after_retry = engine.Search({0.0F, 1.0F}, 10);
+  Require(!after_retry.empty(), "successful retry commit should publish second staged vector");
+  Require(after_retry[0].first == 11, "second staged vector should rank first after retry commit");
+
+  engine.StageRemove(10);
+  waxcpp::vector::testing::SetCommitFailOnCall(1);
+  threw = false;
+  try {
+    engine.CommitStaged();  // configured first call fails
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  waxcpp::vector::testing::ClearCommitFailOnCall();
+  Require(threw, "CommitStaged must fail on configured first call");
+  Require(engine.PendingMutationCount() == 1, "failed first-call commit must preserve pending remove");
+
+  engine.CommitStaged();
+  const auto after_remove = engine.Search({1.0F, 0.0F}, 10);
+  Require(!after_remove.empty(), "remaining vector should still be searchable after remove retry");
+  Require(after_remove[0].first == 11, "remove retry should drop frame 10 and keep frame 11");
+}
+
 void ScenarioMetalSegmentRoundtrip() {
   waxcpp::tests::Log("scenario: metal segment roundtrip");
   waxcpp::USearchVectorEngine source(3);
@@ -344,6 +391,7 @@ int main() {
     ScenarioStagedMutationsRequireCommit();
     ScenarioRollbackStagedMutations();
     ScenarioStagedOrderDeterminism();
+    ScenarioCommitFailOnCallHook();
     ScenarioMetalSegmentRoundtrip();
     ScenarioLoadMetalSegmentValidation();
     ScenarioSeededFuzzDeterminismAndInvariants();

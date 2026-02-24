@@ -13,6 +13,8 @@ namespace waxcpp {
 namespace {
 
 std::atomic<std::uint32_t> g_test_commit_fail_countdown{0};
+std::atomic<std::uint32_t> g_test_commit_fail_on_call{0};
+std::atomic<std::uint32_t> g_test_commit_call_index{0};
 
 float Dot(std::span<const float> lhs, std::span<const float> rhs) {
   float dot = 0.0F;
@@ -46,6 +48,12 @@ float CosineSimilarity(std::span<const float> lhs, std::span<const float> rhs) {
 }
 
 void MaybeInjectCommitFailure() {
+  const auto call_index = g_test_commit_call_index.fetch_add(1, std::memory_order_relaxed) + 1;
+  const auto fail_on_call = g_test_commit_fail_on_call.load(std::memory_order_relaxed);
+  if (fail_on_call > 0 && call_index == fail_on_call) {
+    throw std::runtime_error("USearchVectorEngine::CommitStaged injected failure");
+  }
+
   auto remaining = g_test_commit_fail_countdown.load(std::memory_order_relaxed);
   while (remaining > 0) {
     if (g_test_commit_fail_countdown.compare_exchange_weak(remaining,
@@ -232,10 +240,24 @@ namespace vector::testing {
 
 void SetCommitFailCountdown(std::uint32_t countdown) {
   g_test_commit_fail_countdown.store(countdown, std::memory_order_relaxed);
+  g_test_commit_fail_on_call.store(0, std::memory_order_relaxed);
+  g_test_commit_call_index.store(0, std::memory_order_relaxed);
 }
 
 void ClearCommitFailCountdown() {
   g_test_commit_fail_countdown.store(0, std::memory_order_relaxed);
+  g_test_commit_call_index.store(0, std::memory_order_relaxed);
+}
+
+void SetCommitFailOnCall(std::uint32_t call_index) {
+  g_test_commit_fail_countdown.store(0, std::memory_order_relaxed);
+  g_test_commit_fail_on_call.store(call_index, std::memory_order_relaxed);
+  g_test_commit_call_index.store(0, std::memory_order_relaxed);
+}
+
+void ClearCommitFailOnCall() {
+  g_test_commit_fail_on_call.store(0, std::memory_order_relaxed);
+  g_test_commit_call_index.store(0, std::memory_order_relaxed);
 }
 
 }  // namespace vector::testing

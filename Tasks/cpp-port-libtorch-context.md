@@ -191,6 +191,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Add vector-index retry-no-op regression after externally visible flush failure: second `Flush()` must not duplicate embedding/user payload records and vector recall remains stable in-process and after reopen
 - [x] Add text-index retry-no-op regression after externally visible flush failure: second `Flush()` must not duplicate user payload frames and text recall remains stable in-process and after reopen
 - [x] Add hybrid crash-window regressions for store commit failpoints (`step1` TOC-only, `step2` footer-published): validate publish-on-retry vs retry-no-op semantics, `text+vector` source visibility, and reopen/frame-count parity without extra embed calls
+- [x] Add `USearchVectorEngine` fail-on-call commit hook (`SetCommitFailOnCall`) and deterministic regressions covering nth-call failure, pending mutation preservation, and retry-commit publish semantics
 - [x] Persist orchestrator-owned embedding records in store (`WAXEM1` internal payload) during `Remember` for deterministic vector rebuild support
 - [x] Rebuild vector index on orchestrator startup using persisted embedding records first, with embedder fallback only for missing/dimension-mismatched entries
 - [x] Add orchestrator regressions for persisted-embedding reopen behavior (no re-embed on reopen; embedding journal payload not surfaced in text recall)
