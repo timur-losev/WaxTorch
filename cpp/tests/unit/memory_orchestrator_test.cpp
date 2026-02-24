@@ -3411,6 +3411,52 @@ void ScenarioTextIndexCommitFailureRecoversFromCommittedStore(const std::filesys
   }
 }
 
+void ScenarioTextIndexCommitFailureRetryFlushIsNoOp(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: text index commit failure retry flush is no-op");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_text_search = true;
+  config.enable_vector_search = false;
+  config.rag.search_mode = {waxcpp::SearchModeKind::kTextOnly, 0.5F};
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("text retry apple", {});
+
+    bool flush_threw = false;
+    waxcpp::text::testing::SetCommitFailCountdown(1);  // fail on store_text_index_.CommitStaged()
+    try {
+      orchestrator.Flush();
+    } catch (const std::exception&) {
+      flush_threw = true;
+    }
+    waxcpp::text::testing::ClearCommitFailCountdown();
+    Require(flush_threw, "flush should throw when text index commit failpoint is set");
+
+    const auto after_failure = orchestrator.Recall("apple");
+    Require(!after_failure.items.empty(), "failed text index commit should rebuild and keep text recall visible");
+
+    orchestrator.Flush();  // retry should be no-op after externally visible commit
+    const auto after_retry = orchestrator.Recall("apple");
+    Require(!after_retry.items.empty(), "retry flush should keep text recall visible");
+    orchestrator.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    const auto stats = store.Stats();
+    Require(stats.frame_count == 1, "text retry no-op path should persist exactly one user frame");
+    Require(stats.pending_frames == 0, "text retry no-op path should not leave pending WAL mutations");
+    store.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator reopened(path, config, nullptr);
+    const auto context = reopened.Recall("apple");
+    Require(!context.items.empty(), "reopen should preserve text recall visibility after retry no-op path");
+    reopened.Close();
+  }
+}
+
 void ScenarioVectorIndexCommitFailureRecoversFromCommittedStore(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: vector index commit failure recovers from committed store");
   waxcpp::OrchestratorConfig config{};
@@ -4657,6 +4703,7 @@ int main() {
     const auto path106 = UniquePath();
     const auto path107 = UniquePath();
     const auto path108 = UniquePath();
+    const auto path109 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -4756,6 +4803,7 @@ int main() {
     ScenarioFlushFailureThenCloseReopenRecoversStructuredFact(path25);
     ScenarioFlushFailureDoesNotExposeStagedStructuredFactUntilRetry(path32);
     ScenarioTextIndexCommitFailureRecoversFromCommittedStore(path33);
+    ScenarioTextIndexCommitFailureRetryFlushIsNoOp(path109);
     ScenarioVectorIndexCommitFailureRecoversFromCommittedStore(path34);
     ScenarioVectorIndexCommitFailureRetryFlushIsNoOp(path108);
     ScenarioStructuredTextIndexCommitFailureRecoversFromCommittedStore(path106);
@@ -4779,7 +4827,7 @@ int main() {
         path77, path78, path79, path80, path81, path82,
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
         path94, path95, path96, path97, path98, path99, path100, path101, path102, path103, path104, path105,
-        path106, path107, path108,
+        path106, path107, path108, path109,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
