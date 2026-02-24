@@ -77,6 +77,24 @@ if (TARGET waxcpp_sqlite3)
 endif()
 
 if (WAXCPP_ENABLE_LIBTORCH_RUNTIME)
+  if (NOT WAXCPP_LIBTORCH_ROOT AND (NOT DEFINED Torch_DIR OR Torch_DIR STREQUAL ""))
+    message(FATAL_ERROR
+      "WAXCPP_ENABLE_LIBTORCH_RUNTIME=ON requires explicit LibTorch location.\n"
+      "Set one of:\n"
+      "  -DWAXCPP_LIBTORCH_ROOT=/abs/path/to/libtorch\n"
+      "  -DTorch_DIR=/abs/path/to/libtorch/share/cmake/Torch\n"
+      "Automatic system Torch auto-discovery is disabled for deterministic builds.")
+  endif()
+
+  if (DEFINED Torch_DIR AND NOT Torch_DIR STREQUAL "")
+    file(TO_CMAKE_PATH "${Torch_DIR}" Torch_DIR)
+    if (NOT EXISTS "${Torch_DIR}/TorchConfig.cmake")
+      message(FATAL_ERROR
+        "Torch_DIR is set but TorchConfig.cmake was not found:\n"
+        "  ${Torch_DIR}/TorchConfig.cmake")
+    endif()
+  endif()
+
   if (WAXCPP_LIBTORCH_ROOT)
     file(TO_CMAKE_PATH "${WAXCPP_LIBTORCH_ROOT}" WAXCPP_LIBTORCH_ROOT_NORMALIZED)
     set(WAXCPP_LIBTORCH_TORCH_DIR_A "${WAXCPP_LIBTORCH_ROOT_NORMALIZED}/share/cmake/Torch")
@@ -101,7 +119,7 @@ if (WAXCPP_ENABLE_LIBTORCH_RUNTIME)
     endif()
   endif()
 
-  find_package(Torch REQUIRED CONFIG)
+  find_package(Torch REQUIRED CONFIG PATHS "${Torch_DIR}" NO_DEFAULT_PATH)
   target_link_libraries(waxcpp PRIVATE ${TORCH_LIBRARIES})
   if (DEFINED TORCH_INCLUDE_DIRS)
     target_include_directories(waxcpp PRIVATE ${TORCH_INCLUDE_DIRS})

@@ -39,10 +39,11 @@ ctest --test-dir cpp/build -R waxcpp_mv2s_format_test --output-on-failure
 
 MiniLM runtime manifest policy (optional):
 ```bash
-# Optional: enable real libtorch runtime backend at build time
-cmake -S cpp -B cpp/build -DWAXCPP_ENABLE_LIBTORCH_RUNTIME=ON
-
-# Optional: point CMake to an unpacked local libtorch folder (no auto-download in CMake)
+# Optional: enable real libtorch runtime backend at build time.
+# Note: when runtime is ON, you must pass either WAXCPP_LIBTORCH_ROOT or Torch_DIR.
+# System auto-discovery is intentionally disabled for deterministic builds.
+#
+# Point CMake to an unpacked local libtorch folder (no auto-download in CMake)
 # Valid layouts:
 #   <root>/share/cmake/Torch/TorchConfig.cmake
 #   <root>/libtorch/share/cmake/Torch/TorchConfig.cmake

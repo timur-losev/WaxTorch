@@ -123,6 +123,15 @@ if not exist "%SOURCE_DIR%\CMakeLists.txt" (
   echo [ERROR] CMakeLists not found: "%SOURCE_DIR%\CMakeLists.txt"
   exit /b 1
 )
+if /I "%ENABLE_LIBTORCH_RUNTIME%"=="ON" (
+  if not defined LIBTORCH_ROOT (
+    if not defined EXTRA_TORCH_DIR (
+      echo [ERROR] --enable-libtorch-runtime ON requires --libtorch-root or --torch-dir.
+      echo.
+      goto usage_err
+    )
+  )
+)
 
 echo [waxcpp] Configure CMake project
 echo   source   : "%SOURCE_DIR%"
@@ -198,8 +207,8 @@ echo   --build-tests ON^|OFF             Build test targets (default: ON)
 echo   --require-parity-fixtures ON^|OFF Require parity fixtures (default: OFF)
 echo   --require-swift-fixtures ON^|OFF  Require Swift fixtures (default: OFF)
 echo   --enable-libtorch-runtime ON^|OFF Enable real libtorch runtime build (default: OFF)
-echo   --libtorch-root PATH              Root of unpacked libtorch distribution (optional)
-echo   --torch-dir PATH                  Explicit Torch_DIR override (optional)
+echo   --libtorch-root PATH              Root of unpacked libtorch distribution (required if runtime ON unless --torch-dir is set)
+echo   --torch-dir PATH                  Explicit Torch_DIR override (required if runtime ON unless --libtorch-root is set)
 echo   --help                            Show this message
 echo.
 echo Examples:

@@ -647,6 +647,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added mixed-mutation corruption resilience coverage and updated corrupt-pending-header scenario to assert local pending commit success via in-memory cache while preserving monotonic `committed_seq` | Codex |
 | `cpp/tests/unit/wax_store_write_test.cpp` | Added multi-cycle regression for mixed recovered+local pending replay across repeated reopen/commit cycles, validating counters and TOC lifecycle edges after each cycle | Codex |
 | `cpp/tests/unit/embeddings_test.cpp` | Stabilized CUDA-policy regression against repo-default manifest detection by making expected backend selection depend on detected manifest CUDA artifact availability | Codex |
+| `cpp/CMakeLists.txt` + `scripts/generate-cmake.bat` + `cpp/README.md` | Enforced deterministic LibTorch runtime configuration: runtime ON now requires explicit `WAXCPP_LIBTORCH_ROOT` or `Torch_DIR`, disables implicit system Torch auto-discovery, and validates `TorchConfig.cmake` path early | Codex |
 | `cpp/CMakeLists.txt` | Added `src/core/wal_ring.cpp` to waxcpp target | Codex |
 | `cpp/include/waxcpp/*.hpp` | Added public API skeletons | Codex |
 | `cpp/src/**/*.cpp` | Added module stubs | Codex |
