@@ -32,7 +32,8 @@ Current runtime source decision:
     - assembles citation map from frame metadata (`relative_path`, `line_start`, `line_end`, `symbol`),
     - builds generation prompt with frame tags (`[frame:<id>]`),
     - calls generation endpoint and returns answer + citation array,
-    - applies deterministic prompt clamp with `max_context_items` + `max_context_tokens`.
+    - applies deterministic prompt clamp with `max_context_items` + `max_context_tokens`,
+    - added handler-level regression (`wax_rag_handler_answer_test`) with stubbed generation backend for budget/citation behavior.
 - M8 in progress:
   - `index.start` now accepts operational controls: `flush_every_chunks` and `max_files`,
   - UE5 scanner supports cancel callback; `index.stop` can interrupt scan phase before full traversal,
@@ -114,7 +115,7 @@ Current runtime source decision:
 - Query embedding + retrieval + deterministic rerank.
 - Build context budget pipeline for Qwen3-Coder-Next 256K runtime.
 - Add response path with source citations (`path + lines`).
-- Status: partially implemented (answer generation endpoint + citation map + deterministic prompt budget clamp via `max_context_items/max_context_tokens`; deeper integration tests pending).
+- Status: partially implemented (answer generation endpoint + citation map + deterministic prompt budget clamp via `max_context_items/max_context_tokens` + handler-level regression test; remaining work is broader end-to-end integration/perf runs).
 
 ### M8. Performance and Operational Controls
 - Add ingest throttles: max RAM, batch size, worker count.

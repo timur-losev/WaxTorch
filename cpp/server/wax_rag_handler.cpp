@@ -323,7 +323,8 @@ void WriteFileText(const std::filesystem::path& path,
 }
 
 WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
-                             waxcpp::RuntimeModelsConfig runtime_models)
+                             waxcpp::RuntimeModelsConfig runtime_models,
+                             std::unique_ptr<LlamaCppGenerationClient> generation_client_override)
     : index_job_manager_(store_path.string() + ".index.checkpoint"),
       runtime_models_(std::move(runtime_models)) {
     if (runtime_models_.generation_model.runtime.empty() &&
@@ -357,7 +358,11 @@ WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
     generation_config.timeout_ms = ParsePositiveIntEnv("WAXCPP_LLAMA_GEN_TIMEOUT_MS", 60000);
     generation_config.max_retries = ParseNonNegativeIntEnv("WAXCPP_LLAMA_GEN_MAX_RETRIES", 2);
     generation_config.retry_backoff_ms = ParseNonNegativeIntEnv("WAXCPP_LLAMA_GEN_RETRY_BACKOFF_MS", 100);
-    generation_client_ = std::make_unique<LlamaCppGenerationClient>(std::move(generation_config));
+    if (generation_client_override) {
+        generation_client_ = std::move(generation_client_override);
+    } else {
+        generation_client_ = std::make_unique<LlamaCppGenerationClient>(std::move(generation_config));
+    }
 
     orchestrator_ = std::make_unique<waxcpp::MemoryOrchestrator>(store_path, config, std::move(embedder));
 }

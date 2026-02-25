@@ -25,7 +25,8 @@ class WaxRAGHandler {
 public:
     explicit WaxRAGHandler(
         const std::filesystem::path& store_path = "wax-server.mv2s",
-        waxcpp::RuntimeModelsConfig runtime_models = {});
+        waxcpp::RuntimeModelsConfig runtime_models = {},
+        std::unique_ptr<LlamaCppGenerationClient> generation_client_override = nullptr);
     ~WaxRAGHandler();
     
     // Обработчики JSON-RPC методов
