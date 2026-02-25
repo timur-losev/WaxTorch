@@ -29,7 +29,9 @@ Ue5FilesystemScanner::Ue5FilesystemScanner(Ue5ScannerConfig config) : config_(st
   }
 }
 
-std::vector<Ue5ScanEntry> Ue5FilesystemScanner::Scan(const std::filesystem::path& repo_root) const {
+std::vector<Ue5ScanEntry> Ue5FilesystemScanner::Scan(
+    const std::filesystem::path& repo_root,
+    const CancelRequestedFn& cancel_requested) const {
   std::error_code ec;
   if (!std::filesystem::exists(repo_root, ec) || ec) {
     throw std::runtime_error("scan repo_root does not exist: " + repo_root.string());
@@ -43,6 +45,9 @@ std::vector<Ue5ScanEntry> Ue5FilesystemScanner::Scan(const std::filesystem::path
       repo_root, std::filesystem::directory_options::skip_permission_denied, ec);
   const std::filesystem::recursive_directory_iterator end{};
   for (; !ec && it != end; it.increment(ec)) {
+    if (cancel_requested && cancel_requested()) {
+      break;
+    }
     const auto& path = it->path();
     const bool is_directory = it->is_directory(ec);
     if (ec) {

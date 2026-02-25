@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -33,7 +34,10 @@ class Ue5FilesystemScanner {
  public:
   explicit Ue5FilesystemScanner(Ue5ScannerConfig config = {});
 
-  [[nodiscard]] std::vector<Ue5ScanEntry> Scan(const std::filesystem::path& repo_root) const;
+  using CancelRequestedFn = std::function<bool()>;
+
+  [[nodiscard]] std::vector<Ue5ScanEntry> Scan(const std::filesystem::path& repo_root,
+                                               const CancelRequestedFn& cancel_requested = {}) const;
   [[nodiscard]] static std::string SerializeManifest(const std::vector<Ue5ScanEntry>& entries);
 
  private:

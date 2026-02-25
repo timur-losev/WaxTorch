@@ -351,6 +351,54 @@ void ScenarioInterruptedIndexResumesAfterHandlerRecreate() {
   ec.clear();
 }
 
+void ScenarioMaxFilesCapsScanDeterministically() {
+  waxcpp::tests::Log("scenario: index.start max_files caps deterministic scan set");
+  const auto temp_root = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_repo_", "");
+  const auto store_path = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_store_", ".mv2s");
+  const auto checkpoint_path = std::filesystem::path(store_path.string() + ".index.checkpoint");
+  const auto scan_manifest = std::filesystem::path(checkpoint_path.string() + ".scan_manifest");
+  const auto chunk_manifest = std::filesystem::path(checkpoint_path.string() + ".chunk_manifest");
+  const auto file_manifest = std::filesystem::path(checkpoint_path.string() + ".file_manifest");
+
+  std::error_code ec;
+  std::filesystem::create_directories(temp_root, ec);
+  if (ec) {
+    throw std::runtime_error("failed to create test repo directory: " + temp_root.string());
+  }
+  for (int i = 0; i < 6; ++i) {
+    WriteTextFile(temp_root / ("Cap" + std::to_string(i) + ".cpp"), MakeLargeCppBody(50 + i));
+  }
+
+  SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
+  const auto models = MakeRuntimeConfigForTests(temp_root);
+  waxcpp::server::WaxRAGHandler handler(store_path, models);
+
+  Poco::JSON::Object::Ptr start_params = new Poco::JSON::Object();
+  start_params->set("repo_root", temp_root.string());
+  start_params->set("resume", false);
+  start_params->set("max_files", 2);
+  start_params->set("flush_every_chunks", 1);
+  const auto start_raw = handler.handle_index_start(start_params);
+  Require(start_raw.rfind("Error:", 0) != 0, "max_files index.start must not fail");
+
+  const auto view = WaitForTerminalState(handler, 20000);
+  Require(view.state == "stopped", "max_files run must complete");
+  Require(view.scanned_files == 2, "max_files must cap scanned_files to requested limit");
+  Require(view.indexed_chunks > 0, "max_files run must still ingest chunks");
+
+  std::filesystem::remove_all(temp_root, ec);
+  ec.clear();
+  waxcpp::tests::CleanupStoreArtifacts(store_path);
+  std::filesystem::remove(checkpoint_path, ec);
+  ec.clear();
+  std::filesystem::remove(scan_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(chunk_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(file_manifest, ec);
+  ec.clear();
+}
+
 }  // namespace
 
 int main() {
@@ -360,6 +408,7 @@ int main() {
     ScenarioIndexCompleteWritesManifests();
     ScenarioResumeSkipsUnchangedFilesThenIndexesChangedFile();
     ScenarioInterruptedIndexResumesAfterHandlerRecreate();
+    ScenarioMaxFilesCapsScanDeterministically();
     waxcpp::tests::Log("wax_rag_handler_index_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

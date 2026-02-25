@@ -13,6 +13,7 @@
 #include <Poco/JSON/Object.h>
 
 #include <filesystem>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <atomic>
@@ -37,7 +38,15 @@ public:
     std::string handle_index_stop(const Poco::JSON::Object::Ptr& params);
 
 private:
-    void run_index_job(std::string repo_root, bool resume_requested, std::shared_ptr<std::atomic<bool>> cancel_flag);
+    struct IndexRunOptions {
+        std::uint64_t flush_every_chunks = 128;
+        std::uint64_t max_files = 0;
+    };
+
+    void run_index_job(std::string repo_root,
+                       bool resume_requested,
+                       IndexRunOptions options,
+                       std::shared_ptr<std::atomic<bool>> cancel_flag);
     void reap_index_worker_if_finished_locked();
     std::string make_index_status_json(const IndexJobStatus& status) const;
 

@@ -94,6 +94,20 @@ void ScenarioMissingRootThrows(const std::filesystem::path& root) {
   });
 }
 
+void ScenarioCancelStopsScanEarly(const std::filesystem::path& root) {
+  const auto cancel_root = root / "CancelOnly";
+  WriteFile(cancel_root / "A.cpp", "int a = 1;");
+  WriteFile(cancel_root / "B.cpp", "int b = 2;");
+  WriteFile(cancel_root / "C.cpp", "int c = 3;");
+
+  waxcpp::server::Ue5FilesystemScanner scanner{};
+  const auto full_entries = scanner.Scan(cancel_root);
+  Require(full_entries.size() == 3, "cancel scenario baseline must have three files");
+
+  const auto cancelled_entries = scanner.Scan(cancel_root, []() { return true; });
+  Require(cancelled_entries.empty(), "cancelled scan should return no entries when cancelled immediately");
+}
+
 }  // namespace
 
 int main() {
@@ -101,6 +115,7 @@ int main() {
   try {
     ScenarioDeterministicScanAndFiltering(root);
     ScenarioMissingRootThrows(root);
+    ScenarioCancelStopsScanEarly(root);
     waxcpp::tests::CleanupStoreArtifacts(root);
     waxcpp::tests::CleanupTempArtifactsByPrefix("waxcpp_ue5_scanner_test_");
     return EXIT_SUCCESS;

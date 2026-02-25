@@ -25,6 +25,7 @@ namespace waxcpp::server {
 
 namespace {
 constexpr std::uint64_t kIndexFlushEveryChunks = 128;
+constexpr std::uint64_t kMaxIndexControlValue = 1'000'000;
 constexpr const char* kDefaultLlamaEmbedEndpoint = "http://127.0.0.1:8081/embedding";
 constexpr const char* kDefaultLlamaGenEndpoint = "http://127.0.0.1:8081/completion";
 
@@ -106,6 +107,20 @@ int ParsePositiveIntParam(const Poco::JSON::Object::Ptr& params,
     try {
         const auto value = params->getValue<int>(key);
         return value > 0 ? value : fallback;
+    } catch (const Poco::Exception&) {
+        return fallback;
+    }
+}
+
+int ParseNonNegativeIntParam(const Poco::JSON::Object::Ptr& params,
+                             const std::string& key,
+                             int fallback) {
+    if (params.isNull() || !params->has(key)) {
+        return fallback;
+    }
+    try {
+        const auto value = params->getValue<int>(key);
+        return value >= 0 ? value : fallback;
     } catch (const Poco::Exception&) {
         return fallback;
     }
@@ -448,6 +463,7 @@ std::string WaxRAGHandler::handle_flush(const Poco::JSON::Object::Ptr& params) {
 
 void WaxRAGHandler::run_index_job(std::string repo_root,
                                   bool resume_requested,
+                                  IndexRunOptions options,
                                   std::shared_ptr<std::atomic<bool>> cancel_flag) {
     auto is_cancelled = [&cancel_flag]() noexcept {
         return cancel_flag && cancel_flag->load(std::memory_order_relaxed);
@@ -455,7 +471,10 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
 
     try {
         const auto repo_root_path = std::filesystem::path(repo_root);
-        const auto entries = ue5_scanner_.Scan(repo_root_path);
+        auto entries = ue5_scanner_.Scan(repo_root_path, is_cancelled);
+        if (options.max_files > 0 && entries.size() > options.max_files) {
+            entries.resize(static_cast<std::size_t>(options.max_files));
+        }
         if (is_cancelled()) {
             return;
         }
@@ -511,7 +530,7 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                 }
                 ++indexed_chunks;
 
-                if (indexed_chunks % kIndexFlushEveryChunks == 0) {
+                if (indexed_chunks % options.flush_every_chunks == 0) {
                     {
                         std::lock_guard<std::mutex> lock(mutex_);
                         orchestrator_->Flush();
@@ -589,6 +608,20 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
         return "Missing required parameter 'repo_root'";
     }
     const bool resume_requested = (params.isNull() ? false : params->optValue<bool>("resume", false));
+    const int flush_every_chunks_param =
+        ParsePositiveIntParam(params, "flush_every_chunks", static_cast<int>(kIndexFlushEveryChunks));
+    const int max_files_param = ParseNonNegativeIntParam(params, "max_files", 0);
+    if (flush_every_chunks_param <= 0 ||
+        static_cast<std::uint64_t>(flush_every_chunks_param) > kMaxIndexControlValue) {
+        return "Error: flush_every_chunks must be within [1, 1000000]";
+    }
+    if (max_files_param < 0 || static_cast<std::uint64_t>(max_files_param) > kMaxIndexControlValue) {
+        return "Error: max_files must be within [0, 1000000]";
+    }
+    const IndexRunOptions options{
+        .flush_every_chunks = static_cast<std::uint64_t>(flush_every_chunks_param),
+        .max_files = static_cast<std::uint64_t>(max_files_param),
+    };
 
     try {
         reap_index_worker_if_finished_locked();
@@ -602,7 +635,8 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
             }
             index_cancel_flag_ = cancel_flag;
             try {
-                index_worker_ = std::thread(&WaxRAGHandler::run_index_job, this, repo_root, resume_requested, cancel_flag);
+                index_worker_ =
+                    std::thread(&WaxRAGHandler::run_index_job, this, repo_root, resume_requested, options, cancel_flag);
             } catch (const std::exception& e) {
                 index_cancel_flag_.reset();
                 (void)index_job_manager_.Fail(e.what());
