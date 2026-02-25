@@ -107,6 +107,7 @@ bool IndexJobManager::Start(const std::filesystem::path& repo_root, bool resume_
 
   status_.generation += 1;
   status_.state = IndexJobState::kRunning;
+  status_.phase = "starting";
   status_.resume_requested = resume_requested;
   status_.repo_root = repo_root.string();
   status_.last_error.reset();
@@ -141,6 +142,7 @@ bool IndexJobManager::Complete(std::uint64_t scanned_files,
   status_.indexed_chunks = indexed_chunks;
   status_.committed_chunks = committed_chunks;
   status_.state = IndexJobState::kStopped;
+  status_.phase = "completed";
   status_.updated_at_ms = NowMs();
   PersistLocked();
   return true;
@@ -161,12 +163,27 @@ bool IndexJobManager::UpdateProgress(std::uint64_t scanned_files,
   return true;
 }
 
+bool IndexJobManager::SetPhase(std::string phase) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (status_.state != IndexJobState::kRunning) {
+    return false;
+  }
+  if (phase.empty()) {
+    phase = "running";
+  }
+  status_.phase = std::move(phase);
+  status_.updated_at_ms = NowMs();
+  PersistLocked();
+  return true;
+}
+
 bool IndexJobManager::Stop() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (status_.state != IndexJobState::kRunning) {
     return false;
   }
   status_.state = IndexJobState::kStopped;
+  status_.phase = "stopped";
   status_.updated_at_ms = NowMs();
   PersistLocked();
   return true;
@@ -178,6 +195,7 @@ bool IndexJobManager::Fail(std::string error) {
     return false;
   }
   status_.state = IndexJobState::kFailed;
+  status_.phase = "failed";
   status_.last_error = std::move(error);
   status_.updated_at_ms = NowMs();
   PersistLocked();
@@ -206,6 +224,7 @@ void IndexJobManager::PersistLocked() const {
   }
 
   out << "state=" << ToString(status_.state) << "\n";
+  out << "phase=" << status_.phase << "\n";
   out << "generation=" << status_.generation << "\n";
   out << "job_id=" << status_.job_id.value_or("") << "\n";
   out << "repo_root=" << status_.repo_root.value_or("") << "\n";
@@ -243,6 +262,11 @@ void IndexJobManager::LoadLocked() {
     if (const auto parsed = ParseIndexJobState(it->second); parsed.has_value()) {
       status_.state = *parsed;
     }
+  }
+  bool has_phase = false;
+  if (const auto it = entries.find("phase"); it != entries.end() && !it->second.empty()) {
+    has_phase = true;
+    status_.phase = it->second;
   }
   if (const auto it = entries.find("generation"); it != entries.end()) {
     if (const auto parsed = ParseU64(it->second); parsed.has_value()) {
@@ -290,6 +314,9 @@ void IndexJobManager::LoadLocked() {
   // A previously running process is treated as stopped when this manager starts.
   if (status_.state == IndexJobState::kRunning) {
     status_.state = IndexJobState::kStopped;
+    status_.phase = "stopped";
+  } else if (!has_phase) {
+    status_.phase = ToString(status_.state);
   }
   status_.checkpoint_path = checkpoint_path_;
 }

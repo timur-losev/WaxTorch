@@ -18,6 +18,7 @@ enum class IndexJobState : std::uint8_t {
 
 struct IndexJobStatus {
   IndexJobState state = IndexJobState::kIdle;
+  std::string phase = "idle";
   std::uint64_t generation = 0;
   std::optional<std::string> job_id;
   std::optional<std::string> repo_root;
@@ -46,6 +47,7 @@ class IndexJobManager {
   [[nodiscard]] bool UpdateProgress(std::uint64_t scanned_files,
                                     std::uint64_t indexed_chunks,
                                     std::uint64_t committed_chunks);
+  [[nodiscard]] bool SetPhase(std::string phase);
   [[nodiscard]] bool Stop();
   [[nodiscard]] bool Fail(std::string error);
 

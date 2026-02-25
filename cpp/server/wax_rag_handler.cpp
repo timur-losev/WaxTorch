@@ -529,6 +529,7 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                 << " max_files=" << options.max_files;
             ServerLog(msg.str());
         }
+        (void)index_job_manager_.SetPhase("scanning");
         const auto repo_root_path = std::filesystem::path(repo_root);
         auto entries = ue5_scanner_.Scan(repo_root_path, is_cancelled);
         if (options.max_files > 0 && entries.size() > options.max_files) {
@@ -570,6 +571,7 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                 << " unchanged_files=" << unchanged_paths.size();
             ServerLog(msg.str());
         }
+        (void)index_job_manager_.SetPhase("ingesting");
 
         std::uint64_t indexed_chunks = 0;
         std::uint64_t committed_chunks = 0;
@@ -634,6 +636,7 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
             return;
         }
 
+        (void)index_job_manager_.SetPhase("persisting_manifests");
         WriteFileText(manifest_path,
                       Ue5FilesystemScanner::SerializeManifest(entries),
                       "failed to open scan manifest file for write",
@@ -781,6 +784,7 @@ std::string WaxRAGHandler::handle_index_stop(const Poco::JSON::Object::Ptr& para
 std::string WaxRAGHandler::make_index_status_json(const IndexJobStatus& status) const {
     Poco::JSON::Object response{};
     response.set("state", ToString(status.state));
+    response.set("phase", status.phase);
     response.set("generation", status.generation);
     response.set("job_id", status.job_id.value_or(""));
     response.set("repo_root", status.repo_root.value_or(""));
