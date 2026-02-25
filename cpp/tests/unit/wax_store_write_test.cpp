@@ -4,6 +4,7 @@
 #include "../../src/core/wal_ring.hpp"
 #include "../../src/core/wax_store_test_hooks.hpp"
 #include "../test_logger.hpp"
+#include "../temp_artifacts.hpp"
 
 #include <array>
 #include <chrono>
@@ -33,22 +34,6 @@ std::filesystem::path UniquePath() {
   const auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
   return std::filesystem::temp_directory_path() /
          ("waxcpp_write_test_" + std::to_string(static_cast<long long>(now)) + ".mv2s");
-}
-
-void CleanupTempArtifactsByPrefix(const std::string& prefix) {
-  std::error_code ec;
-  const auto temp_dir = std::filesystem::temp_directory_path(ec);
-  if (ec) {
-    return;
-  }
-  for (std::filesystem::directory_iterator it(temp_dir, ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
-    const auto name = it->path().filename().string();
-    if (!name.starts_with(prefix)) {
-      continue;
-    }
-    std::filesystem::remove_all(it->path(), ec);
-    ec.clear();
-  }
 }
 
 void Require(bool condition, const std::string& message) {
@@ -2122,7 +2107,7 @@ int main(int argc, char** argv) {
     return RunHoldWriterLeaseHelper(std::filesystem::path(argv[2]), std::filesystem::path(argv[3]));
   }
 
-  CleanupTempArtifactsByPrefix("waxcpp_write_test_");
+  waxcpp::tests::CleanupTempArtifactsByPrefix("waxcpp_write_test_");
   const auto path = UniquePath();
   std::filesystem::path executable_path{};
   if (argc > 0 && argv[0] != nullptr) {
@@ -2192,16 +2177,14 @@ int main(int argc, char** argv) {
     RunScenarioWriterLeaseCrossProcessExclusion(path, executable_path);
     RunScenarioFailedOpenReleasesWriterLease(path);
 
-    std::error_code ec;
-    std::filesystem::remove(path, ec);
-    CleanupTempArtifactsByPrefix("waxcpp_write_test_");
+    waxcpp::tests::CleanupStoreArtifacts(path);
+    waxcpp::tests::CleanupTempArtifactsByPrefix("waxcpp_write_test_");
     waxcpp::tests::Log("wax_store_write_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
     waxcpp::tests::LogError(ex.what());
-    std::error_code ec;
-    std::filesystem::remove(path, ec);
-    CleanupTempArtifactsByPrefix("waxcpp_write_test_");
+    waxcpp::tests::CleanupStoreArtifacts(path);
+    waxcpp::tests::CleanupTempArtifactsByPrefix("waxcpp_write_test_");
     return EXIT_FAILURE;
   }
 }

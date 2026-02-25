@@ -4,6 +4,7 @@
 #include "../../src/core/mv2s_format.hpp"
 #include "../../src/core/sha256.hpp"
 #include "../test_logger.hpp"
+#include "../temp_artifacts.hpp"
 
 #include <algorithm>
 #include <array>
@@ -25,23 +26,6 @@ std::filesystem::path UniquePath() {
   const auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
   return std::filesystem::temp_directory_path() /
          ("waxcpp_m2_verify_" + std::to_string(static_cast<long long>(now)) + ".mv2s");
-}
-
-void CleanupTempArtifactsByPrefix(const std::string& prefix) {
-  std::error_code ec;
-  const auto temp_dir = std::filesystem::temp_directory_path(ec);
-  if (ec) {
-    return;
-  }
-  for (std::filesystem::directory_iterator it(temp_dir, ec); !ec && it != std::filesystem::directory_iterator();
-       it.increment(ec)) {
-    const auto name = it->path().filename().string();
-    if (!name.starts_with(prefix)) {
-      continue;
-    }
-    std::filesystem::remove_all(it->path(), ec);
-    ec.clear();
-  }
 }
 
 void WriteZeros(const std::filesystem::path& path, std::uint64_t offset, std::size_t length) {
@@ -313,7 +297,7 @@ std::vector<std::byte> BuildWalPutFramePayload(std::uint64_t frame_id,
 }  // namespace
 
 int main() {
-  CleanupTempArtifactsByPrefix("waxcpp_m2_verify_");
+  waxcpp::tests::CleanupTempArtifactsByPrefix("waxcpp_m2_verify_");
   const auto path = UniquePath();
 
   try {
@@ -987,17 +971,16 @@ int main() {
       reopened.Verify(false);
     });
 
-    std::filesystem::remove(path);
-    CleanupTempArtifactsByPrefix("waxcpp_m2_verify_");
+    waxcpp::tests::CleanupStoreArtifacts(path);
+    waxcpp::tests::CleanupTempArtifactsByPrefix("waxcpp_m2_verify_");
     waxcpp::tests::Log("wax_store_verify_test: finished");
     std::cout << "wax_store_verify_test passed\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
     waxcpp::tests::LogError(ex.what());
     std::cerr << "wax_store_verify_test failed: " << ex.what() << "\n";
-    std::error_code ec;
-    std::filesystem::remove(path, ec);
-    CleanupTempArtifactsByPrefix("waxcpp_m2_verify_");
+    waxcpp::tests::CleanupStoreArtifacts(path);
+    waxcpp::tests::CleanupTempArtifactsByPrefix("waxcpp_m2_verify_");
     return EXIT_FAILURE;
   }
 }
