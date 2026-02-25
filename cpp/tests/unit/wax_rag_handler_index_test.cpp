@@ -117,6 +117,20 @@ IndexStatusView WaitForTerminalState(waxcpp::server::WaxRAGHandler& handler, int
   throw std::runtime_error("index job did not reach terminal state before timeout");
 }
 
+void WaitForRunningState(waxcpp::server::WaxRAGHandler& handler, int timeout_ms) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto status_raw = handler.handle_index_status(Poco::JSON::Object::Ptr{});
+    Require(status_raw.rfind("Error:", 0) != 0, "index.status must not fail");
+    const auto status_json = ParseObject(status_raw);
+    if (status_json->optValue<std::string>("state", "") == "running") {
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  throw std::runtime_error("index job did not enter running state before timeout");
+}
+
 void ScenarioIndexStartIsAsyncAndStopWorks() {
   waxcpp::tests::Log("scenario: index.start returns promptly and stop cancels running job");
   const auto temp_root = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_repo_", "");
@@ -269,6 +283,74 @@ void ScenarioResumeSkipsUnchangedFilesThenIndexesChangedFile() {
   ec.clear();
 }
 
+void ScenarioInterruptedIndexResumesAfterHandlerRecreate() {
+  waxcpp::tests::Log("scenario: interrupted index resumes after handler recreate");
+  const auto temp_root = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_repo_", "");
+  const auto store_path = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_store_", ".mv2s");
+  const auto checkpoint_path = std::filesystem::path(store_path.string() + ".index.checkpoint");
+  const auto scan_manifest = std::filesystem::path(checkpoint_path.string() + ".scan_manifest");
+  const auto chunk_manifest = std::filesystem::path(checkpoint_path.string() + ".chunk_manifest");
+  const auto file_manifest = std::filesystem::path(checkpoint_path.string() + ".file_manifest");
+
+  std::error_code ec;
+  std::filesystem::create_directories(temp_root, ec);
+  if (ec) {
+    throw std::runtime_error("failed to create test repo directory: " + temp_root.string());
+  }
+  for (int i = 0; i < 24; ++i) {
+    WriteTextFile(temp_root / ("R" + std::to_string(i) + ".cpp"), MakeLargeCppBody(450));
+  }
+
+  SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
+  const auto models = MakeRuntimeConfigForTests(temp_root);
+
+  {
+    waxcpp::server::WaxRAGHandler first_handler(store_path, models);
+    Poco::JSON::Object::Ptr start_params = new Poco::JSON::Object();
+    start_params->set("repo_root", temp_root.string());
+    start_params->set("resume", false);
+    const auto start_raw = first_handler.handle_index_start(start_params);
+    Require(start_raw.rfind("Error:", 0) != 0, "first index.start must not fail");
+
+    WaitForRunningState(first_handler, 2000);
+    const auto stop_raw = first_handler.handle_index_stop(Poco::JSON::Object::Ptr{});
+    Require(stop_raw.rfind("Error:", 0) != 0, "first index.stop must not fail");
+    const auto stop_json = ParseObject(stop_raw);
+    Require(stop_json->optValue<std::string>("state", "") == "stopped",
+            "first index.stop must transition to stopped");
+  }
+
+  {
+    waxcpp::server::WaxRAGHandler resumed_handler(store_path, models);
+    Poco::JSON::Object::Ptr resume_params = new Poco::JSON::Object();
+    resume_params->set("repo_root", temp_root.string());
+    resume_params->set("resume", true);
+    const auto resume_raw = resumed_handler.handle_index_start(resume_params);
+    Require(resume_raw.rfind("Error:", 0) != 0, "resume index.start must not fail");
+
+    const auto final_view = WaitForTerminalState(resumed_handler, 25000);
+    Require(final_view.state == "stopped", "resumed job must complete");
+    Require(final_view.indexed_chunks > 0, "resumed job must ingest chunks");
+  }
+
+  Require(std::filesystem::exists(checkpoint_path), "checkpoint must exist after resumed run");
+  Require(std::filesystem::exists(scan_manifest), "scan manifest must exist after resumed run");
+  Require(std::filesystem::exists(chunk_manifest), "chunk manifest must exist after resumed run");
+  Require(std::filesystem::exists(file_manifest), "file manifest must exist after resumed run");
+
+  std::filesystem::remove_all(temp_root, ec);
+  ec.clear();
+  waxcpp::tests::CleanupStoreArtifacts(store_path);
+  std::filesystem::remove(checkpoint_path, ec);
+  ec.clear();
+  std::filesystem::remove(scan_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(chunk_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(file_manifest, ec);
+  ec.clear();
+}
+
 }  // namespace
 
 int main() {
@@ -277,6 +359,7 @@ int main() {
     ScenarioIndexStartIsAsyncAndStopWorks();
     ScenarioIndexCompleteWritesManifests();
     ScenarioResumeSkipsUnchangedFilesThenIndexesChangedFile();
+    ScenarioInterruptedIndexResumesAfterHandlerRecreate();
     waxcpp::tests::Log("wax_rag_handler_index_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
