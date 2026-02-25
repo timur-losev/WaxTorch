@@ -8,6 +8,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace waxcpp::server {
@@ -29,6 +30,12 @@ struct Ue5ChunkingConfig {
   bool include_symbol_metadata = true;
 };
 
+struct Ue5FileDigest {
+  std::string relative_path{};
+  std::uint64_t size_bytes = 0;
+  std::string content_hash{};
+};
+
 class Ue5ChunkManifestBuilder {
  public:
   using ChunkVisitor = std::function<void(const Ue5ChunkRecord&, std::string_view chunk_text)>;
@@ -38,9 +45,15 @@ class Ue5ChunkManifestBuilder {
   [[nodiscard]] std::vector<Ue5ChunkRecord> Build(
       const std::filesystem::path& repo_root,
       const std::vector<Ue5ScanEntry>& entries,
-      const ChunkVisitor& on_chunk = {}) const;
+      const ChunkVisitor& on_chunk = {},
+      std::vector<Ue5FileDigest>* file_digests_out = nullptr) const;
 
   [[nodiscard]] static std::string SerializeManifest(const std::vector<Ue5ChunkRecord>& records);
+  [[nodiscard]] static std::string SerializeFileManifest(const std::vector<Ue5FileDigest>& digests);
+  [[nodiscard]] static std::vector<Ue5FileDigest> ParseFileManifest(std::string_view manifest);
+  [[nodiscard]] static std::unordered_set<std::string> ComputeUnchangedPaths(
+      const std::vector<Ue5FileDigest>& previous,
+      const std::vector<Ue5FileDigest>& current);
 
  private:
   [[nodiscard]] static std::string DetectLanguage(const std::string& relative_path);

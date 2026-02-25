@@ -7,9 +7,12 @@
 #include <cctype>
 #include <fstream>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace waxcpp::server {
@@ -110,6 +113,22 @@ std::string Hex64(std::uint64_t value) {
   std::ostringstream out;
   out << std::hex << std::nouppercase << std::setfill('0') << std::setw(16) << value;
   return out.str();
+}
+
+std::optional<std::uint64_t> ParseU64(std::string_view text) {
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  try {
+    std::size_t consumed = 0;
+    const auto value = std::stoull(std::string(text), &consumed, 10);
+    if (consumed != text.size()) {
+      return std::nullopt;
+    }
+    return value;
+  } catch (...) {
+    return std::nullopt;
+  }
 }
 
 std::string ExtractIdentifierAfterKeyword(std::string_view trimmed, std::string_view keyword) {
@@ -263,14 +282,27 @@ Ue5ChunkManifestBuilder::Ue5ChunkManifestBuilder(Ue5ChunkingConfig config) : con
 std::vector<Ue5ChunkRecord> Ue5ChunkManifestBuilder::Build(
     const std::filesystem::path& repo_root,
     const std::vector<Ue5ScanEntry>& entries,
-    const ChunkVisitor& on_chunk) const {
+    const ChunkVisitor& on_chunk,
+    std::vector<Ue5FileDigest>* file_digests_out) const {
   waxcpp::TokenCounter token_counter{};
   std::vector<Ue5ChunkRecord> records{};
   records.reserve(entries.size() * 2);
+  if (file_digests_out != nullptr) {
+    file_digests_out->clear();
+    file_digests_out->reserve(entries.size());
+  }
 
   for (const auto& entry : entries) {
     const auto full_path = repo_root / entry.relative_path;
     const auto content = ReadFileText(full_path);
+    const auto file_hash = Hex64(Fnv1a64(content));
+    if (file_digests_out != nullptr) {
+      file_digests_out->push_back(Ue5FileDigest{
+          .relative_path = entry.relative_path,
+          .size_bytes = entry.size_bytes,
+          .content_hash = file_hash,
+      });
+    }
     const auto lines = SplitLines(content);
     if (lines.empty()) {
       continue;
@@ -329,6 +361,18 @@ std::vector<Ue5ChunkRecord> Ue5ChunkManifestBuilder::Build(
     }
     return lhs.chunk_id < rhs.chunk_id;
   });
+  if (file_digests_out != nullptr) {
+    std::sort(file_digests_out->begin(),
+              file_digests_out->end(),
+              [](const Ue5FileDigest& lhs, const Ue5FileDigest& rhs) {
+                const auto lhs_key = ToAsciiLower(lhs.relative_path);
+                const auto rhs_key = ToAsciiLower(rhs.relative_path);
+                if (lhs_key == rhs_key) {
+                  return lhs.relative_path < rhs.relative_path;
+                }
+                return lhs_key < rhs_key;
+              });
+  }
   return records;
 }
 
@@ -340,6 +384,83 @@ std::string Ue5ChunkManifestBuilder::SerializeManifest(const std::vector<Ue5Chun
         << record.token_estimate << '\t' << record.content_hash << '\t' << record.size_bytes << '\n';
   }
   return out.str();
+}
+
+std::string Ue5ChunkManifestBuilder::SerializeFileManifest(const std::vector<Ue5FileDigest>& digests) {
+  std::ostringstream out;
+  for (const auto& digest : digests) {
+    out << digest.relative_path << '\t' << digest.size_bytes << '\t' << digest.content_hash << '\n';
+  }
+  return out.str();
+}
+
+std::vector<Ue5FileDigest> Ue5ChunkManifestBuilder::ParseFileManifest(std::string_view manifest) {
+  std::vector<Ue5FileDigest> digests{};
+  std::size_t cursor = 0;
+  while (cursor < manifest.size()) {
+    const auto line_end = manifest.find('\n', cursor);
+    const auto line = manifest.substr(cursor,
+                                      line_end == std::string_view::npos ? std::string_view::npos : line_end - cursor);
+    cursor = line_end == std::string_view::npos ? manifest.size() : line_end + 1;
+    if (line.empty()) {
+      continue;
+    }
+    const auto first_tab = line.find('\t');
+    if (first_tab == std::string_view::npos) {
+      continue;
+    }
+    const auto second_tab = line.find('\t', first_tab + 1);
+    if (second_tab == std::string_view::npos) {
+      continue;
+    }
+    const auto path = std::string(line.substr(0, first_tab));
+    const auto size_text = line.substr(first_tab + 1, second_tab - first_tab - 1);
+    const auto hash_text = line.substr(second_tab + 1);
+    if (path.empty() || hash_text.empty()) {
+      continue;
+    }
+    const auto parsed_size = ParseU64(size_text);
+    if (!parsed_size.has_value()) {
+      continue;
+    }
+    digests.push_back(Ue5FileDigest{
+        .relative_path = path,
+        .size_bytes = *parsed_size,
+        .content_hash = std::string(hash_text),
+    });
+  }
+  std::sort(digests.begin(), digests.end(), [](const Ue5FileDigest& lhs, const Ue5FileDigest& rhs) {
+    const auto lhs_key = ToAsciiLower(lhs.relative_path);
+    const auto rhs_key = ToAsciiLower(rhs.relative_path);
+    if (lhs_key == rhs_key) {
+      return lhs.relative_path < rhs.relative_path;
+    }
+    return lhs_key < rhs_key;
+  });
+  return digests;
+}
+
+std::unordered_set<std::string> Ue5ChunkManifestBuilder::ComputeUnchangedPaths(
+    const std::vector<Ue5FileDigest>& previous,
+    const std::vector<Ue5FileDigest>& current) {
+  std::unordered_map<std::string, Ue5FileDigest> previous_by_path{};
+  previous_by_path.reserve(previous.size());
+  for (const auto& digest : previous) {
+    previous_by_path[digest.relative_path] = digest;
+  }
+
+  std::unordered_set<std::string> unchanged{};
+  unchanged.reserve(current.size());
+  for (const auto& digest : current) {
+    const auto it = previous_by_path.find(digest.relative_path);
+    if (it == previous_by_path.end()) {
+      continue;
+    }
+    if (it->second.size_bytes == digest.size_bytes && it->second.content_hash == digest.content_hash) {
+      unchanged.insert(digest.relative_path);
+    }
+  }
+  return unchanged;
 }
 
 std::string Ue5ChunkManifestBuilder::DetectLanguage(const std::string& relative_path) {

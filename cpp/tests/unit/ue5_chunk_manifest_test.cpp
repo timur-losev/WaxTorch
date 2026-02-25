@@ -126,6 +126,38 @@ void ScenarioManifestChangesAfterSourceMutation(const std::filesystem::path& roo
           "chunk manifest must change when source content changes");
 }
 
+void ScenarioFileManifestRoundTripAndUnchangedDetection(const std::filesystem::path& root) {
+  waxcpp::server::Ue5FilesystemScanner scanner{};
+  waxcpp::server::Ue5ChunkManifestBuilder builder{};
+
+  const auto entries = scanner.Scan(root);
+  std::vector<waxcpp::server::Ue5FileDigest> baseline_digests{};
+  (void)builder.Build(root, entries, {}, &baseline_digests);
+  Require(!baseline_digests.empty(), "baseline file digests must not be empty");
+
+  const auto serialized = waxcpp::server::Ue5ChunkManifestBuilder::SerializeFileManifest(baseline_digests);
+  const auto parsed = waxcpp::server::Ue5ChunkManifestBuilder::ParseFileManifest(serialized);
+  Require(parsed.size() == baseline_digests.size(), "file manifest parse roundtrip count mismatch");
+  const auto unchanged_all =
+      waxcpp::server::Ue5ChunkManifestBuilder::ComputeUnchangedPaths(baseline_digests, parsed);
+  Require(unchanged_all.size() == baseline_digests.size(),
+          "all files must be unchanged for identical file manifests");
+
+  WriteFile(root / "Engine/Source/Public/Math.hpp",
+            "class FMathHelper {\n"
+            "public:\n"
+            "  static int AddNumbers(int a, int b);\n"
+            "  static int SubNumbers(int a, int b);\n"
+            "};\n");
+  const auto changed_entries = scanner.Scan(root);
+  std::vector<waxcpp::server::Ue5FileDigest> changed_digests{};
+  (void)builder.Build(root, changed_entries, {}, &changed_digests);
+  const auto unchanged_after_change =
+      waxcpp::server::Ue5ChunkManifestBuilder::ComputeUnchangedPaths(baseline_digests, changed_digests);
+  Require(unchanged_after_change.size() + 1 == baseline_digests.size(),
+          "exactly one file should be detected as changed after single-file mutation");
+}
+
 }  // namespace
 
 int main() {
@@ -134,6 +166,7 @@ int main() {
     ScenarioManifestDeterministicAndHasMetadata(root);
     ScenarioManifestStableAcrossEntryOrder(root);
     ScenarioManifestChangesAfterSourceMutation(root);
+    ScenarioFileManifestRoundTripAndUnchangedDetection(root);
     waxcpp::tests::CleanupStoreArtifacts(root);
     waxcpp::tests::CleanupTempArtifactsByPrefix("waxcpp_ue5_chunk_manifest_test_");
     return EXIT_SUCCESS;

@@ -17,7 +17,8 @@ Current runtime source decision:
 - M4 in progress:
   - implemented deterministic chunk-manifest builder (line/token-aware windows, metadata, deterministic chunk ids),
   - `index.start` now writes both `.scan_manifest` and `.chunk_manifest`,
-  - `index.start` now performs text ingest into Wax (`remember` + periodic `flush`) and updates job progress counters.
+  - `index.start` now performs text ingest into Wax (`remember` + periodic `flush`) and updates job progress counters,
+  - added file hash manifest (`.file_manifest`) and resume-time unchanged-file skipping.
 
 ## Scope
 - Build an ingest/search/generation server path for very large C++ codebases (UE5 scale).
@@ -86,6 +87,7 @@ Current runtime source decision:
 - Batch ingest with periodic commit/checkpoint.
 - Resume-from-manifest-hash logic to skip unchanged files.
 - Crash-recovery regression tests for mid-index interruption.
+- Status: partially implemented (periodic flush/checkpoint + unchanged file skip via file digest manifest).
 
 ### M7. Query Pipeline + RAG
 - Query embedding + retrieval + deterministic rerank.

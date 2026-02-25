@@ -50,6 +50,11 @@
    - periodic WAL commits via `Flush()` every 128 chunks
    - live checkpoint updates via `IndexJobManager::UpdateProgress(...)`
    - final `committed_chunks` persisted on completion
+10. Added resume-time incremental skip by file content hash:
+   - `Ue5FileDigest` + deterministic `.file_manifest` serialization/parsing
+   - unchanged path detection (`previous` vs `current` manifests)
+   - with `resume=true`, chunks from unchanged files are skipped during ingest
+   - `index.start` now persists `<checkpoint>.file_manifest` after successful pass
 
 ## Validation Rules Now Enforced
 1. `generation_model.runtime` must be `llama_cpp`.
@@ -60,10 +65,10 @@
 6. Vector-search enablement requires embedding runtime to be `llama_cpp` with `.gguf` path.
 
 ## Pending Next Steps
-1. Add resume-from-manifest hash logic (incremental indexing over changed files only).
-2. Implement `LlamaCppEmbeddingProvider` and wire vector ingest/search path.
-3. Add end-to-end retrieval + answer path with citation metadata.
-4. Move long-running index execution off request thread (background worker + cancellation-safe stop).
+1. Implement `LlamaCppEmbeddingProvider` and wire vector ingest/search path.
+2. Add end-to-end retrieval + answer path with citation metadata.
+3. Move long-running index execution off request thread (background worker + cancellation-safe stop).
+4. Add crash-window regression tests for interrupted index job across manifests/checkpoints.
 
 ## Operational Notes
 1. Server now expects llama runtime root via:

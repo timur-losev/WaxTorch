@@ -7,16 +7,32 @@
 #include <Poco/JSON/Object.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 
 namespace waxcpp::server {
 
 namespace {
 constexpr std::uint64_t kIndexFlushEveryChunks = 128;
+
+std::string ReadFileText(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("failed to open file: " + path.string());
+    }
+    std::ostringstream out;
+    out << in.rdbuf();
+    if (!in.good() && !in.eof()) {
+        throw std::runtime_error("failed to read file: " + path.string());
+    }
+    return out.str();
+}
 }
 
 WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
@@ -136,12 +152,36 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
         }
         const auto repo_root_path = std::filesystem::path(repo_root);
         const auto entries = ue5_scanner_.Scan(repo_root_path);
+        const auto running_status = index_job_manager_.status();
+        auto manifest_path = running_status.checkpoint_path;
+        manifest_path += ".scan_manifest";
+        auto chunk_manifest_path = running_status.checkpoint_path;
+        chunk_manifest_path += ".chunk_manifest";
+        auto file_manifest_path = running_status.checkpoint_path;
+        file_manifest_path += ".file_manifest";
+
+        std::vector<Ue5FileDigest> previous_file_digests{};
+        if (resume_requested) {
+            std::error_code ec;
+            if (std::filesystem::exists(file_manifest_path, ec) && !ec) {
+                previous_file_digests = Ue5ChunkManifestBuilder::ParseFileManifest(ReadFileText(file_manifest_path));
+            }
+        }
+
+        std::vector<Ue5FileDigest> current_file_digests{};
+        const auto chunk_records = ue5_chunk_builder_.Build(repo_root_path, entries, {}, &current_file_digests);
+        const auto unchanged_paths = Ue5ChunkManifestBuilder::ComputeUnchangedPaths(
+            previous_file_digests,
+            current_file_digests);
         std::uint64_t indexed_chunks = 0;
         std::uint64_t committed_chunks = 0;
-        const auto chunk_records = ue5_chunk_builder_.Build(
+        (void)ue5_chunk_builder_.Build(
             repo_root_path,
             entries,
             [&](const Ue5ChunkRecord& chunk, std::string_view chunk_text) {
+                if (resume_requested && unchanged_paths.contains(chunk.relative_path)) {
+                    return;
+                }
                 waxcpp::Metadata metadata{};
                 metadata["source_kind"] = "ue5_chunk";
                 metadata["repo_root"] = repo_root;
@@ -165,18 +205,17 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
                     (void)progress_updated;
                 }
             });
-        orchestrator_->Flush();
-        committed_chunks = indexed_chunks;
-        const bool progress_updated = index_job_manager_.UpdateProgress(
-            static_cast<std::uint64_t>(entries.size()),
-            indexed_chunks,
-            committed_chunks);
-        (void)progress_updated;
-        const auto running_status = index_job_manager_.status();
-        auto manifest_path = running_status.checkpoint_path;
-        manifest_path += ".scan_manifest";
-        auto chunk_manifest_path = running_status.checkpoint_path;
-        chunk_manifest_path += ".chunk_manifest";
+        if (indexed_chunks > committed_chunks) {
+            orchestrator_->Flush();
+            committed_chunks = indexed_chunks;
+        }
+        {
+            const bool progress_updated = index_job_manager_.UpdateProgress(
+                static_cast<std::uint64_t>(entries.size()),
+                indexed_chunks,
+                committed_chunks);
+            (void)progress_updated;
+        }
         {
             std::ofstream out(manifest_path, std::ios::binary | std::ios::trunc);
             if (!out) {
@@ -205,8 +244,22 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
                 return "Error: failed to persist chunk manifest file";
             }
         }
+        {
+            std::ofstream out(file_manifest_path, std::ios::binary | std::ios::trunc);
+            if (!out) {
+                const bool marked_failed = index_job_manager_.Fail("failed to write file manifest file");
+                (void)marked_failed;
+                return "Error: failed to open file manifest file for write";
+            }
+            out << Ue5ChunkManifestBuilder::SerializeFileManifest(current_file_digests);
+            if (!out) {
+                const bool marked_failed = index_job_manager_.Fail("failed to persist file manifest file");
+                (void)marked_failed;
+                return "Error: failed to persist file manifest file";
+            }
+        }
         if (!index_job_manager_.Complete(static_cast<std::uint64_t>(entries.size()),
-                                         static_cast<std::uint64_t>(chunk_records.size()),
+                                         indexed_chunks,
                                          committed_chunks)) {
             return "Error: failed to complete index job state transition";
         }
