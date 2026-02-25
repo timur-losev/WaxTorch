@@ -131,6 +131,30 @@ void WaitForRunningState(waxcpp::server::WaxRAGHandler& handler, int timeout_ms)
   throw std::runtime_error("index job did not enter running state before timeout");
 }
 
+IndexStatusView WaitForCommittedChunksAtLeast(waxcpp::server::WaxRAGHandler& handler,
+                                              std::uint64_t committed_target,
+                                              int timeout_ms) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  IndexStatusView view{};
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto status_raw = handler.handle_index_status(Poco::JSON::Object::Ptr{});
+    Require(status_raw.rfind("Error:", 0) != 0, "index.status must not fail");
+    const auto status_json = ParseObject(status_raw);
+    view.state = status_json->optValue<std::string>("state", "");
+    view.indexed_chunks = status_json->optValue<std::uint64_t>("indexed_chunks", 0);
+    view.committed_chunks = status_json->optValue<std::uint64_t>("committed_chunks", 0);
+    view.scanned_files = status_json->optValue<std::uint64_t>("scanned_files", 0);
+    if (view.committed_chunks >= committed_target) {
+      return view;
+    }
+    if (view.state != "running") {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+  }
+  throw std::runtime_error("index job did not reach committed chunk target before timeout");
+}
+
 void ScenarioIndexStartIsAsyncAndStopWorks() {
   waxcpp::tests::Log("scenario: index.start returns promptly and stop cancels running job");
   const auto temp_root = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_repo_", "");
@@ -361,6 +385,99 @@ void ScenarioInterruptedIndexResumesAfterHandlerRecreate() {
   ec.clear();
 }
 
+void ScenarioResumeWithoutFileManifestSkipsCommittedWatermark() {
+  waxcpp::tests::Log("scenario: resume without file_manifest skips committed watermark to avoid duplicates");
+  const auto temp_root = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_repo_", "");
+  const auto baseline_store_path =
+      std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_store_baseline_", ".mv2s");
+  const auto baseline_checkpoint_path = std::filesystem::path(baseline_store_path.string() + ".index.checkpoint");
+  const auto interrupted_store_path =
+      std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_store_resume_", ".mv2s");
+  const auto interrupted_checkpoint_path = std::filesystem::path(interrupted_store_path.string() + ".index.checkpoint");
+  const auto interrupted_scan_manifest = std::filesystem::path(interrupted_checkpoint_path.string() + ".scan_manifest");
+  const auto interrupted_chunk_manifest = std::filesystem::path(interrupted_checkpoint_path.string() + ".chunk_manifest");
+  const auto interrupted_file_manifest = std::filesystem::path(interrupted_checkpoint_path.string() + ".file_manifest");
+
+  std::error_code ec;
+  std::filesystem::create_directories(temp_root, ec);
+  if (ec) {
+    throw std::runtime_error("failed to create test repo directory: " + temp_root.string());
+  }
+  for (int i = 0; i < 24; ++i) {
+    WriteTextFile(temp_root / ("W" + std::to_string(i) + ".cpp"), MakeLargeCppBody(500));
+  }
+
+  SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
+  const auto models = MakeRuntimeConfigForTests(temp_root);
+
+  std::uint64_t full_chunk_count = 0;
+  {
+    waxcpp::server::WaxRAGHandler baseline_handler(baseline_store_path, models);
+    Poco::JSON::Object::Ptr params = new Poco::JSON::Object();
+    params->set("repo_root", temp_root.string());
+    params->set("resume", false);
+    params->set("flush_every_chunks", 1);
+    const auto start_raw = baseline_handler.handle_index_start(params);
+    Require(start_raw.rfind("Error:", 0) != 0, "baseline index.start must not fail");
+    const auto complete_view = WaitForTerminalState(baseline_handler, 35000);
+    Require(complete_view.state == "stopped", "baseline run must complete");
+    Require(complete_view.indexed_chunks > 0, "baseline run must produce chunks");
+    full_chunk_count = complete_view.indexed_chunks;
+  }
+  Require(full_chunk_count > 8, "baseline chunk count too small for watermark scenario");
+
+  std::uint64_t committed_before_stop = 0;
+  {
+    waxcpp::server::WaxRAGHandler first_handler(interrupted_store_path, models);
+    Poco::JSON::Object::Ptr start_params = new Poco::JSON::Object();
+    start_params->set("repo_root", temp_root.string());
+    start_params->set("resume", false);
+    start_params->set("flush_every_chunks", 1);
+    const auto start_raw = first_handler.handle_index_start(start_params);
+    Require(start_raw.rfind("Error:", 0) != 0, "interrupted index.start must not fail");
+
+    const auto committed_target = std::max<std::uint64_t>(2, full_chunk_count / 6);
+    const auto running_view = WaitForCommittedChunksAtLeast(first_handler, committed_target, 12000);
+    Require(running_view.state == "running", "interrupted run must still be running before explicit stop");
+    const auto stop_raw = first_handler.handle_index_stop(Poco::JSON::Object::Ptr{});
+    Require(stop_raw.rfind("Error:", 0) != 0, "interrupted index.stop must not fail");
+    const auto stop_json = ParseObject(stop_raw);
+    committed_before_stop = stop_json->optValue<std::uint64_t>("committed_chunks", 0);
+    Require(committed_before_stop >= committed_target, "interrupted run committed watermark must be persisted");
+    Require(committed_before_stop < full_chunk_count, "interrupted run must stop before full ingest completion");
+  }
+
+  {
+    waxcpp::server::WaxRAGHandler resumed_handler(interrupted_store_path, models);
+    Poco::JSON::Object::Ptr resume_params = new Poco::JSON::Object();
+    resume_params->set("repo_root", temp_root.string());
+    resume_params->set("resume", true);
+    resume_params->set("flush_every_chunks", 1);
+    const auto resume_raw = resumed_handler.handle_index_start(resume_params);
+    Require(resume_raw.rfind("Error:", 0) != 0, "resume index.start must not fail");
+
+    const auto final_view = WaitForTerminalState(resumed_handler, 35000);
+    Require(final_view.state == "stopped", "resume run must complete");
+    Require(final_view.indexed_chunks + committed_before_stop == full_chunk_count,
+            "resume run must only ingest remainder after committed watermark");
+  }
+
+  std::filesystem::remove_all(temp_root, ec);
+  ec.clear();
+  waxcpp::tests::CleanupStoreArtifacts(baseline_store_path);
+  waxcpp::tests::CleanupStoreArtifacts(interrupted_store_path);
+  std::filesystem::remove(baseline_checkpoint_path, ec);
+  ec.clear();
+  std::filesystem::remove(interrupted_checkpoint_path, ec);
+  ec.clear();
+  std::filesystem::remove(interrupted_scan_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(interrupted_chunk_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(interrupted_file_manifest, ec);
+  ec.clear();
+}
+
 void ScenarioMaxFilesCapsScanDeterministically() {
   waxcpp::tests::Log("scenario: index.start max_files caps deterministic scan set");
   const auto temp_root = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_repo_", "");
@@ -464,6 +581,7 @@ int main() {
     ScenarioIndexCompleteWritesManifests();
     ScenarioResumeSkipsUnchangedFilesThenIndexesChangedFile();
     ScenarioInterruptedIndexResumesAfterHandlerRecreate();
+    ScenarioResumeWithoutFileManifestSkipsCommittedWatermark();
     ScenarioMaxFilesCapsScanDeterministically();
     ScenarioMaxChunksCapsIngestDeterministically();
     waxcpp::tests::Log("wax_rag_handler_index_test: finished");

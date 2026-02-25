@@ -198,6 +198,8 @@ Current behavior:
 - `index.status` includes runtime metrics: `elapsed_ms`, `indexed_chunks_per_sec`, `committed_chunks_per_sec`.
 - `index.stop` requests cancellation and waits worker shutdown (`running -> stopped`).
 - `resume=true` uses `<checkpoint>.file_manifest` to skip unchanged files.
+- If `<checkpoint>.file_manifest` is absent (interrupted run before manifest persist), `resume=true` falls back to
+  checkpoint `committed_chunks` watermark and skips already committed deterministic chunk prefix.
 - `answer.generate` performs Recall + citation map assembly (`relative_path`, `line_start`, `line_end`) and calls llama.cpp generation endpoint.
 - `answer.generate` supports deterministic context clamp via `max_context_items` and `max_context_tokens` and returns `context_items_used/context_tokens_used`.
 

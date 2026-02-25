@@ -566,9 +566,11 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
         file_manifest_path += ".file_manifest";
 
         std::vector<Ue5FileDigest> previous_file_digests{};
+        bool loaded_previous_file_manifest = false;
         if (resume_requested) {
             std::error_code ec;
             if (std::filesystem::exists(file_manifest_path, ec) && !ec) {
+                loaded_previous_file_manifest = true;
                 previous_file_digests = Ue5ChunkManifestBuilder::ParseFileManifest(ReadFileText(file_manifest_path));
             }
         }
@@ -581,6 +583,14 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
             std::ostringstream msg;
             msg << "chunk manifest prepared chunks=" << chunk_records.size()
                 << " unchanged_files=" << unchanged_paths.size();
+            ServerLog(msg.str());
+        }
+        const std::uint64_t resume_committed_watermark =
+            (resume_requested && !loaded_previous_file_manifest) ? running_status.committed_chunks : 0;
+        std::uint64_t remaining_resume_skip_chunks = resume_committed_watermark;
+        if (resume_committed_watermark > 0) {
+            std::ostringstream msg;
+            msg << "resume committed watermark active committed_chunks=" << resume_committed_watermark;
             ServerLog(msg.str());
         }
         (void)index_job_manager_.SetPhase("ingesting");
@@ -599,6 +609,10 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                     return;
                 }
                 if (resume_requested && unchanged_paths.contains(chunk.relative_path)) {
+                    return;
+                }
+                if (remaining_resume_skip_chunks > 0) {
+                    --remaining_resume_skip_chunks;
                     return;
                 }
 
