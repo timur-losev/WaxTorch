@@ -27,6 +27,23 @@ std::filesystem::path UniquePath() {
          ("waxcpp_m2_verify_" + std::to_string(static_cast<long long>(now)) + ".mv2s");
 }
 
+void CleanupTempArtifactsByPrefix(const std::string& prefix) {
+  std::error_code ec;
+  const auto temp_dir = std::filesystem::temp_directory_path(ec);
+  if (ec) {
+    return;
+  }
+  for (std::filesystem::directory_iterator it(temp_dir, ec); !ec && it != std::filesystem::directory_iterator();
+       it.increment(ec)) {
+    const auto name = it->path().filename().string();
+    if (!name.starts_with(prefix)) {
+      continue;
+    }
+    std::filesystem::remove_all(it->path(), ec);
+    ec.clear();
+  }
+}
+
 void WriteZeros(const std::filesystem::path& path, std::uint64_t offset, std::size_t length) {
   std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
   if (!file) {
@@ -296,6 +313,7 @@ std::vector<std::byte> BuildWalPutFramePayload(std::uint64_t frame_id,
 }  // namespace
 
 int main() {
+  CleanupTempArtifactsByPrefix("waxcpp_m2_verify_");
   const auto path = UniquePath();
 
   try {
@@ -970,6 +988,7 @@ int main() {
     });
 
     std::filesystem::remove(path);
+    CleanupTempArtifactsByPrefix("waxcpp_m2_verify_");
     waxcpp::tests::Log("wax_store_verify_test: finished");
     std::cout << "wax_store_verify_test passed\n";
     return EXIT_SUCCESS;
@@ -978,6 +997,7 @@ int main() {
     std::cerr << "wax_store_verify_test failed: " << ex.what() << "\n";
     std::error_code ec;
     std::filesystem::remove(path, ec);
+    CleanupTempArtifactsByPrefix("waxcpp_m2_verify_");
     return EXIT_FAILURE;
   }
 }

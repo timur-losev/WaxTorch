@@ -35,6 +35,23 @@ std::filesystem::path UniquePath() {
          ("waxcpp_orchestrator_test_" + std::to_string(static_cast<long long>(now)) + ".mv2s");
 }
 
+void CleanupTempArtifactsByPrefix(const std::string& prefix) {
+  std::error_code ec;
+  const auto temp_dir = std::filesystem::temp_directory_path(ec);
+  if (ec) {
+    return;
+  }
+  for (std::filesystem::directory_iterator it(temp_dir, ec); !ec && it != std::filesystem::directory_iterator();
+       it.increment(ec)) {
+    const auto name = it->path().filename().string();
+    if (!name.starts_with(prefix)) {
+      continue;
+    }
+    std::filesystem::remove_all(it->path(), ec);
+    ec.clear();
+  }
+}
+
 std::vector<std::byte> StringToBytes(const std::string& text) {
   std::vector<std::byte> bytes{};
   bytes.reserve(text.size());
@@ -5497,6 +5514,7 @@ void ScenarioRecallWithMetadataFilter(const std::filesystem::path& path) {
 }  // namespace
 
 int main() {
+  CleanupTempArtifactsByPrefix("waxcpp_orchestrator_test_");
   try {
     waxcpp::tests::Log("memory_orchestrator_test: start");
     const auto path0 = UniquePath();
@@ -5799,10 +5817,12 @@ int main() {
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
     }
+    CleanupTempArtifactsByPrefix("waxcpp_orchestrator_test_");
     waxcpp::tests::Log("memory_orchestrator_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {
     waxcpp::tests::LogError(ex.what());
+    CleanupTempArtifactsByPrefix("waxcpp_orchestrator_test_");
     return EXIT_FAILURE;
   }
 }
