@@ -21,3 +21,5 @@ build/
 *.writer.lease
 cpp/build_alt2/
 cpp/build_vs/
+*.profraw
+*.profdata

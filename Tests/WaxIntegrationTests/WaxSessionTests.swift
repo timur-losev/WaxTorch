@@ -70,6 +70,35 @@ import Wax
     }
 }
 
+@Test func unifiedSession_releasesWriterLeaseWhenInitializationFails() async throws {
+    try await TempFiles.withTempFile { url in
+        let wax = try await Wax.create(at: url)
+
+        var failingConfig = WaxSession.Config()
+        failingConfig.enableTextSearch = false
+        failingConfig.enableStructuredMemory = false
+        failingConfig.enableVectorSearch = true
+        failingConfig.vectorEnginePreference = .cpuOnly
+        failingConfig.vectorDimensions = 0 // Triggers USearchVectorEngine init failure.
+
+        do {
+            _ = try await wax.openSession(.readWrite(.fail), config: failingConfig)
+            Issue.record("Expected writer session initialization to fail for invalid vector dimensions")
+        } catch {
+            // Expected: initialization throws after acquiring writer lease.
+        }
+
+        var succeedingConfig = WaxSession.Config()
+        succeedingConfig.enableTextSearch = false
+        succeedingConfig.enableStructuredMemory = false
+        succeedingConfig.enableVectorSearch = false
+
+        let session = try await wax.openSession(.readWrite(.fail), config: succeedingConfig)
+        await session.close()
+        try await wax.close()
+    }
+}
+
 @Test func unifiedSession_vectorSearchWorksBeforeAndAfterCommit() async throws {
     try await TempFiles.withTempFile { url in
         let wax = try await Wax.create(at: url)
@@ -119,6 +148,43 @@ import Wax
 
         await reader.close()
         try await reopened.close()
+    }
+}
+
+@Test func unifiedSession_commitPropagatesMissingVectorIndexError() async throws {
+    try await TempFiles.withTempFile { url in
+        let wax = try await Wax.create(at: url)
+        var config = WaxSession.Config()
+        config.enableTextSearch = false
+        config.enableStructuredMemory = false
+        config.enableVectorSearch = false
+
+        let session = try await wax.openSession(.readWrite(.fail), config: config)
+        let frameId = try await session.put(Data("payload".utf8), options: FrameMetaSubset(searchText: "payload"))
+        try await wax.putEmbedding(frameId: frameId, vector: [1.0, 0.0])
+
+        do {
+            try await session.commit()
+            #expect(Bool(false))
+        } catch let error as WaxError {
+            guard case .io(let reason) = error else {
+                #expect(Bool(false))
+                return
+            }
+            #expect(reason.contains("vector index must be staged before committing embeddings"))
+        }
+
+        await session.close()
+        do {
+            try await wax.close()
+            #expect(Bool(false))
+        } catch let error as WaxError {
+            guard case .io(let reason) = error else {
+                #expect(Bool(false))
+                return
+            }
+            #expect(reason.contains("vector index must be staged before committing embeddings"))
+        }
     }
 }
 

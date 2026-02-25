@@ -17,14 +17,8 @@ struct WaxMCPServerCommand: ParsableCommand {
         abstract: "Stdio MCP server exposing Wax memory and multimodal RAG tools."
     )
 
-    @Option(name: .customLong("store-path"), help: "Path to the Wax memory store (.mv2s)")
-    var storePath = "~/.wax/memory.mv2s"
-
-    @Option(name: .customLong("video-store-path"), help: "Path to the Wax video store (.mv2s)")
-    var videoStorePath = "~/.wax/video.mv2s"
-
-    @Option(name: .customLong("photo-store-path"), help: "Path to the Wax photo store (.mv2s)")
-    var photoStorePath = "~/.wax/photo.mv2s"
+    @Option(name: .customLong("store-path"), help: "Path to the Wax memory store (.wax)")
+    var storePath = "~/.wax/memory.wax"
 
     @Option(name: .customLong("license-key"), help: "Wax license key (fallback: WAX_LICENSE_KEY)")
     var licenseKey: String?
@@ -51,23 +45,38 @@ struct WaxMCPServerCommand: ParsableCommand {
     }
 
     private func runServer() async throws {
-        if licenseValidationEnabled() {
+        let licenseEnabled = licenseValidationEnabled()
+        if licenseEnabled {
             let resolvedLicense = normalizedLicense()
             // LicenseValidator is nonisolated — call directly, no MainActor hop needed.
             try LicenseValidator.validate(key: resolvedLicense)
         }
 
         let memoryURL = try resolveStoreURL(storePath)
-        let videoURL = try resolveStoreURL(videoStorePath)
-        let photoURL = try resolveStoreURL(photoStorePath)
 
         let embedder = try await buildEmbedder()
 
         var memoryConfig = OrchestratorConfig.default
+        memoryConfig.enableStructuredMemory = featureFlagEnabled(
+            "WAX_MCP_FEATURE_STRUCTURED_MEMORY",
+            default: true
+        )
+        memoryConfig.enableAccessStatsScoring = featureFlagEnabled(
+            "WAX_MCP_FEATURE_ACCESS_STATS",
+            default: false
+        )
         if embedder == nil {
             memoryConfig.enableVectorSearch = false
             memoryConfig.rag.searchMode = .textOnly
         }
+
+        writeStderr(
+            "WaxMCPServer features: " +
+                "structured_memory=\(memoryConfig.enableStructuredMemory) " +
+                "access_stats_scoring=\(memoryConfig.enableAccessStatsScoring) " +
+                "license_validation=\(licenseEnabled) " +
+                "vector_search=\(memoryConfig.enableVectorSearch)"
+        )
 
         let memory = try await MemoryOrchestrator(
             at: memoryURL,
@@ -75,36 +84,25 @@ struct WaxMCPServerCommand: ParsableCommand {
             embedder: embedder
         )
 
-        let multimodal = embedder.map(MultimodalAdapter.init(base:))
-
-        let video: VideoRAGOrchestrator? = await {
-            guard let multimodal else { return nil }
-            do {
-                return try await VideoRAGOrchestrator(storeURL: videoURL, embedder: multimodal)
-            } catch {
-                writeStderr("Video RAG disabled: \(error)")
-                return nil
-            }
-        }()
-
-        let photo: PhotoRAGOrchestrator? = await {
-            guard let multimodal else { return nil }
-            do {
-                return try await PhotoRAGOrchestrator(storeURL: photoURL, embedder: multimodal)
-            } catch {
-                writeStderr("Photo RAG disabled: \(error)")
-                return nil
-            }
-        }()
-
+        // SYNC: keep this version in sync with npm/waxmcp/package.json "version"
+        let serverVersion = "0.1.2"
+        writeStderr("WaxMCPServer v\(serverVersion) starting")
         let server = Server(
             name: "WaxMCPServer",
-            version: "0.1.0",
+            version: serverVersion,
             instructions: "Use these tools to store, search, and recall Wax memory.",
             capabilities: .init(tools: .init(listChanged: false)),
             configuration: .default
         )
-        await WaxMCPTools.register(on: server, memory: memory, video: video, photo: photo)
+        await WaxMCPTools.register(
+            on: server,
+            memory: memory,
+            structuredMemoryEnabled: memoryConfig.enableStructuredMemory
+        )
+
+        // Install signal handlers so SIGINT/SIGTERM trigger graceful shutdown
+        // instead of immediate process termination (which would skip flush/close).
+        let signalSources = installSignalHandlers(server: server)
 
         var runError: Error?
         do {
@@ -114,6 +112,9 @@ struct WaxMCPServerCommand: ParsableCommand {
         } catch {
             runError = error
         }
+
+        // Cancel signal sources now that we're shutting down.
+        for source in signalSources { source.cancel() }
 
         await server.stop()
 
@@ -137,22 +138,6 @@ struct WaxMCPServerCommand: ParsableCommand {
             }
         }
 
-        if let video {
-            do {
-                try await video.flush()
-            } catch {
-                writeStderr("Video flush error: \(error)")
-            }
-        }
-
-        if let photo {
-            do {
-                try await photo.flush()
-            } catch {
-                writeStderr("Photo flush error: \(error)")
-            }
-        }
-
         if let runError {
             throw runError
         }
@@ -166,18 +151,24 @@ struct WaxMCPServerCommand: ParsableCommand {
     }
 
     private func licenseValidationEnabled() -> Bool {
+        featureFlagEnabled("WAX_MCP_FEATURE_LICENSE", default: false)
+    }
+
+    private func featureFlagEnabled(_ key: String, default defaultValue: Bool) -> Bool {
         let env = ProcessInfo.processInfo.environment
-        guard let raw = env["WAX_MCP_FEATURE_LICENSE"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let raw = env[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty
         else {
-            return false
+            return defaultValue
         }
 
         switch raw.lowercased() {
         case "1", "true", "yes", "on":
             return true
-        default:
+        case "0", "false", "no", "off":
             return false
+        default:
+            return defaultValue
         }
     }
 
@@ -209,6 +200,21 @@ struct WaxMCPServerCommand: ParsableCommand {
     }
 }
 
+private func installSignalHandlers(server: Server) -> [DispatchSourceSignal] {
+    var sources: [DispatchSourceSignal] = []
+    for sig in [SIGINT, SIGTERM] {
+        signal(sig, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+        source.setEventHandler {
+            writeStderr("Received signal \(sig), shutting down gracefully…")
+            Task { await server.stop() }
+        }
+        source.resume()
+        sources.append(source)
+    }
+    return sources
+}
+
 private func writeStderr(_ message: String) {
     guard let data = (message + "\n").data(using: .utf8) else { return }
     FileHandle.standardError.write(data)
@@ -216,12 +222,16 @@ private func writeStderr(_ message: String) {
 
 WaxMCPServerCommand.main()
 #else
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 let message = "WaxMCPServer requires the MCPServer trait. Build with --traits MCPServer.\n"
 if let data = message.data(using: .utf8) {
     FileHandle.standardError.write(data)
 }
-Darwin.exit(EXIT_FAILURE)
+exit(EXIT_FAILURE)
 #endif

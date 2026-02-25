@@ -150,7 +150,7 @@ import Testing
 
         let pageA = try file.readExactly(length: Int(Constants.headerPageSize), at: 0)
         let pageB = try file.readExactly(length: Int(Constants.headerPageSize), at: Constants.headerPageSize)
-        guard let selected = MV2SHeaderPage.selectValidPage(pageA: pageA, pageB: pageB) else {
+        guard let selected = WaxHeaderPage.selectValidPage(pageA: pageA, pageB: pageB) else {
             Issue.record("Expected valid header pages")
             return
         }
@@ -193,7 +193,7 @@ import Testing
 
         let pageA = try file.readExactly(length: Int(Constants.headerPageSize), at: 0)
         let pageB = try file.readExactly(length: Int(Constants.headerPageSize), at: Constants.headerPageSize)
-        guard let selected = MV2SHeaderPage.selectValidPage(pageA: pageA, pageB: pageB) else {
+        guard let selected = WaxHeaderPage.selectValidPage(pageA: pageA, pageB: pageB) else {
             Issue.record("Expected valid header pages")
             return
         }
@@ -227,12 +227,12 @@ import Testing
     let url = TempFiles.uniqueURL()
     defer { try? FileManager.default.removeItem(at: url) }
 
-    func selectedHeader(at fileURL: URL) throws -> MV2SHeaderPage {
+    func selectedHeader(at fileURL: URL) throws -> WaxHeaderPage {
         let file = try FDFile.open(at: fileURL)
         defer { try? file.close() }
         let pageA = try file.readExactly(length: Int(Constants.headerPageSize), at: 0)
         let pageB = try file.readExactly(length: Int(Constants.headerPageSize), at: Constants.headerPageSize)
-        guard let selected = MV2SHeaderPage.selectValidPage(pageA: pageA, pageB: pageB) else {
+        guard let selected = WaxHeaderPage.selectValidPage(pageA: pageA, pageB: pageB) else {
             throw WaxError.invalidHeader(reason: "no valid header pages")
         }
         return selected.page
@@ -276,7 +276,7 @@ import Testing
         staleHeader.footerOffset = gen1Header.footerOffset
         staleHeader.walCommittedSeq = gen1Header.walCommittedSeq
         staleHeader.tocChecksum = gen1Header.tocChecksum
-        staleHeader.walReplaySnapshot = MV2SHeaderPage.WALReplaySnapshot(
+        staleHeader.walReplaySnapshot = WaxHeaderPage.WALReplaySnapshot(
             fileGeneration: gen2Header.fileGeneration,
             walCommittedSeq: gen2Header.walCommittedSeq,
             footerOffset: gen2Header.footerOffset,
@@ -299,6 +299,76 @@ import Testing
         #expect(try await reopened.frameContent(frameId: 0) == Data("v1".utf8))
         #expect(try await reopened.frameContent(frameId: 1) == Data("v2".utf8))
         #expect(try await reopened.frameContent(frameId: 2) == Data("v3".utf8))
+        try await reopened.close()
+    }
+}
+
+@Test func openFallsBackToWalScanWhenReplaySnapshotMetadataMismatchesCommittedFooter() async throws {
+    let url = TempFiles.uniqueURL()
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    do {
+        let wax = try await Wax.create(
+            at: url,
+            walSize: 256 * 1024,
+            options: WaxOptions(walReplayStateSnapshotEnabled: true)
+        )
+        _ = try await wax.put(Data("seed".utf8), options: FrameMetaSubset(searchText: "seed"))
+        try await wax.commit()
+        try await wax.close()
+    }
+
+    do {
+        let file = try FDFile.open(at: url)
+        defer { try? file.close() }
+
+        let pageA = try file.readExactly(length: Int(Constants.headerPageSize), at: 0)
+        let pageB = try file.readExactly(length: Int(Constants.headerPageSize), at: Constants.headerPageSize)
+        guard let selected = WaxHeaderPage.selectValidPage(pageA: pageA, pageB: pageB) else {
+            Issue.record("Expected valid header pages")
+            return
+        }
+
+        let writer = WALRingWriter(
+            file: file,
+            walOffset: selected.page.walOffset,
+            walSize: selected.page.walSize,
+            writePos: selected.page.walWritePos,
+            checkpointPos: selected.page.walCheckpointPos,
+            pendingBytes: 0,
+            lastSequence: selected.page.walCommittedSeq
+        )
+        let payload = try WALEntryCodec.encode(.deleteFrame(DeleteFrame(frameId: 0)))
+        _ = try writer.append(payload: payload)
+
+        var mutatedHeader = selected.page
+        mutatedHeader.headerPageGeneration = selected.page.headerPageGeneration &+ 1
+        mutatedHeader.walReplaySnapshot = WaxHeaderPage.WALReplaySnapshot(
+            fileGeneration: selected.page.fileGeneration &+ 9,
+            walCommittedSeq: selected.page.walCommittedSeq &+ 1,
+            footerOffset: selected.page.footerOffset &+ 64,
+            walWritePos: writer.writePos,
+            walCheckpointPos: writer.writePos,
+            walPendingBytes: 0,
+            walLastSequence: writer.lastSequence
+        )
+
+        let selectedOffset = UInt64(selected.pageIndex) * Constants.headerPageSize
+        try file.writeAll(try mutatedHeader.encodeWithChecksum(), at: selectedOffset)
+        try file.fsync()
+    }
+
+    do {
+        let reopened = try await Wax.open(
+            at: url,
+            options: WaxOptions(walReplayStateSnapshotEnabled: true)
+        )
+        let meta = try await reopened.frameMetaIncludingPending(frameId: 0)
+        #expect(meta.status == .deleted)
+
+        let walStats = await reopened.walStats()
+        #expect(walStats.pendingBytes > 0)
+        #expect(walStats.replaySnapshotHitCount == 0)
         try await reopened.close()
     }
 }
