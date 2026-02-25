@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <optional>
+#include <vector>
 
 namespace {
 
@@ -104,6 +105,29 @@ Poco::JSON::Object::Ptr ParseObject(const std::string& json) {
     throw std::runtime_error("expected JSON object");
   }
   return object;
+}
+
+std::vector<std::string> CitationSignature(const Poco::JSON::Object::Ptr& response) {
+  auto citations = response->getArray("citations");
+  if (citations.isNull()) {
+    throw std::runtime_error("citations array must be present");
+  }
+  const auto citation_count = citations->size();
+  std::vector<std::string> signature{};
+  signature.reserve(static_cast<std::size_t>(citation_count));
+  for (unsigned int i = 0; i < citation_count; ++i) {
+    auto entry = citations->getObject(i);
+    if (entry.isNull()) {
+      throw std::runtime_error("citation entry must be object");
+    }
+    std::ostringstream key;
+    key << entry->optValue<std::string>("relative_path", "") << ":"
+        << entry->optValue<int>("line_start", 0) << ":"
+        << entry->optValue<int>("line_end", 0) << ":"
+        << entry->optValue<std::string>("symbol", "");
+    signature.push_back(key.str());
+  }
+  return signature;
 }
 
 void RememberWithMetadata(waxcpp::server::WaxRAGHandler& handler,
@@ -257,6 +281,99 @@ void ScenarioRejectsInvalidOrchestratorIngestEnvValues() {
   waxcpp::tests::CleanupStoreArtifacts(store_path);
 }
 
+void ScenarioAnswerGenerateIsDeterministicAcrossCallsAndReopen() {
+  waxcpp::tests::Log("scenario: answer.generate deterministic citations across repeated calls and reopen");
+  const auto temp_root = std::filesystem::temp_directory_path() / TempName("waxcpp_answer_repo_", "");
+  const auto store_path = std::filesystem::temp_directory_path() / TempName("waxcpp_answer_store_", ".mv2s");
+
+  std::error_code ec;
+  std::filesystem::create_directories(temp_root, ec);
+  if (ec) {
+    throw std::runtime_error("failed to create temp runtime root");
+  }
+  SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
+
+  waxcpp::RuntimeModelsConfig models{};
+  models.generation_model.runtime = "llama_cpp";
+  models.generation_model.model_path = "test-generation.gguf";
+  models.embedding_model.runtime = "disabled";
+  models.embedding_model.model_path.clear();
+  models.llama_cpp_root = temp_root.string();
+  models.enable_vector_search = false;
+  models.require_distinct_models = true;
+
+  auto make_stub_client = [&]() {
+    return std::make_unique<waxcpp::server::LlamaCppGenerationClient>(
+        waxcpp::server::LlamaCppGenerationConfig{
+            .endpoint = "",
+            .model_path = models.generation_model.model_path,
+            .timeout_ms = 1000,
+            .max_retries = 0,
+            .retry_backoff_ms = 0,
+            .request_fn = [&](const std::string&) {
+              return std::string(R"({"content":"stubbed-answer"})");
+            },
+        });
+  };
+
+  auto run_answer = [&](waxcpp::server::WaxRAGHandler& handler) {
+    Poco::JSON::Object::Ptr params = new Poco::JSON::Object();
+    params->set("query", "shared deterministic token");
+    params->set("max_context_items", 6);
+    params->set("max_context_tokens", 256);
+    params->set("max_output_tokens", 64);
+    const auto raw = handler.handle_answer_generate(params);
+    Require(raw.rfind("Error:", 0) != 0, "answer.generate returned error: " + raw);
+    return ParseObject(raw);
+  };
+
+  {
+    waxcpp::server::WaxRAGHandler handler(store_path, models, make_stub_client());
+    RememberWithMetadata(handler,
+                         "Alpha shared deterministic token a1 a2 a3",
+                         "Engine/Source/Alpha.cpp",
+                         10,
+                         20,
+                         "Alpha");
+    RememberWithMetadata(handler,
+                         "Beta shared deterministic token b1 b2 b3",
+                         "Engine/Source/Beta.cpp",
+                         30,
+                         40,
+                         "Beta");
+    RememberWithMetadata(handler,
+                         "Gamma shared deterministic token c1 c2 c3",
+                         "Engine/Source/Gamma.cpp",
+                         50,
+                         60,
+                         "Gamma");
+    Require(handler.handle_flush(Poco::JSON::Object::Ptr{}) == "OK", "flush must succeed");
+
+    const auto first = run_answer(handler);
+    const auto second = run_answer(handler);
+    const auto first_sig = CitationSignature(first);
+    const auto second_sig = CitationSignature(second);
+    Require(first_sig == second_sig, "repeated calls must keep identical citation order");
+    Require(first->optValue<int>("context_items_used", -1) == second->optValue<int>("context_items_used", -2),
+            "repeated calls must keep same context_items_used");
+    Require(first->optValue<int>("context_tokens_used", -1) == second->optValue<int>("context_tokens_used", -2),
+            "repeated calls must keep same context_tokens_used");
+  }
+
+  {
+    waxcpp::server::WaxRAGHandler reopened(store_path, models, make_stub_client());
+    const auto third = run_answer(reopened);
+    const auto fourth = run_answer(reopened);
+    const auto third_sig = CitationSignature(third);
+    const auto fourth_sig = CitationSignature(fourth);
+    Require(third_sig == fourth_sig, "reopened repeated calls must keep identical citation order");
+  }
+
+  std::filesystem::remove_all(temp_root, ec);
+  ec.clear();
+  waxcpp::tests::CleanupStoreArtifacts(store_path);
+}
+
 }  // namespace
 
 int main() {
@@ -264,6 +381,7 @@ int main() {
     waxcpp::tests::Log("wax_rag_handler_answer_test: start");
     ScenarioAnswerGenerateUsesContextBudgetAndCitations();
     ScenarioRejectsInvalidOrchestratorIngestEnvValues();
+    ScenarioAnswerGenerateIsDeterministicAcrossCallsAndReopen();
     waxcpp::tests::Log("wax_rag_handler_answer_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

@@ -33,7 +33,7 @@ Current runtime source decision:
     - builds generation prompt with frame tags (`[frame:<id>]`),
     - calls generation endpoint and returns answer + citation array,
     - applies deterministic prompt clamp with `max_context_items` + `max_context_tokens`,
-    - added handler-level regression (`wax_rag_handler_answer_test`) with stubbed generation backend for budget/citation behavior.
+    - added handler-level regressions (`wax_rag_handler_answer_test`) with stubbed generation backend for budget/citation behavior and stable citation ordering across repeated calls/reopen.
 - M8 in progress:
   - `index.start` now accepts operational controls: `flush_every_chunks`, `max_files`, `max_chunks`, and `max_ram_mb`,
   - orchestrator ingest throttles can be tuned via env: `WAXCPP_ORCH_INGEST_CONCURRENCY`, `WAXCPP_ORCH_INGEST_BATCH_SIZE`,
