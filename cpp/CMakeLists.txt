@@ -401,6 +401,30 @@ if (WAXCPP_BUILD_TESTS)
       target_compile_options(waxcpp_llama_cpp_embedding_provider_test PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME waxcpp_llama_cpp_embedding_provider_test COMMAND waxcpp_llama_cpp_embedding_provider_test)
+
+    add_executable(waxcpp_wax_rag_handler_index_test
+      tests/unit/wax_rag_handler_index_test.cpp
+      server/wax_rag_handler.cpp
+      server/index_job_manager.cpp
+      server/ue5_filesystem_scanner.cpp
+      server/ue5_chunk_manifest.cpp
+      server/llama_cpp_generation_client.cpp
+      server/llama_cpp_embedding_provider.cpp
+      server/runtime_config.cpp
+    )
+    target_link_libraries(waxcpp_wax_rag_handler_index_test PRIVATE
+      waxcpp
+      Poco::Net
+      Poco::JSON
+      Poco::Foundation
+    )
+    target_include_directories(waxcpp_wax_rag_handler_index_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server)
+    if (MSVC)
+      target_compile_options(waxcpp_wax_rag_handler_index_test PRIVATE /W4 /permissive-)
+    else()
+      target_compile_options(waxcpp_wax_rag_handler_index_test PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME waxcpp_wax_rag_handler_index_test COMMAND waxcpp_wax_rag_handler_index_test)
   endif()
 
   add_executable(waxcpp_structured_memory_store_test tests/unit/structured_memory_store_test.cpp)

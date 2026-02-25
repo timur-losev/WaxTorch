@@ -15,6 +15,8 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <atomic>
+#include <thread>
 
 namespace waxcpp::server {
 
@@ -23,6 +25,7 @@ public:
     explicit WaxRAGHandler(
         const std::filesystem::path& store_path = "wax-server.mv2s",
         waxcpp::RuntimeModelsConfig runtime_models = {});
+    ~WaxRAGHandler();
     
     // Обработчики JSON-RPC методов
     std::string handle_remember(const Poco::JSON::Object::Ptr& params);
@@ -34,6 +37,8 @@ public:
     std::string handle_index_stop(const Poco::JSON::Object::Ptr& params);
 
 private:
+    void run_index_job(std::string repo_root, bool resume_requested, std::shared_ptr<std::atomic<bool>> cancel_flag);
+    void reap_index_worker_if_finished_locked();
     std::string make_index_status_json(const IndexJobStatus& status) const;
 
     std::unique_ptr<waxcpp::MemoryOrchestrator> orchestrator_;
@@ -42,6 +47,8 @@ private:
     Ue5FilesystemScanner ue5_scanner_{};
     Ue5ChunkManifestBuilder ue5_chunk_builder_{};
     waxcpp::RuntimeModelsConfig runtime_models_{};
+    std::thread index_worker_{};
+    std::shared_ptr<std::atomic<bool>> index_cancel_flag_{};
     std::mutex mutex_;
 };
 

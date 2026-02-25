@@ -18,7 +18,8 @@ Current runtime source decision:
   - implemented deterministic chunk-manifest builder (line/token-aware windows, metadata, deterministic chunk ids),
   - `index.start` now writes both `.scan_manifest` and `.chunk_manifest`,
   - `index.start` now performs text ingest into Wax (`remember` + periodic `flush`) and updates job progress counters,
-  - added file hash manifest (`.file_manifest`) and resume-time unchanged-file skipping.
+  - added file hash manifest (`.file_manifest`) and resume-time unchanged-file skipping,
+  - `index.start` switched to background worker (non-blocking RPC), `index.stop` now cancels and joins safely.
 - M5 in progress:
   - added `LlamaCppEmbeddingProvider` (HTTP llama.cpp embedding endpoint adapter),
   - server now wires provider when `enable_vector_search=true`,
@@ -100,7 +101,7 @@ Current runtime source decision:
 - Batch ingest with periodic commit/checkpoint.
 - Resume-from-manifest-hash logic to skip unchanged files.
 - Crash-recovery regression tests for mid-index interruption.
-- Status: partially implemented (periodic flush/checkpoint + unchanged file skip via file digest manifest).
+- Status: partially implemented (periodic flush/checkpoint + unchanged file skip via file digest manifest + async index stop/resume regression coverage in `wax_rag_handler_index_test`).
 
 ### M7. Query Pipeline + RAG
 - Query embedding + retrieval + deterministic rerank.

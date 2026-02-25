@@ -242,6 +242,20 @@ std::string ReadFileText(const std::filesystem::path& path) {
     }
     return out.str();
 }
+
+void WriteFileText(const std::filesystem::path& path,
+                   std::string_view content,
+                   std::string_view open_error,
+                   std::string_view write_error) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error(std::string(open_error));
+    }
+    out << content;
+    if (!out) {
+        throw std::runtime_error(std::string(write_error));
+    }
+}
 }
 
 WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
@@ -282,6 +296,26 @@ WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
     generation_client_ = std::make_unique<LlamaCppGenerationClient>(std::move(generation_config));
 
     orchestrator_ = std::make_unique<waxcpp::MemoryOrchestrator>(store_path, config, std::move(embedder));
+}
+
+WaxRAGHandler::~WaxRAGHandler() {
+    std::thread worker_to_join{};
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (index_cancel_flag_) {
+            index_cancel_flag_->store(true, std::memory_order_relaxed);
+        }
+        if (index_job_manager_.status().state == IndexJobState::kRunning) {
+            (void)index_job_manager_.Stop();
+        }
+        if (index_worker_.joinable()) {
+            worker_to_join = std::move(index_worker_);
+        }
+        index_cancel_flag_.reset();
+    }
+    if (worker_to_join.joinable()) {
+        worker_to_join.join();
+    }
 }
 
 std::string WaxRAGHandler::handle_remember(const Poco::JSON::Object::Ptr& params) {
@@ -412,22 +446,20 @@ std::string WaxRAGHandler::handle_flush(const Poco::JSON::Object::Ptr& params) {
     }
 }
 
-std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& params) {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    const std::string repo_root = (params.isNull() ? "" : params->optValue<std::string>("repo_root", ""));
-    if (repo_root.empty()) {
-        return "Missing required parameter 'repo_root'";
-    }
-    const bool resume_requested = (params.isNull() ? false : params->optValue<bool>("resume", false));
+void WaxRAGHandler::run_index_job(std::string repo_root,
+                                  bool resume_requested,
+                                  std::shared_ptr<std::atomic<bool>> cancel_flag) {
+    auto is_cancelled = [&cancel_flag]() noexcept {
+        return cancel_flag && cancel_flag->load(std::memory_order_relaxed);
+    };
 
     try {
-        const bool started = index_job_manager_.Start(std::filesystem::path(repo_root), resume_requested);
-        if (!started) {
-            return "Error: index job is already running";
-        }
         const auto repo_root_path = std::filesystem::path(repo_root);
         const auto entries = ue5_scanner_.Scan(repo_root_path);
+        if (is_cancelled()) {
+            return;
+        }
+
         const auto running_status = index_job_manager_.status();
         auto manifest_path = running_status.checkpoint_path;
         manifest_path += ".scan_manifest";
@@ -446,18 +478,22 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
 
         std::vector<Ue5FileDigest> current_file_digests{};
         const auto chunk_records = ue5_chunk_builder_.Build(repo_root_path, entries, {}, &current_file_digests);
-        const auto unchanged_paths = Ue5ChunkManifestBuilder::ComputeUnchangedPaths(
-            previous_file_digests,
-            current_file_digests);
+        const auto unchanged_paths =
+            Ue5ChunkManifestBuilder::ComputeUnchangedPaths(previous_file_digests, current_file_digests);
+
         std::uint64_t indexed_chunks = 0;
         std::uint64_t committed_chunks = 0;
         (void)ue5_chunk_builder_.Build(
             repo_root_path,
             entries,
             [&](const Ue5ChunkRecord& chunk, std::string_view chunk_text) {
+                if (is_cancelled()) {
+                    return;
+                }
                 if (resume_requested && unchanged_paths.contains(chunk.relative_path)) {
                     return;
                 }
+
                 waxcpp::Metadata metadata{};
                 metadata["source_kind"] = "ue5_chunk";
                 metadata["repo_root"] = repo_root;
@@ -469,87 +505,120 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
                 metadata["chunk_id"] = chunk.chunk_id;
                 metadata["chunk_hash"] = chunk.content_hash;
                 metadata["token_estimate"] = std::to_string(chunk.token_estimate);
-                orchestrator_->Remember(std::string(chunk_text), metadata);
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    orchestrator_->Remember(std::string(chunk_text), metadata);
+                }
                 ++indexed_chunks;
+
                 if (indexed_chunks % kIndexFlushEveryChunks == 0) {
-                    orchestrator_->Flush();
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        orchestrator_->Flush();
+                    }
                     committed_chunks = indexed_chunks;
-                    const bool progress_updated = index_job_manager_.UpdateProgress(
-                        static_cast<std::uint64_t>(entries.size()),
-                        indexed_chunks,
-                        committed_chunks);
-                    (void)progress_updated;
+                    (void)index_job_manager_.UpdateProgress(static_cast<std::uint64_t>(entries.size()),
+                                                            indexed_chunks,
+                                                            committed_chunks);
                 }
             });
+        if (is_cancelled()) {
+            return;
+        }
+
         if (indexed_chunks > committed_chunks) {
+            std::lock_guard<std::mutex> lock(mutex_);
             orchestrator_->Flush();
             committed_chunks = indexed_chunks;
         }
-        {
-            const bool progress_updated = index_job_manager_.UpdateProgress(
-                static_cast<std::uint64_t>(entries.size()),
-                indexed_chunks,
-                committed_chunks);
-            (void)progress_updated;
+        (void)index_job_manager_.UpdateProgress(static_cast<std::uint64_t>(entries.size()),
+                                                indexed_chunks,
+                                                committed_chunks);
+        if (is_cancelled()) {
+            return;
         }
-        {
-            std::ofstream out(manifest_path, std::ios::binary | std::ios::trunc);
-            if (!out) {
-                const bool marked_failed = index_job_manager_.Fail("failed to write scan manifest file");
-                (void)marked_failed;
-                return "Error: failed to open scan manifest file for write";
-            }
-            out << Ue5FilesystemScanner::SerializeManifest(entries);
-            if (!out) {
-                const bool marked_failed = index_job_manager_.Fail("failed to persist scan manifest file");
-                (void)marked_failed;
-                return "Error: failed to persist scan manifest file";
-            }
+
+        WriteFileText(manifest_path,
+                      Ue5FilesystemScanner::SerializeManifest(entries),
+                      "failed to open scan manifest file for write",
+                      "failed to persist scan manifest file");
+        WriteFileText(chunk_manifest_path,
+                      Ue5ChunkManifestBuilder::SerializeManifest(chunk_records),
+                      "failed to open chunk manifest file for write",
+                      "failed to persist chunk manifest file");
+        WriteFileText(file_manifest_path,
+                      Ue5ChunkManifestBuilder::SerializeFileManifest(current_file_digests),
+                      "failed to open file manifest file for write",
+                      "failed to persist file manifest file");
+        if (is_cancelled()) {
+            return;
         }
-        {
-            std::ofstream out(chunk_manifest_path, std::ios::binary | std::ios::trunc);
-            if (!out) {
-                const bool marked_failed = index_job_manager_.Fail("failed to write chunk manifest file");
-                (void)marked_failed;
-                return "Error: failed to open chunk manifest file for write";
-            }
-            out << Ue5ChunkManifestBuilder::SerializeManifest(chunk_records);
-            if (!out) {
-                const bool marked_failed = index_job_manager_.Fail("failed to persist chunk manifest file");
-                (void)marked_failed;
-                return "Error: failed to persist chunk manifest file";
-            }
+
+        (void)index_job_manager_.Complete(static_cast<std::uint64_t>(entries.size()), indexed_chunks, committed_chunks);
+    } catch (const std::exception& e) {
+        if (!is_cancelled()) {
+            (void)index_job_manager_.Fail(e.what());
         }
-        {
-            std::ofstream out(file_manifest_path, std::ios::binary | std::ios::trunc);
-            if (!out) {
-                const bool marked_failed = index_job_manager_.Fail("failed to write file manifest file");
-                (void)marked_failed;
-                return "Error: failed to open file manifest file for write";
+    }
+}
+
+void WaxRAGHandler::reap_index_worker_if_finished_locked() {
+    std::thread worker_to_join{};
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!index_worker_.joinable()) {
+            if (index_cancel_flag_ && index_job_manager_.status().state != IndexJobState::kRunning) {
+                index_cancel_flag_.reset();
             }
-            out << Ue5ChunkManifestBuilder::SerializeFileManifest(current_file_digests);
-            if (!out) {
-                const bool marked_failed = index_job_manager_.Fail("failed to persist file manifest file");
-                (void)marked_failed;
-                return "Error: failed to persist file manifest file";
-            }
+            return;
         }
-        if (!index_job_manager_.Complete(static_cast<std::uint64_t>(entries.size()),
-                                         indexed_chunks,
-                                         committed_chunks)) {
-            return "Error: failed to complete index job state transition";
+        if (index_job_manager_.status().state == IndexJobState::kRunning) {
+            return;
+        }
+        worker_to_join = std::move(index_worker_);
+        index_cancel_flag_.reset();
+    }
+    if (worker_to_join.joinable()) {
+        worker_to_join.join();
+    }
+}
+
+std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& params) {
+    const std::string repo_root = (params.isNull() ? "" : params->optValue<std::string>("repo_root", ""));
+    if (repo_root.empty()) {
+        return "Missing required parameter 'repo_root'";
+    }
+    const bool resume_requested = (params.isNull() ? false : params->optValue<bool>("resume", false));
+
+    try {
+        reap_index_worker_if_finished_locked();
+
+        std::shared_ptr<std::atomic<bool>> cancel_flag = std::make_shared<std::atomic<bool>>(false);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            const bool started = index_job_manager_.Start(std::filesystem::path(repo_root), resume_requested);
+            if (!started) {
+                return "Error: index job is already running";
+            }
+            index_cancel_flag_ = cancel_flag;
+            try {
+                index_worker_ = std::thread(&WaxRAGHandler::run_index_job, this, repo_root, resume_requested, cancel_flag);
+            } catch (const std::exception& e) {
+                index_cancel_flag_.reset();
+                (void)index_job_manager_.Fail(e.what());
+                return std::string("Error: failed to start index worker: ") + e.what();
+            }
         }
         return make_index_status_json(index_job_manager_.status());
     } catch (const std::exception& e) {
-        (void)index_job_manager_.Fail(e.what());
         return std::string("Error: ") + e.what();
     }
 }
 
 std::string WaxRAGHandler::handle_index_status(const Poco::JSON::Object::Ptr& params) {
-    std::lock_guard<std::mutex> lock(mutex_);
     (void)params;
     try {
+        reap_index_worker_if_finished_locked();
         return make_index_status_json(index_job_manager_.status());
     } catch (const std::exception& e) {
         return std::string("Error: ") + e.what();
@@ -557,12 +626,27 @@ std::string WaxRAGHandler::handle_index_status(const Poco::JSON::Object::Ptr& pa
 }
 
 std::string WaxRAGHandler::handle_index_stop(const Poco::JSON::Object::Ptr& params) {
-    std::lock_guard<std::mutex> lock(mutex_);
     (void)params;
     try {
-        const bool stopped = index_job_manager_.Stop();
-        if (!stopped) {
-            return "Error: index job is not running";
+        std::thread worker_to_join{};
+        bool had_running_worker = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            had_running_worker = index_worker_.joinable();
+            if (index_cancel_flag_) {
+                index_cancel_flag_->store(true, std::memory_order_relaxed);
+            }
+            const bool stopped = index_job_manager_.Stop();
+            if (!stopped && !had_running_worker) {
+                return "Error: index job is not running";
+            }
+            if (index_worker_.joinable()) {
+                worker_to_join = std::move(index_worker_);
+            }
+            index_cancel_flag_.reset();
+        }
+        if (worker_to_join.joinable()) {
+            worker_to_join.join();
         }
         return make_index_status_json(index_job_manager_.status());
     } catch (const std::exception& e) {
