@@ -192,6 +192,17 @@ class PayloadCursor {
     SkipBytesLen32(core::mv2s::kMaxStringBytes, context);
   }
 
+  std::string ReadString(const char* context) {
+    const auto length = static_cast<std::size_t>(ReadU32());
+    if (length > core::mv2s::kMaxStringBytes) {
+      throw WalError(std::string(context) + " exceeds limit");
+    }
+    EnsureAvailable(length, context);
+    std::string result(reinterpret_cast<const char*>(bytes_.data() + cursor_), length);
+    cursor_ += length;
+    return result;
+  }
+
   void SkipOptionalString(const char* field) {
     ReadOptional([&]() { SkipString(field); }, field);
   }
@@ -318,6 +329,79 @@ void SkipFrameMetaSubset(PayloadCursor& cursor) {
   }
 }
 
+/// Read FrameMetaSubset fields into WalPutFrameInfo, preserving kind/metadata/tags/labels.
+void ReadFrameMetaSubset(PayloadCursor& cursor, WalPutFrameInfo& put) {
+  cursor.SkipOptionalString("subset.uri");
+  cursor.SkipOptionalString("subset.title");
+
+  // kind
+  cursor.ReadOptional([&]() { put.kind = cursor.ReadString("subset.kind"); }, "subset.kind");
+
+  cursor.SkipOptionalString("subset.track");
+
+  // tags
+  {
+    const auto count = static_cast<std::size_t>(cursor.ReadU32());
+    if (count > core::mv2s::kMaxArrayCount) {
+      throw WalError("tags count exceeds limit");
+    }
+    put.tags.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      auto key = cursor.ReadString("tags.key");
+      auto value = cursor.ReadString("tags.value");
+      put.tags.emplace_back(std::move(key), std::move(value));
+    }
+  }
+
+  // labels
+  {
+    const auto count = static_cast<std::size_t>(cursor.ReadU32());
+    if (count > core::mv2s::kMaxArrayCount) {
+      throw WalError("subset.labels count exceeds limit");
+    }
+    put.labels.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      put.labels.push_back(cursor.ReadString("subset.labels"));
+    }
+  }
+
+  SkipStringArray(cursor, "subset.content_dates");
+  cursor.SkipOptionalU8("subset.role");
+  cursor.SkipOptionalU64("subset.parent_id");
+  cursor.SkipOptionalU32("subset.chunk_index");
+  cursor.SkipOptionalU32("subset.chunk_count");
+  cursor.SkipOptionalBytes(core::mv2s::kMaxBlobBytes, "subset.chunk_manifest");
+  cursor.SkipOptionalU8("subset.status");
+  cursor.SkipOptionalU64("subset.supersedes");
+  cursor.SkipOptionalU64("subset.superseded_by");
+  cursor.SkipOptionalString("subset.search_text");
+
+  // metadata
+  const auto metadata_tag = cursor.ReadU8();
+  switch (metadata_tag) {
+    case 0:
+      break;
+    case 1: {
+      const auto count = static_cast<std::size_t>(cursor.ReadU32());
+      if (count > core::mv2s::kMaxArrayCount) {
+        throw WalError("metadata count exceeds limit");
+      }
+      put.metadata.reserve(count);
+      for (std::size_t i = 0; i < count; ++i) {
+        auto key = cursor.ReadString("metadata.key");
+        auto value = cursor.ReadString("metadata.value");
+        if (put.metadata.find(key) != put.metadata.end()) {
+          throw WalError("duplicate metadata key");
+        }
+        put.metadata.emplace(std::move(key), std::move(value));
+      }
+      break;
+    }
+    default:
+      throw WalError("invalid optional tag for subset.metadata");
+  }
+}
+
 WalPendingMutationInfo DecodeWalMutationPayload(std::uint64_t sequence, std::span<const std::byte> payload) {
   PayloadCursor cursor(payload);
   const auto opcode = cursor.ReadU8();
@@ -329,8 +413,8 @@ WalPendingMutationInfo DecodeWalMutationPayload(std::uint64_t sequence, std::spa
       mutation.kind = WalMutationKind::kPutFrame;
       WalPutFrameInfo put{};
       put.frame_id = cursor.ReadU64();
-      (void)cursor.ReadI64();  // timestampMs
-      SkipFrameMetaSubset(cursor);
+      put.timestamp_ms = cursor.ReadI64();
+      ReadFrameMetaSubset(cursor, put);
       put.payload_offset = cursor.ReadU64();
       put.payload_length = cursor.ReadU64();
       put.canonical_encoding = cursor.ReadU8();

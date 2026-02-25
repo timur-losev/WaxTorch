@@ -586,7 +586,8 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
                                        std::shared_ptr<EmbeddingProvider> embedder,
                                        bool enable_text_search,
                                        bool enable_vector_search,
-                                       const SearchRequest& request) {
+                                       const SearchRequest& request,
+                                       bool include_pending_frames) {
   StoreSearchChannels channels{};
   if (request.top_k <= 0) {
     return channels;
@@ -614,11 +615,11 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
     const auto indexed_text_results = store_text_index->Search(*request.query, request.top_k);
     channels.text_results.reserve(indexed_text_results.size());
     for (const auto& indexed : indexed_text_results) {
-      const auto meta = store.FrameMeta(indexed.frame_id);
+      const auto meta = store.FrameMeta(indexed.frame_id, include_pending_frames);
       if (!meta.has_value() || meta->status != 0) {
         continue;
       }
-      const auto payload = store.FrameContent(indexed.frame_id);
+      const auto payload = store.FrameContent(indexed.frame_id, include_pending_frames);
       if (IsInternalOrchestratorPayload(payload)) {
         continue;
       }
@@ -635,11 +636,11 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
     const auto vector_hits = vector_index->Search(*query_embedding, request.top_k);
     channels.vector_results.reserve(vector_hits.size());
     for (const auto& [frame_id, score] : vector_hits) {
-      const auto meta = store.FrameMeta(frame_id);
+      const auto meta = store.FrameMeta(frame_id, include_pending_frames);
       if (!meta.has_value() || meta->status != 0) {
         continue;
       }
-      const auto payload = store.FrameContent(frame_id);
+      const auto payload = store.FrameContent(frame_id, include_pending_frames);
       if (IsInternalOrchestratorPayload(payload)) {
         continue;
       }
@@ -1265,12 +1266,31 @@ void MemoryOrchestrator::RememberFile(const std::filesystem::path& file_path,
 
 namespace {
 
+/// Check if a frame's metadata matches the MetadataFilter predicate.
+bool MatchesMetadataFilter(const MetadataFilter& mf, const WaxFrameMeta& meta) {
+  // Check required_entries against per-frame metadata.
+  for (const auto& [key, value] : mf.required_entries) {
+    auto it = meta.metadata.find(key);
+    if (it == meta.metadata.end() || it->second != value) return false;
+  }
+  // Check required_labels against per-frame labels.
+  for (const auto& required_label : mf.required_labels) {
+    bool found = false;
+    for (const auto& l : meta.labels) {
+      if (l == required_label) { found = true; break; }
+    }
+    if (!found) return false;
+  }
+  return true;
+}
+
 /// Apply FrameFilter to search results using WaxStore metadata.
 /// Removes results that don't pass the filter predicates.
 void ApplyFrameFilter(SearchResponse& response,
                       const FrameFilter& filter,
                       const WaxStore& store,
-                      const std::unordered_map<std::uint64_t, std::uint64_t>& surrogate_map) {
+                      const std::unordered_map<std::uint64_t, std::uint64_t>& surrogate_map,
+                      const std::optional<TimeRange>& time_range = std::nullopt) {
   // Build a set of surrogate frame IDs for fast lookup.
   std::unordered_set<std::uint64_t> surrogate_ids;
   if (!filter.include_surrogates) {
@@ -1281,7 +1301,7 @@ void ApplyFrameFilter(SearchResponse& response,
 
   // Build a frame-ID → WaxFrameMeta map for the result frame IDs.
   std::unordered_map<std::uint64_t, WaxFrameMeta> meta_by_id;
-  const auto all_metas = store.FrameMetas();
+  const auto all_metas = store.FrameMetas(true);
   for (const auto& m : all_metas) {
     meta_by_id[m.id] = m;
   }
@@ -1306,7 +1326,13 @@ void ApplyFrameFilter(SearchResponse& response,
                        // Frame ID allowlist check.
                        if (filter.frame_ids.has_value() && !filter.frame_ids->count(r.frame_id)) return true;
 
-                       // min_score is applied separately, not via FrameFilter.
+                       // TimeRange check (uses persisted per-frame timestamp).
+                       if (time_range.has_value() && !time_range->Contains(meta.timestamp_ms)) return true;
+
+                       // MetadataFilter check (uses persisted per-frame metadata and labels).
+                       if (filter.metadata_filter.has_value() &&
+                           !MatchesMetadataFilter(*filter.metadata_filter, meta)) return true;
+
                        return false;
                      }),
       results.end());
@@ -1372,7 +1398,8 @@ RAGContext MemoryOrchestrator::RecallImpl(
       embedder_for_channels,
       config_.enable_text_search,
       vectors_for_channels,
-      req);
+      req,
+      false);
 
   auto response = UnifiedSearchAdaptive(req, channels.text_results, channels.vector_results);
 
@@ -1640,7 +1667,8 @@ std::vector<MemorySearchHit> MemoryOrchestrator::Search(
       embedder_,
       config_.enable_text_search,
       config_.enable_vector_search,
-      req);
+      req,
+      true);
 
   auto response = UnifiedSearchAdaptive(req, channels.text_results, channels.vector_results);
 
@@ -1707,7 +1735,8 @@ std::vector<MemorySearchHit> MemoryOrchestrator::Search(
       embedder_,
       config_.enable_text_search,
       config_.enable_vector_search,
-      req);
+      req,
+      true);
 
   auto response = UnifiedSearchAdaptive(req, channels.text_results, channels.vector_results);
 
@@ -1981,34 +2010,26 @@ std::optional<HandoffRecord> MemoryOrchestrator::LatestHandoff(
   const auto metas = store_.FrameMetas();
 
   // Find the most recent active handoff frame.
-  // Since C++ WaxFrameMeta has no timestamp, use frame_id as ordering proxy
-  // (IDs are monotonically increasing).
-  std::optional<std::uint64_t> best_id;
-  for (const auto& meta : metas) {
-    if (meta.status != 0) continue;
-    if (meta.superseded_by.has_value()) continue;
-    // Check if this frame has the handoff magic header.
-    if (meta.payload_length < kHandoffMagicLen) continue;
-    if (!best_id.has_value() || meta.id > *best_id) {
-      best_id = meta.id;
-    }
-  }
-
-  if (!best_id.has_value()) return std::nullopt;
-
-  // We need to actually check candidates for the magic header.
-  // Collect all candidate IDs (active, non-superseded, large enough) and check.
+  // Use frame_id as ordering proxy (IDs are monotonically increasing).
+  // WaxFrameMeta now has timestamp_ms, but frame_id ordering is equivalent.
   std::optional<HandoffRecord> latest;
   std::uint64_t latest_id = 0;
 
   for (const auto& meta : metas) {
     if (meta.status != 0) continue;
     if (meta.superseded_by.has_value()) continue;
-    if (meta.payload_length < kHandoffMagicLen) continue;
+
+    // Candidate: either has kind="handoff" metadata, or has WAXHND01 magic header.
+    const bool has_kind = meta.kind.has_value() && *meta.kind == "handoff";
+    const bool might_have_magic = meta.payload_length >= kHandoffMagicLen;
+    if (!has_kind && !might_have_magic) continue;
 
     const auto data = store_.FrameContent(meta.id);
     auto rec = ParseHandoffPayload(meta.id, data);
     if (!rec.has_value()) continue;
+
+    // Populate timestamp from persisted metadata.
+    rec->timestamp_ms = meta.timestamp_ms;
 
     // Filter by project if specified.
     if (project.has_value() && !project->empty()) {

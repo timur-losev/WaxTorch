@@ -7,6 +7,7 @@
 #include <memory>
 #include <array>
 #include <optional>
+#include <string>
 #include <utility>
 #include <unordered_map>
 #include <vector>
@@ -39,10 +40,14 @@ struct WaxWALStats {
 
 struct WaxFrameMeta {
   std::uint64_t id = 0;
+  std::int64_t timestamp_ms = 0;
   std::uint64_t payload_offset = 0;
   std::uint64_t payload_length = 0;
   std::uint8_t canonical_encoding = 0;
   std::uint8_t status = 0;
+  std::optional<std::string> kind;
+  std::unordered_map<std::string, std::string> metadata;
+  std::vector<std::string> labels;
   std::optional<std::uint64_t> supersedes;
   std::optional<std::uint64_t> superseded_by;
 };
@@ -87,9 +92,11 @@ class WaxStore {
 
  [[nodiscard]] WaxStats Stats() const;
  [[nodiscard]] WaxWALStats WalStats() const;
- [[nodiscard]] std::optional<WaxFrameMeta> FrameMeta(std::uint64_t frame_id) const;
- [[nodiscard]] std::vector<WaxFrameMeta> FrameMetas() const;
- [[nodiscard]] std::vector<std::byte> FrameContent(std::uint64_t frame_id) const;
+ [[nodiscard]] std::optional<WaxFrameMeta> FrameMeta(std::uint64_t frame_id,
+                                                     bool include_pending = false) const;
+ [[nodiscard]] std::vector<WaxFrameMeta> FrameMetas(bool include_pending = false) const;
+ [[nodiscard]] std::vector<std::byte> FrameContent(std::uint64_t frame_id,
+                                                   bool include_pending = false) const;
  [[nodiscard]] std::unordered_map<std::uint64_t, std::vector<std::byte>> FrameContents(const std::vector<std::uint64_t>& frame_ids) const;
  [[nodiscard]] WaxPendingEmbeddingSnapshot PendingEmbeddingMutations(std::optional<std::uint64_t> since_sequence = std::nullopt) const;
  [[nodiscard]] const std::filesystem::path& Path() const noexcept { return path_; }
@@ -129,12 +136,17 @@ class WaxStore {
 
   struct PendingPutFrameCache {
     std::uint64_t frame_id = 0;
+    std::int64_t timestamp_ms = 0;
     std::uint64_t payload_offset = 0;
     std::uint64_t payload_length = 0;
     std::uint8_t canonical_encoding = 0;
     std::uint64_t canonical_length = 0;
     std::array<std::byte, 32> canonical_checksum{};
     std::array<std::byte, 32> stored_checksum{};
+    std::optional<std::string> kind;
+    Metadata metadata{};
+    std::vector<std::pair<std::string, std::string>> tags{};
+    std::vector<std::string> labels{};
   };
 
   struct PendingDeleteFrameCache {

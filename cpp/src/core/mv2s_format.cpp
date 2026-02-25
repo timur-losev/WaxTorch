@@ -448,10 +448,18 @@ std::vector<std::byte> EncodeTocV1(std::span<const FrameSummary> frames,
 
   for (const auto& frame : frames) {
     builder.AppendU64(frame.id);
-    builder.AppendU64(0);  // timestamp
+    builder.AppendU64(static_cast<std::uint64_t>(frame.timestamp_ms));
 
     builder.AppendU8(0);  // anchor_ts absent
-    builder.AppendU8(0);  // kind absent
+
+    // kind
+    if (frame.kind.has_value() && !frame.kind->empty()) {
+      builder.AppendU8(1);
+      builder.AppendString(*frame.kind);
+    } else {
+      builder.AppendU8(0);
+    }
+
     builder.AppendU8(0);  // track absent
 
     builder.AppendU64(frame.payload_offset);
@@ -489,10 +497,57 @@ std::vector<std::byte> EncodeTocV1(std::span<const FrameSummary> frames,
       builder.AppendU8(0);  // stored_checksum absent
     }
 
-    builder.AppendU8(0);   // metadata absent
+    // metadata
+    if (!frame.metadata.empty()) {
+      builder.AppendU8(1);
+      if (frame.metadata.size() > std::numeric_limits<std::uint32_t>::max()) {
+        throw FormatError("too many metadata entries");
+      }
+      builder.AppendU32(static_cast<std::uint32_t>(frame.metadata.size()));
+      std::vector<const decltype(frame.metadata)::value_type*> sorted_metadata_entries{};
+      sorted_metadata_entries.reserve(frame.metadata.size());
+      for (const auto& entry : frame.metadata) {
+        sorted_metadata_entries.push_back(&entry);
+      }
+      std::sort(sorted_metadata_entries.begin(),
+                sorted_metadata_entries.end(),
+                [](const decltype(frame.metadata)::value_type* lhs,
+                   const decltype(frame.metadata)::value_type* rhs) {
+                  if (lhs->first != rhs->first) {
+                    return lhs->first < rhs->first;
+                  }
+                  return lhs->second < rhs->second;
+                });
+      for (const auto* entry : sorted_metadata_entries) {
+        const auto& [key, value] = *entry;
+        builder.AppendString(key);
+        builder.AppendString(value);
+      }
+    } else {
+      builder.AppendU8(0);
+    }
+
     builder.AppendU8(0);   // search_text absent
-    builder.AppendU32(0);  // tags count
-    builder.AppendU32(0);  // labels count
+
+    // tags
+    if (frame.tags.size() > std::numeric_limits<std::uint32_t>::max()) {
+      throw FormatError("too many tags");
+    }
+    builder.AppendU32(static_cast<std::uint32_t>(frame.tags.size()));
+    for (const auto& [key, value] : frame.tags) {
+      builder.AppendString(key);
+      builder.AppendString(value);
+    }
+
+    // labels
+    if (frame.labels.size() > std::numeric_limits<std::uint32_t>::max()) {
+      throw FormatError("too many labels");
+    }
+    builder.AppendU32(static_cast<std::uint32_t>(frame.labels.size()));
+    for (const auto& label : frame.labels) {
+      builder.AppendString(label);
+    }
+
     builder.AppendU32(0);  // content_dates count
 
     builder.AppendU8(0);  // role
@@ -624,10 +679,10 @@ TocSummary DecodeToc(std::span<const std::byte> toc_bytes) {
   for (std::size_t index = 0; index < frame_count; ++index) {
     FrameSummary frame;
     frame.id = cursor.ReadU64();
-    (void)cursor.ReadI64();  // timestamp
+    frame.timestamp_ms = cursor.ReadI64();
 
     ReadOptional(cursor, [&]() { (void)cursor.ReadI64(); }, "anchor_ts");
-    ReadOptional(cursor, [&]() { (void)cursor.ReadString("kind"); }, "kind");
+    ReadOptional(cursor, [&]() { frame.kind = cursor.ReadString("kind"); }, "kind");
     ReadOptional(cursor, [&]() { (void)cursor.ReadString("track"); }, "track");
 
     frame.payload_offset = cursor.ReadU64();
@@ -668,15 +723,14 @@ TocSummary DecodeToc(std::span<const std::byte> toc_bytes) {
                    if (metadata_count > kMaxArrayCount) {
                      throw FormatError("metadata count exceeds limit");
                    }
-                   std::unordered_set<std::string> seen_keys;
-                   seen_keys.reserve(metadata_count);
+                   frame.metadata.reserve(metadata_count);
                    for (std::size_t i = 0; i < metadata_count; ++i) {
                      auto key = cursor.ReadString("metadata.key");
-                     (void)cursor.ReadString("metadata.value");
-                     if (seen_keys.find(key) != seen_keys.end()) {
+                     auto value = cursor.ReadString("metadata.value");
+                     if (frame.metadata.find(key) != frame.metadata.end()) {
                        throw FormatError("duplicate metadata key");
                      }
-                     seen_keys.insert(std::move(key));
+                     frame.metadata.emplace(std::move(key), std::move(value));
                    }
                  },
                  "metadata");
@@ -687,17 +741,20 @@ TocSummary DecodeToc(std::span<const std::byte> toc_bytes) {
     if (tags_count > kMaxArrayCount) {
       throw FormatError("tags count exceeds limit");
     }
+    frame.tags.reserve(tags_count);
     for (std::size_t i = 0; i < tags_count; ++i) {
-      (void)cursor.ReadString("tag.key");
-      (void)cursor.ReadString("tag.value");
+      auto key = cursor.ReadString("tag.key");
+      auto value = cursor.ReadString("tag.value");
+      frame.tags.emplace_back(std::move(key), std::move(value));
     }
 
     const auto labels_count = static_cast<std::size_t>(cursor.ReadU32());
     if (labels_count > kMaxArrayCount) {
       throw FormatError("labels count exceeds limit");
     }
+    frame.labels.reserve(labels_count);
     for (std::size_t i = 0; i < labels_count; ++i) {
-      (void)cursor.ReadString("label");
+      frame.labels.push_back(cursor.ReadString("label"));
     }
 
     const auto content_dates_count = static_cast<std::size_t>(cursor.ReadU32());

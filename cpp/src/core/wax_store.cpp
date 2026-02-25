@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -295,7 +296,18 @@ void AppendFixed(std::vector<std::byte>& out, std::span<const std::byte> bytes) 
   out.insert(out.end(), bytes.begin(), bytes.end());
 }
 
+void AppendString(std::vector<std::byte>& out, std::string_view str) {
+  AppendLE32(out, static_cast<std::uint32_t>(str.size()));
+  out.insert(out.end(),
+             reinterpret_cast<const std::byte*>(str.data()),
+             reinterpret_cast<const std::byte*>(str.data()) + str.size());
+}
+
 std::vector<std::byte> BuildWalPutFramePayload(std::uint64_t frame_id,
+                                               std::int64_t timestamp_ms,
+                                               const std::optional<std::string>& kind,
+                                               const Metadata& metadata,
+                                               const std::vector<std::string>& labels,
                                                std::uint64_t payload_offset,
                                                std::uint64_t payload_length,
                                                std::uint8_t canonical_encoding,
@@ -306,15 +318,35 @@ std::vector<std::byte> BuildWalPutFramePayload(std::uint64_t frame_id,
   payload.reserve(256);
   AppendU8(payload, 0x01);  // putFrame
   AppendLE64(payload, frame_id);
-  AppendLE64(payload, 0);   // timestampMs
+  AppendLE64(payload, static_cast<std::uint64_t>(timestamp_ms));
 
-  // FrameMetaSubset optional fields (none set yet in C++ port).
+  // FrameMetaSubset optional fields.
   AppendU8(payload, 0);   // uri?
   AppendU8(payload, 0);   // title?
-  AppendU8(payload, 0);   // kind?
+
+  // kind
+  if (kind.has_value() && !kind->empty()) {
+    AppendU8(payload, 1);
+    AppendString(payload, *kind);
+  } else {
+    AppendU8(payload, 0);
+  }
+
   AppendU8(payload, 0);   // track?
   AppendLE32(payload, 0); // tags.count
-  AppendLE32(payload, 0); // labels.count
+
+  // labels
+  if (labels.size() > core::mv2s::kMaxArrayCount) {
+    throw StoreError("labels count exceeds replay safety limit");
+  }
+  if (labels.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+    throw StoreError("labels count exceeds UInt32.max");
+  }
+  AppendLE32(payload, static_cast<std::uint32_t>(labels.size()));
+  for (const auto& label : labels) {
+    AppendString(payload, label);
+  }
+
   AppendLE32(payload, 0); // contentDates.count
   AppendU8(payload, 0);   // role?
   AppendU8(payload, 0);   // parentId?
@@ -325,7 +357,38 @@ std::vector<std::byte> BuildWalPutFramePayload(std::uint64_t frame_id,
   AppendU8(payload, 0);   // supersedes?
   AppendU8(payload, 0);   // supersededBy?
   AppendU8(payload, 0);   // searchText?
-  AppendU8(payload, 0);   // metadata?
+
+  // metadata
+  if (!metadata.empty()) {
+    if (metadata.size() > core::mv2s::kMaxArrayCount) {
+      throw StoreError("metadata count exceeds replay safety limit");
+    }
+    if (metadata.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+      throw StoreError("metadata count exceeds UInt32.max");
+    }
+    AppendU8(payload, 1);
+    AppendLE32(payload, static_cast<std::uint32_t>(metadata.size()));
+    std::vector<const Metadata::value_type*> sorted_metadata_entries{};
+    sorted_metadata_entries.reserve(metadata.size());
+    for (const auto& entry : metadata) {
+      sorted_metadata_entries.push_back(&entry);
+    }
+    std::sort(sorted_metadata_entries.begin(),
+              sorted_metadata_entries.end(),
+              [](const Metadata::value_type* lhs, const Metadata::value_type* rhs) {
+                if (lhs->first != rhs->first) {
+                  return lhs->first < rhs->first;
+                }
+                return lhs->second < rhs->second;
+              });
+    for (const auto* entry : sorted_metadata_entries) {
+      const auto& [key, value] = *entry;
+      AppendString(payload, key);
+      AppendString(payload, value);
+    }
+  } else {
+    AppendU8(payload, 0);
+  }
 
   AppendLE64(payload, payload_offset);
   AppendLE64(payload, payload_length);
@@ -695,6 +758,7 @@ PendingWalApplySummary AnalyzePendingWalMutations(const std::vector<core::mv2s::
         }
         core::mv2s::FrameSummary frame{};
         frame.id = put.frame_id;
+        frame.timestamp_ms = put.timestamp_ms;
         frame.payload_offset = put.payload_offset;
         frame.payload_length = put.payload_length;
         frame.payload_checksum = put.canonical_checksum;
@@ -705,8 +769,12 @@ PendingWalApplySummary AnalyzePendingWalMutations(const std::vector<core::mv2s::
         if (put.payload_length > 0) {
           frame.stored_checksum = put.stored_checksum;
         }
+        frame.kind = put.kind;
+        frame.metadata = put.metadata;
+        frame.tags = put.tags;
+        frame.labels = put.labels;
         frame.status = 0;
-        summary.frames_after_apply.push_back(frame);
+        summary.frames_after_apply.push_back(std::move(frame));
         break;
       }
       case core::wal::WalMutationKind::kDeleteFrame: {
@@ -785,13 +853,17 @@ std::vector<WaxFrameMeta> ToWaxFrameMetas(std::span<const core::mv2s::FrameSumma
   for (const auto& frame : frames) {
     WaxFrameMeta meta{};
     meta.id = frame.id;
+    meta.timestamp_ms = frame.timestamp_ms;
     meta.payload_offset = frame.payload_offset;
     meta.payload_length = frame.payload_length;
     meta.canonical_encoding = frame.canonical_encoding;
     meta.status = frame.status;
+    meta.kind = frame.kind;
+    meta.metadata = frame.metadata;
+    meta.labels = frame.labels;
     meta.supersedes = frame.supersedes;
     meta.superseded_by = frame.superseded_by;
-    metas.push_back(meta);
+    metas.push_back(std::move(meta));
   }
   return metas;
 }
@@ -881,7 +953,7 @@ void WaxStore::Verify(bool deep) {
   LoadState(deep, false);
 }
 
-std::uint64_t WaxStore::Put(const std::vector<std::byte>& content, const Metadata& /*metadata*/) {
+std::uint64_t WaxStore::Put(const std::vector<std::byte>& content, const Metadata& metadata) {
   if (!is_open_) {
     throw StoreError("store is closed");
   }
@@ -893,6 +965,34 @@ std::uint64_t WaxStore::Put(const std::vector<std::byte>& content, const Metadat
   const auto canonical_checksum = stored_checksum;
   const std::uint8_t canonical_encoding = 0;  // plain
   const auto canonical_length = payload_length;
+
+  // Generate timestamp.
+  const auto now = std::chrono::system_clock::now();
+  const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      now.time_since_epoch()).count();
+
+  // Extract kind from metadata if present.
+  std::optional<std::string> kind;
+  auto kind_it = metadata.find("kind");
+  if (kind_it != metadata.end() && !kind_it->second.empty()) {
+    kind = kind_it->second;
+  }
+
+  // Extract labels from metadata if present (comma-separated).
+  std::vector<std::string> labels;
+  auto labels_it = metadata.find("labels");
+  if (labels_it != metadata.end() && !labels_it->second.empty()) {
+    std::string_view sv = labels_it->second;
+    while (!sv.empty()) {
+      auto pos = sv.find(',');
+      auto token = sv.substr(0, pos);
+      if (!token.empty()) {
+        labels.emplace_back(token);
+      }
+      if (pos == std::string_view::npos) break;
+      sv.remove_prefix(pos + 1);
+    }
+  }
 
   if (!content.empty()) {
     WriteBytesAt(path_, payload_offset, content);
@@ -910,6 +1010,10 @@ std::uint64_t WaxStore::Put(const std::vector<std::byte>& content, const Metadat
                                   wal_sentinel_write_count_,
                                   wal_write_call_count_);
   const auto wal_payload = BuildWalPutFramePayload(frame_id,
+                                                   timestamp_ms,
+                                                   kind,
+                                                   metadata,
+                                                   labels,
                                                    payload_offset,
                                                    payload_length,
                                                    canonical_encoding,
@@ -930,12 +1034,17 @@ std::uint64_t WaxStore::Put(const std::vector<std::byte>& content, const Metadat
   const auto put_inserted = pending_put_frame_cache_.emplace(sequence,
                                                               PendingPutFrameCache{
                                                                   .frame_id = frame_id,
+                                                                  .timestamp_ms = timestamp_ms,
                                                                   .payload_offset = payload_offset,
                                                                   .payload_length = payload_length,
                                                                   .canonical_encoding = canonical_encoding,
                                                                   .canonical_length = canonical_length,
                                                                   .canonical_checksum = canonical_checksum,
                                                                   .stored_checksum = stored_checksum,
+                                                                  .kind = kind,
+                                                                  .metadata = metadata,
+                                                                  .tags = {},
+                                                                  .labels = labels,
                                                               });
   if (!put_inserted.second) {
     throw StoreError("duplicate pending putFrame sequence in cache");
@@ -972,6 +1081,11 @@ std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std:
                                   wal_sentinel_write_count_,
                                   wal_write_call_count_);
 
+  // Generate a shared timestamp for the batch.
+  const auto now = std::chrono::system_clock::now();
+  const auto batch_timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      now.time_since_epoch()).count();
+
   std::vector<std::uint64_t> ids{};
   ids.reserve(contents.size());
   std::uint64_t payload_offset = FileSize(path_);
@@ -987,10 +1101,34 @@ std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std:
     const std::uint8_t canonical_encoding = 0;  // plain
     const auto canonical_length = payload_length;
 
+    // Per-frame metadata (if available).
+    const auto& frame_meta = (!metadatas.empty()) ? metadatas[i] : Metadata{};
+    std::optional<std::string> frame_kind;
+    auto kind_it = frame_meta.find("kind");
+    if (kind_it != frame_meta.end() && !kind_it->second.empty()) {
+      frame_kind = kind_it->second;
+    }
+    std::vector<std::string> frame_labels;
+    auto labels_it = frame_meta.find("labels");
+    if (labels_it != frame_meta.end() && !labels_it->second.empty()) {
+      std::string_view sv = labels_it->second;
+      while (!sv.empty()) {
+        auto pos = sv.find(',');
+        auto token = sv.substr(0, pos);
+        if (!token.empty()) frame_labels.emplace_back(token);
+        if (pos == std::string_view::npos) break;
+        sv.remove_prefix(pos + 1);
+      }
+    }
+
     if (!contents[i].empty()) {
       WriteBytesAt(path_, payload_offset, contents[i]);
     }
     wal_payloads.emplace_back(BuildWalPutFramePayload(frame_id,
+                                                      batch_timestamp_ms,
+                                                      frame_kind,
+                                                      frame_meta,
+                                                      frame_labels,
                                                       payload_offset,
                                                       payload_length,
                                                       canonical_encoding,
@@ -999,12 +1137,17 @@ std::vector<std::uint64_t> WaxStore::PutBatch(const std::vector<std::vector<std:
                                                       stored_checksum));
     pending_puts.push_back(PendingPutFrameCache{
         .frame_id = frame_id,
+        .timestamp_ms = batch_timestamp_ms,
         .payload_offset = payload_offset,
         .payload_length = payload_length,
         .canonical_encoding = canonical_encoding,
         .canonical_length = canonical_length,
         .canonical_checksum = canonical_checksum,
         .stored_checksum = stored_checksum,
+        .kind = frame_kind,
+        .metadata = frame_meta,
+        .tags = {},
+        .labels = frame_labels,
     });
     ids.push_back(frame_id);
     if (payload_offset > std::numeric_limits<std::uint64_t>::max() - payload_length) {
@@ -1233,12 +1376,17 @@ void WaxStore::Commit() {
         mutation.kind = core::wal::WalMutationKind::kPutFrame;
         mutation.put_frame = core::wal::WalPutFrameInfo{
             .frame_id = cached.frame_id,
+            .timestamp_ms = cached.timestamp_ms,
             .payload_offset = cached.payload_offset,
             .payload_length = cached.payload_length,
             .canonical_encoding = cached.canonical_encoding,
             .canonical_length = cached.canonical_length,
             .canonical_checksum = cached.canonical_checksum,
             .stored_checksum = cached.stored_checksum,
+            .kind = cached.kind,
+            .metadata = cached.metadata,
+            .tags = cached.tags,
+            .labels = cached.labels,
         };
         break;
       }
@@ -1454,31 +1602,91 @@ WaxWALStats WaxStore::WalStats() const {
   return stats;
 }
 
-std::optional<WaxFrameMeta> WaxStore::FrameMeta(std::uint64_t frame_id) const {
+std::optional<WaxFrameMeta> WaxStore::FrameMeta(std::uint64_t frame_id, bool include_pending) const {
   if (!is_open_) {
     throw StoreError("store is closed");
   }
-  if (frame_id >= committed_frame_metas_.size()) {
+  const auto metas = include_pending ? FrameMetas(true) : committed_frame_metas_;
+  if (frame_id >= metas.size()) {
     return std::nullopt;
   }
-  return committed_frame_metas_[static_cast<std::size_t>(frame_id)];
+  return metas[static_cast<std::size_t>(frame_id)];
 }
 
-std::vector<WaxFrameMeta> WaxStore::FrameMetas() const {
+std::vector<WaxFrameMeta> WaxStore::FrameMetas(bool include_pending) const {
   if (!is_open_) {
     throw StoreError("store is closed");
   }
-  return committed_frame_metas_;
+  if (!include_pending || pending_mutation_order_cache_.empty()) {
+    return committed_frame_metas_;
+  }
+
+  std::vector<WaxFrameMeta> metas = committed_frame_metas_;
+  for (const auto& [sequence, kind] : pending_mutation_order_cache_) {
+    switch (kind) {
+      case PendingMutationKind::kPutFrame: {
+        const auto it = pending_put_frame_cache_.find(sequence);
+        if (it == pending_put_frame_cache_.end()) {
+          throw StoreError("pending putFrame cache entry missing payload");
+        }
+        const auto& put = it->second;
+        WaxFrameMeta meta{};
+        meta.id = put.frame_id;
+        meta.timestamp_ms = put.timestamp_ms;
+        meta.payload_offset = put.payload_offset;
+        meta.payload_length = put.payload_length;
+        meta.canonical_encoding = put.canonical_encoding;
+        meta.status = 0;
+        meta.kind = put.kind;
+        meta.metadata = put.metadata;
+        meta.labels = put.labels;
+
+        if (put.frame_id == metas.size()) {
+          metas.push_back(std::move(meta));
+        } else if (put.frame_id < metas.size()) {
+          metas[static_cast<std::size_t>(put.frame_id)] = std::move(meta);
+        } else {
+          throw StoreError("pending putFrame frame_id is not dense");
+        }
+        break;
+      }
+      case PendingMutationKind::kDeleteFrame: {
+        const auto it = pending_delete_frame_cache_.find(sequence);
+        if (it == pending_delete_frame_cache_.end()) {
+          throw StoreError("pending deleteFrame cache entry missing payload");
+        }
+        if (it->second.frame_id < metas.size()) {
+          metas[static_cast<std::size_t>(it->second.frame_id)].status = 1;
+        }
+        break;
+      }
+      case PendingMutationKind::kSupersedeFrame: {
+        const auto it = pending_supersede_frame_cache_.find(sequence);
+        if (it == pending_supersede_frame_cache_.end()) {
+          throw StoreError("pending supersedeFrame cache entry missing payload");
+        }
+        if (it->second.superseded_id < metas.size() && it->second.superseding_id < metas.size()) {
+          metas[static_cast<std::size_t>(it->second.superseded_id)].superseded_by = it->second.superseding_id;
+          metas[static_cast<std::size_t>(it->second.superseding_id)].supersedes = it->second.superseded_id;
+        }
+        break;
+      }
+      case PendingMutationKind::kPutEmbedding:
+        break;
+    }
+  }
+  return metas;
 }
 
-std::vector<std::byte> WaxStore::FrameContent(std::uint64_t frame_id) const {
+std::vector<std::byte> WaxStore::FrameContent(std::uint64_t frame_id, bool include_pending) const {
   if (!is_open_) {
     throw StoreError("store is closed");
   }
-  if (frame_id >= committed_frame_metas_.size()) {
+  const auto metas = include_pending ? FrameMetas(true) : committed_frame_metas_;
+  if (frame_id >= metas.size()) {
     throw StoreError("frame_id out of range");
   }
-  const auto& meta = committed_frame_metas_[static_cast<std::size_t>(frame_id)];
+  const auto& meta = metas[static_cast<std::size_t>(frame_id)];
   if (meta.payload_length == 0) {
     return {};
   }
@@ -1687,12 +1895,17 @@ void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
             mutation.sequence,
             PendingPutFrameCache{
                 .frame_id = put.frame_id,
+                .timestamp_ms = put.timestamp_ms,
                 .payload_offset = put.payload_offset,
                 .payload_length = put.payload_length,
                 .canonical_encoding = put.canonical_encoding,
                 .canonical_length = put.canonical_length,
                 .canonical_checksum = put.canonical_checksum,
                 .stored_checksum = put.stored_checksum,
+                .kind = put.kind,
+                .metadata = put.metadata,
+                .tags = put.tags,
+                .labels = put.labels,
             });
         if (!put_inserted.second) {
           throw StoreError("duplicate pending putFrame sequence in recovery cache");

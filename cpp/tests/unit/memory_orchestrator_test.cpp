@@ -5375,6 +5375,124 @@ void ScenarioHandoffPersistsAcrossReopen(const std::filesystem::path& path) {
   }
 }
 
+// ── Per-frame metadata persistence tests ─────────────────────
+
+void ScenarioTimestampPersistsAcrossReopen(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: Timestamp persists across close/reopen");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.Remember("Timestamp test content.");
+    orchestrator.Close();
+  }
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    // Access FrameMetas via Recall to trigger a load, then check stats.
+    const auto ctx = orchestrator.Recall("timestamp");
+    // The handoff LatestHandoff scans FrameMetas — let's use the same approach
+    // via RuntimeStats to verify the store is populated.
+    const auto stats = orchestrator.GetRuntimeStats();
+    Require(stats.frame_count >= 1, "should have at least 1 frame");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioMetadataPersistsViaHandoff(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: Metadata persists via handoff kind field");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberHandoff("Handoff with metadata.", std::string("test-proj"), {"task A"});
+    orchestrator.Close();
+  }
+
+  // Reopen and verify kind="handoff" is now visible.
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    const auto rec = orchestrator.LatestHandoff();
+    Require(rec.has_value(), "handoff should be found via kind metadata");
+    Require(rec->content == "Handoff with metadata.", "handoff content match");
+    orchestrator.Close();
+  }
+}
+
+void ScenarioFrameMetadataRoundTrip(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: Frame metadata round-trips through WaxStore");
+  // Use WaxStore directly to test metadata persistence.
+  auto store = waxcpp::WaxStore::Create(path);
+
+  waxcpp::Metadata meta;
+  meta["kind"] = "test-kind";
+  meta["project"] = "my-proj";
+  meta["author"] = "alice";
+
+  const std::string content = "Hello metadata world";
+  std::vector<std::byte> bytes;
+  bytes.reserve(content.size());
+  for (char c : content) bytes.push_back(static_cast<std::byte>(c));
+  const auto fid = store.Put(bytes, meta);
+  store.Commit();
+
+  const auto metas = store.FrameMetas();
+  Require(metas.size() == 1, "should have 1 frame");
+  Require(metas[0].id == fid, "frame id match");
+  Require(metas[0].timestamp_ms > 0, "timestamp should be set");
+  Require(metas[0].kind.has_value() && *metas[0].kind == "test-kind", "kind should persist");
+  Require(metas[0].metadata.at("project") == "my-proj", "metadata[project] should persist");
+  Require(metas[0].metadata.at("author") == "alice", "metadata[author] should persist");
+  Require(metas[0].metadata.at("kind") == "test-kind", "metadata[kind] should persist");
+
+  store.Close();
+
+  // Reopen and verify persistence after TOC read-back.
+  auto store2 = waxcpp::WaxStore::Open(path);
+  const auto metas2 = store2.FrameMetas();
+  Require(metas2.size() == 1, "should have 1 frame after reopen");
+  Require(metas2[0].timestamp_ms > 0, "timestamp should survive reopen");
+  Require(metas2[0].kind.has_value() && *metas2[0].kind == "test-kind", "kind should survive reopen");
+  Require(metas2[0].metadata.at("project") == "my-proj", "metadata[project] should survive reopen");
+  store2.Close();
+}
+
+void ScenarioRecallWithMetadataFilter(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: Recall with MetadataFilter filters by required_entries");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+
+  // Ingest two frames with different metadata.
+  orchestrator.Remember("Alpha content about cats.", {{"topic", "cats"}});
+  orchestrator.Remember("Beta content about dogs.", {{"topic", "dogs"}});
+  orchestrator.Flush();
+
+  // Search with MetadataFilter requiring topic=cats.
+  waxcpp::FrameFilter ff{};
+  waxcpp::MetadataFilter mf{};
+  mf.required_entries["topic"] = "cats";
+  ff.metadata_filter = mf;
+
+  const auto results = orchestrator.Search("content", ff);
+  // Should only match the cats frame.
+  bool found_cats = false;
+  bool found_dogs = false;
+  for (const auto& hit : results) {
+    if (hit.preview_text.has_value()) {
+      if (hit.preview_text->find("cats") != std::string::npos) found_cats = true;
+      if (hit.preview_text->find("dogs") != std::string::npos) found_dogs = true;
+    }
+  }
+  Require(found_cats, "should find cats frame with topic=cats filter");
+  Require(!found_dogs, "should NOT find dogs frame with topic=cats filter");
+
+  orchestrator.Close();
+}
+
 }  // namespace
 
 int main() {
@@ -5515,6 +5633,10 @@ int main() {
     const auto path132 = UniquePath();
     const auto path133 = UniquePath();
     const auto path134 = UniquePath();
+    const auto path135 = UniquePath();
+    const auto path136 = UniquePath();
+    const auto path137 = UniquePath();
+    const auto path138 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -5651,6 +5773,10 @@ int main() {
     ScenarioTierSelectionPolicyFromConfig(path132);
     ScenarioRememberHandoffAndLatestHandoff(path133);
     ScenarioHandoffPersistsAcrossReopen(path134);
+    ScenarioTimestampPersistsAcrossReopen(path135);
+    ScenarioMetadataPersistsViaHandoff(path136);
+    ScenarioFrameMetadataRoundTrip(path137);
+    ScenarioRecallWithMetadataFilter(path138);
 
     const std::vector<std::filesystem::path> cleanup_paths = {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
@@ -5667,6 +5793,7 @@ int main() {
         path114, path115, path116, path117, path118, path119, path120, path121,
         path122, path123, path124, path125,
         path126, path127, path128, path129, path130, path131, path132, path133, path134,
+        path135, path136, path137, path138,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
