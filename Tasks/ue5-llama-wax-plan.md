@@ -43,6 +43,10 @@ Current runtime source decision:
   - added phase/progress logs for indexing pipeline (enabled via `WAXCPP_SERVER_LOG`),
   - `index.status` now exposes persisted `phase` for runtime introspection (`starting/scanning/ingesting/persisting_manifests/...`),
   - `index.status` now exposes runtime throughput metrics (`elapsed_ms`, `indexed_chunks_per_sec`, `committed_chunks_per_sec`) and process RSS (`process_rss_mb`).
+- M9 in progress:
+  - added real-corpus integration runner: `scripts/ue5/run-ue5-corpus-integration.ps1`,
+  - added deterministic UE5 query pack for influence checks: `cpp/tests/integration/ue5-query-pack.json`,
+  - report now captures `corpus_influence_rate` and `required_path_match_rate`.
 
 ## Scope
 - Build an ingest/search/generation server path for very large C++ codebases (UE5 scale).
@@ -125,6 +129,19 @@ Current runtime source decision:
 - Add server metrics/logging for indexing phases and failures.
 - Add regression tests for deterministic outputs across repeated runs.
 - Status: partially implemented (`max_files` + `max_chunks` + `max_ram_mb` + `flush_every_chunks` + `ingest_batch_size` controls in `index.start`, orchestrator ingest tuning via `WAXCPP_ORCH_INGEST_CONCURRENCY`/`WAXCPP_ORCH_INGEST_BATCH_SIZE`, cancel-aware scan support, indexed-phase logging, regression coverage for controls, and committed-watermark resume fallback for interrupted runs without file-manifest).
+
+### M9. Real Corpus Influence Validation
+- Add scripted run that executes:
+  - `index.start` on real UE5 tree,
+  - polling via `index.status`,
+  - `answer.generate` across fixed query pack,
+  - JSON report export with influence metrics.
+- Status: partially implemented (PowerShell runner + query pack + thresholds in place; next is repeated full-run baselines on full `j:/UE5.2SRC` with pinned model/runtime settings).
+
+## Operator Baseline (Windows)
+- Canonical corpus path for current workstation: `j:/UE5.2SRC/`.
+- Canonical generation model path: `g:/Proj/Agents1/Models/Qwen/Qwen3-Coder-Next-Q4_K_M.gguf`.
+- For fast iteration, use `max_files`/`max_chunks`; for parity/perf sign-off, run without these caps.
 
 ## Acceptance Gates
 1. Same source tree produces identical chunk manifest and stable top-k ordering.
