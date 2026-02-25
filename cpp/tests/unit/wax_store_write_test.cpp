@@ -1025,6 +1025,128 @@ void RunScenarioMixedRecoveredAndLocalReplayAcrossReopenCycles(const std::filesy
   }
 }
 
+void RunScenarioRecoveredMixedLifecycleCorruptWalAcrossReopenCycles(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: recovered mixed lifecycle survives wal corruption across reopen cycles");
+
+  {
+    auto store = waxcpp::WaxStore::Create(path);
+    const auto ids = store.PutBatch(
+        {{std::byte{0xB0}}, {std::byte{0xB1}}, {std::byte{0xB2}}, {std::byte{0xB3}}},
+        {});
+    Require(ids.size() == 4 && ids[0] == 0 && ids[1] == 1 && ids[2] == 2 && ids[3] == 3,
+            "expected dense baseline ids for recovered mixed lifecycle scenario");
+    store.Commit();
+
+    const auto id4 = store.Put({std::byte{0xB4}});
+    Require(id4 == 4, "expected dense recovered pending put id4");
+    store.Delete(0);
+    store.Supersede(1, 2);
+    store.PutEmbedding(2, {1.1F, 1.2F, 1.3F});
+    // Crash simulation: recovered pending set remains in WAL.
+  }
+
+  waxcpp::WaxWALStats cycle1_closed_wal{};
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto before_stats = reopened.Stats();
+    const auto before_wal = reopened.WalStats();
+    Require(before_stats.pending_frames == 1, "cycle1 reopen must recover one pending put");
+    Require(before_wal.pending_delete_mutations == 1, "cycle1 reopen must recover one pending delete");
+    Require(before_wal.pending_supersede_mutations == 1, "cycle1 reopen must recover one pending supersede");
+    Require(before_wal.pending_embedding_mutations == 1, "cycle1 reopen must recover one pending embedding");
+    Require(before_wal.pending_bytes > 0, "cycle1 reopen must expose pending wal bytes");
+
+    const auto corrupt_offset = waxcpp::core::mv2s::kWalOffset + before_wal.checkpoint_pos;
+    const std::array<std::byte, 1> corrupt = {std::byte{0xFF}};
+    WriteBytesAt(path, corrupt_offset, std::span<const std::byte>(corrupt.data(), corrupt.size()));
+
+    const auto id5 = reopened.Put({std::byte{0xB5}});
+    Require(id5 == 5, "cycle1 local put must continue dense ids after recovered pending");
+    reopened.Delete(3);
+    reopened.Supersede(2, id5);
+    reopened.PutEmbedding(id5, {1.5F, 1.6F});
+    reopened.Close();
+    cycle1_closed_wal = reopened.WalStats();
+  }
+
+  Require(cycle1_closed_wal.auto_commit_count == 1,
+          "cycle1 close should auto-commit mixed recovered+local state");
+  Require(cycle1_closed_wal.pending_delete_mutations == 0,
+          "cycle1 close auto-commit should clear pending delete counter");
+  Require(cycle1_closed_wal.pending_supersede_mutations == 0,
+          "cycle1 close auto-commit should clear pending supersede counter");
+  Require(cycle1_closed_wal.pending_embedding_mutations == 0,
+          "cycle1 close auto-commit should clear pending embedding counter");
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto stats = reopened.Stats();
+    Require(stats.frame_count == 6, "cycle1 close auto-commit must persist six frames");
+    Require(stats.pending_frames == 0, "cycle1 close auto-commit must clear pending puts");
+
+    const auto toc = ReadCommittedToc(path);
+    Require(toc.frames.size() == 6, "cycle1 TOC frame count mismatch");
+    Require(toc.frames[0].status == 1, "cycle1 should apply recovered delete on frame 0");
+    Require(toc.frames[3].status == 1, "cycle1 should apply local delete on frame 3");
+    Require(toc.frames[1].superseded_by.has_value() && *toc.frames[1].superseded_by == 2,
+            "cycle1 should apply recovered supersede edge 1<-2");
+    Require(toc.frames[2].supersedes.has_value() && *toc.frames[2].supersedes == 1,
+            "cycle1 should apply recovered supersede edge 2->1");
+    Require(toc.frames[2].superseded_by.has_value() && *toc.frames[2].superseded_by == 5,
+            "cycle1 should apply local supersede edge 2<-5");
+    Require(toc.frames[5].supersedes.has_value() && *toc.frames[5].supersedes == 2,
+            "cycle1 should apply local supersede edge 5->2");
+    reopened.Close();
+  }
+
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    store.Delete(1);
+    store.PutEmbedding(2, {2.1F, 2.2F});
+    const auto id6 = store.Put({std::byte{0xB6}});
+    Require(id6 == 6, "cycle2 pending put must continue dense ids");
+    store.Supersede(5, id6);
+    // Crash simulation: cycle2 pending mutations remain in WAL.
+  }
+
+  {
+    auto reopened = waxcpp::WaxStore::Open(path);
+    const auto before_stats = reopened.Stats();
+    const auto before_wal = reopened.WalStats();
+    Require(before_stats.pending_frames == 1, "cycle2 reopen must recover one pending put");
+    Require(before_wal.pending_delete_mutations == 1, "cycle2 reopen must recover one pending delete");
+    Require(before_wal.pending_supersede_mutations == 1, "cycle2 reopen must recover one pending supersede");
+    Require(before_wal.pending_embedding_mutations == 1, "cycle2 reopen must recover one pending embedding");
+
+    const auto corrupt_offset = waxcpp::core::mv2s::kWalOffset + before_wal.checkpoint_pos;
+    const std::array<std::byte, 1> corrupt = {std::byte{0xFF}};
+    WriteBytesAt(path, corrupt_offset, std::span<const std::byte>(corrupt.data(), corrupt.size()));
+
+    reopened.Commit();
+    const auto after_wal = reopened.WalStats();
+    Require(after_wal.pending_delete_mutations == 0, "cycle2 commit must clear pending delete counter");
+    Require(after_wal.pending_supersede_mutations == 0, "cycle2 commit must clear pending supersede counter");
+    Require(after_wal.pending_embedding_mutations == 0, "cycle2 commit must clear pending embedding counter");
+    reopened.Close();
+  }
+
+  {
+    auto final_store = waxcpp::WaxStore::Open(path);
+    const auto final_stats = final_store.Stats();
+    Require(final_stats.frame_count == 7, "cycle2 commit must persist seven frames");
+    Require(final_stats.pending_frames == 0, "cycle2 commit must clear pending put state");
+
+    const auto toc = ReadCommittedToc(path);
+    Require(toc.frames.size() == 7, "cycle2 TOC frame count mismatch");
+    Require(toc.frames[1].status == 1, "cycle2 should apply recovered delete on frame 1");
+    Require(toc.frames[5].superseded_by.has_value() && *toc.frames[5].superseded_by == 6,
+            "cycle2 should apply recovered supersede edge 5<-6");
+    Require(toc.frames[6].supersedes.has_value() && *toc.frames[6].supersedes == 5,
+            "cycle2 should apply recovered supersede edge 6->5");
+    final_store.Close();
+  }
+}
+
 void RunScenarioDeleteAndSupersedePersist(const std::filesystem::path& path) {
   waxcpp::tests::Log("scenario: delete/supersede persist in TOC");
   auto store = waxcpp::WaxStore::Create(path);
@@ -2020,6 +2142,7 @@ int main(int argc, char** argv) {
     RunScenarioPendingLifecycleRecoverySkipsUndecodableTail(path);
     RunScenarioPendingMixedLifecycleReplayDeterminism(path);
     RunScenarioMixedRecoveredAndLocalReplayAcrossReopenCycles(path);
+    RunScenarioRecoveredMixedLifecycleCorruptWalAcrossReopenCycles(path);
     RunScenarioDeleteAndSupersedePersist(path);
     RunScenarioPendingLifecycleMutationCountersLocal(path);
     RunScenarioPendingLifecycleMutationCountersRecovered(path);

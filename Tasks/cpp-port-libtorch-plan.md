@@ -98,4 +98,4 @@ LibTorch follows practical hybrid delivery via pinned submodule artifacts + chec
 - M7-M9 baseline complete: deterministic embedding provider runtime policies, unified search/FastRAG/token-budget behavior, orchestrator lifecycle/concurrency/close guards.
 - MetadataFilter parity now includes `required_entries`, `required_tags`, and `required_labels` evaluation against persisted frame metadata/tags/labels.
 - M10 optional baseline complete for policy surface: `cpu_only|cuda_preferred` routing, manifest diagnostics, CI policy matrix; real CUDA/libtorch runtime backend remains future work.
-- M11 hardening in progress: deterministic fuzzing/regressions for TOC/MV2V/WAL parsers and crash-recovery paths are active; remaining release tasks include dependency pin finalization and dedicated artifact mirror cutover.
+- M11 hardening in progress: deterministic fuzzing/regressions for TOC/MV2V/WAL parsers and crash-recovery paths are active; mixed recovered+local WAL replay now has multi-cycle corruption regressions across `put/delete/supersede/putEmbedding`; remaining release tasks include dependency pin finalization and dedicated artifact mirror cutover.
