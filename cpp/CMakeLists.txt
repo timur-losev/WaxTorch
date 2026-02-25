@@ -41,6 +41,7 @@ set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/token_counter.hpp
   include/waxcpp/structured_memory.hpp
   include/waxcpp/types.hpp
+  include/waxcpp/vector_math.hpp
   include/waxcpp/vector_engine.hpp
   include/waxcpp/wax_store.hpp
 )
@@ -65,6 +66,7 @@ add_library(waxcpp STATIC
   src/rag/text_chunker.cpp
   src/rag/tier_selector.cpp
   src/rag/token_counter.cpp
+  src/rag/vector_math.cpp
   src/rag/embeddings.cpp
   src/orchestrator/memory_orchestrator.cpp
 )
@@ -443,6 +445,16 @@ if (WAXCPP_BUILD_TESTS)
   endif()
   target_precompile_headers(waxcpp_embedding_memoizer_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_embedding_memoizer_test COMMAND waxcpp_embedding_memoizer_test)
+
+  add_executable(waxcpp_vector_math_test tests/unit/vector_math_test.cpp)
+  target_link_libraries(waxcpp_vector_math_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_vector_math_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_vector_math_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_vector_math_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_vector_math_test COMMAND waxcpp_vector_math_test)
 
   add_executable(waxcpp_mv2s_parity_test tests/parity/mv2s_fixture_parity_test.cpp)
   target_link_libraries(waxcpp_mv2s_parity_test PRIVATE waxcpp)

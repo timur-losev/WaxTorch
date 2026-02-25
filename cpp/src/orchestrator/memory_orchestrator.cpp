@@ -1,6 +1,8 @@
 #include "waxcpp/memory_orchestrator.hpp"
 #include "waxcpp/fts5_search_engine.hpp"
+#include "waxcpp/query_analyzer.hpp"
 #include "waxcpp/search.hpp"
+#include "waxcpp/text_chunker.hpp"
 #include "waxcpp/token_counter.hpp"
 
 #include <algorithm>
@@ -539,93 +541,10 @@ bool IsInternalOrchestratorPayload(const std::vector<std::byte>& payload) {
   return false;
 }
 
-std::vector<std::string> TokenizeWhitespace(std::string_view text) {
-  std::vector<std::string> tokens{};
-  std::size_t start = 0;
-  while (start < text.size()) {
-    while (start < text.size() && IsAsciiWhitespace(text[start])) {
-      ++start;
-    }
-    if (start >= text.size()) {
-      break;
-    }
-    std::size_t end = start;
-    while (end < text.size() && !IsAsciiWhitespace(text[end])) {
-      ++end;
-    }
-    tokens.emplace_back(text.substr(start, end - start));
-    start = end;
-  }
-  return tokens;
-}
-
-std::string JoinTokenRange(const std::vector<std::string>& tokens, std::size_t begin, std::size_t end) {
-  if (begin >= end || begin >= tokens.size()) {
-    return {};
-  }
-  end = std::min(end, tokens.size());
-  std::string out = tokens[begin];
-  for (std::size_t i = begin + 1; i < end; ++i) {
-    out.push_back(' ');
-    out.append(tokens[i]);
-  }
-  return out;
-}
-
 void ThrowIfClosed(bool closed) {
   if (closed) {
     throw std::runtime_error("memory orchestrator is closed");
   }
-}
-
-/// Chunk content using whitespace word boundaries (default path).
-std::vector<std::string> ChunkContentWhitespace(const std::string& content, int target_tokens, int overlap_tokens) {
-  auto tokens = TokenizeWhitespace(content);
-  if (tokens.empty()) {
-    return {content};
-  }
-  if (tokens.size() <= static_cast<std::size_t>(target_tokens)) {
-    return {JoinTokenRange(tokens, 0, tokens.size())};
-  }
-  const int step = std::max(1, target_tokens - std::max(0, overlap_tokens));
-  std::vector<std::string> chunks{};
-  for (std::size_t start = 0; start < tokens.size(); start += static_cast<std::size_t>(step)) {
-    const auto end = std::min(tokens.size(), start + static_cast<std::size_t>(target_tokens));
-    chunks.push_back(JoinTokenRange(tokens, start, end));
-    if (end == tokens.size()) {
-      break;
-    }
-  }
-  return chunks;
-}
-
-/// Chunk content using a real TokenCounter (BPE-aware path).
-/// Falls back to whitespace chunking when counter is nullptr.
-std::vector<std::string> ChunkContentTokenAware(const TokenCounter* counter,
-                                                  const std::string& content,
-                                                  int target_tokens,
-                                                  int overlap_tokens) {
-  if (counter == nullptr || !counter->HasVocab()) {
-    return ChunkContentWhitespace(content, target_tokens, overlap_tokens);
-  }
-  ChunkingConfig config;
-  config.target_tokens = target_tokens;
-  config.overlap_tokens = std::max(0, overlap_tokens);
-  auto chunks = ChunkText(*counter, content, config);
-  if (chunks.empty()) {
-    return {content};
-  }
-  return chunks;
-}
-
-std::vector<std::string> ChunkContent(const std::string& content, int target_tokens, int overlap_tokens) {
-  if (target_tokens <= 0) {
-    return {content};
-  }
-  // Default path: whitespace-based chunking (backward compatible).
-  // When a BPE vocab-loaded TokenCounter is available, callers should
-  // use ChunkContentTokenAware instead.
-  return ChunkContentWhitespace(content, target_tokens, overlap_tokens);
 }
 
 struct StoreSearchChannels {
@@ -1036,6 +955,21 @@ void RebuildStructuredFactIndex(const StructuredMemoryStore& structured_memory, 
   structured_text_index.CommitStaged();
 }
 
+/// Build mapping from source frame ID → active surrogate frame ID.
+/// Surrogate frames have the `supersedes` field set to the source frame ID.
+std::unordered_map<std::uint64_t, std::uint64_t> BuildSurrogateMap(
+    const std::vector<WaxFrameMeta>& metas) {
+  std::unordered_map<std::uint64_t, std::uint64_t> result;
+  for (const auto& meta : metas) {
+    // Active frames that supersede another frame are surrogate frames.
+    if (meta.status == 0 && meta.supersedes.has_value() &&
+        !meta.superseded_by.has_value()) {
+      result[*meta.supersedes] = meta.id;
+    }
+  }
+  return result;
+}
+
 void RebuildRuntimeStateFromStore(WaxStore& store,
                                   const OrchestratorConfig& config,
                                   const std::shared_ptr<EmbeddingProvider>& embedder,
@@ -1043,10 +977,12 @@ void RebuildRuntimeStateFromStore(WaxStore& store,
                                   FTS5SearchEngine& store_text_index,
                                   FTS5SearchEngine& structured_text_index,
                                   std::unique_ptr<USearchVectorEngine>& vector_index,
-                                  std::unordered_map<std::uint64_t, std::vector<float>>& embedding_cache) {
+                                  EmbeddingMemoizer& embedding_cache,
+                                  std::unordered_map<std::uint64_t, std::uint64_t>& surrogate_map) {
   structured_memory = StructuredMemoryStore{};
   ReplayStructuredFactsFromStore(store, structured_memory);
-  embedding_cache.clear();
+  embedding_cache.Clear();
+  surrogate_map = BuildSurrogateMap(store.FrameMetas());
 
   if (config.enable_text_search) {
     RebuildTextIndexFromStore(store, store_text_index);
@@ -1077,6 +1013,71 @@ void RebuildRuntimeStateFromStore(WaxStore& store,
                               *vector_index);
 }
 
+/// Enrich search results with tier-appropriate surrogate text.
+/// For results without preview_text, looks up surrogate content from the store,
+/// selects the appropriate tier via the tier selector, and sets the preview_text.
+void EnrichResultsWithSurrogates(
+    SearchResponse& response,
+    const std::string& query,
+    WaxStore& store,
+    const SurrogateTierSelector& tier_selector,
+    const AccessStatsManager& access_stats,
+    const std::unordered_map<std::uint64_t, std::uint64_t>& surrogate_map,
+    bool enable_query_aware_tier,
+    std::optional<std::int64_t> deterministic_now_ms) {
+  if (surrogate_map.empty()) return;
+
+  // Collect frame IDs that need surrogate enrichment.
+  std::vector<std::uint64_t> surrogate_frame_ids;
+  std::vector<std::size_t> result_indices;
+  for (std::size_t i = 0; i < response.results.size(); ++i) {
+    const auto& r = response.results[i];
+    if (r.preview_text.has_value() && !r.preview_text->empty()) continue;
+    auto it = surrogate_map.find(r.frame_id);
+    if (it == surrogate_map.end()) continue;
+    surrogate_frame_ids.push_back(it->second);
+    result_indices.push_back(i);
+  }
+  if (surrogate_frame_ids.empty()) return;
+
+  // Batch-load surrogate frame contents.
+  const auto contents = store.FrameContents(surrogate_frame_ids);
+
+  // Pre-compute query signals for tier selection.
+  QueryAnalyzer analyzer;
+  const std::optional<QuerySignals> signals =
+      enable_query_aware_tier ? std::make_optional(analyzer.Analyze(query))
+                              : std::nullopt;
+  const auto now_ms = deterministic_now_ms.value_or(NowMs());
+
+  // Enrich each result.
+  for (std::size_t idx = 0; idx < result_indices.size(); ++idx) {
+    auto& result = response.results[result_indices[idx]];
+    const auto surr_frame_id = surrogate_frame_ids[idx];
+    auto content_it = contents.find(surr_frame_id);
+    if (content_it == contents.end()) continue;
+
+    const auto data = BytesToString(content_it->second);
+    if (data.empty()) continue;
+
+    // Build tier selection context.
+    const auto frame_stats = access_stats.GetStats(result.frame_id);
+    TierSelectionContext ctx;
+    ctx.frame_timestamp_ms =
+        frame_stats.has_value() ? frame_stats->first_access_ms : now_ms;
+    ctx.access_stats =
+        frame_stats.has_value() ? &frame_stats.value() : nullptr;
+    ctx.query_signals = signals.has_value() ? &signals.value() : nullptr;
+    ctx.now_ms = now_ms;
+
+    const auto tier = tier_selector.SelectTier(ctx);
+    auto text = SurrogateTierSelector::ExtractTier(data, tier);
+    if (text.has_value() && !text->empty()) {
+      result.preview_text = std::move(*text);
+    }
+  }
+}
+
 }  // namespace
 
 MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
@@ -1087,6 +1088,7 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
       store_(std::filesystem::exists(path) ? WaxStore::Open(path) : WaxStore::Create(path)),
       embedder_(std::move(embedder)),
       token_counter_(token_counter),
+      embedding_cache_(config.embedding_cache_capacity),
       tier_selector_(config.rag.enable_query_aware_tier_selection
                          ? TierPolicyImportanceBalanced()
                          : TierSelectionPolicy{TierPolicyDisabled{}}) {
@@ -1119,7 +1121,8 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
                                store_text_index_,
                                structured_text_index_,
                                vector_index_,
-                               embedding_cache_);
+                               embedding_cache_,
+                               surrogate_map_);
   if (config_.enable_vector_search && vector_index_ == nullptr) {
     throw std::runtime_error("vector-enabled config requires initialized vector index");
   }
@@ -1129,11 +1132,9 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
   std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
   EnsureEmbedderRequiredForRemember(config_, embedder_);
-  // Use BPE-aware chunking when a loaded TokenCounter is available;
-  // otherwise fall back to whitespace-based chunking for backward compatibility.
-  const auto chunks = ChunkContentTokenAware(token_counter_, content,
-                                             config_.chunking.target_tokens,
-                                             config_.chunking.overlap_tokens);
+  // Use TextChunker for BPE-aware chunking (falls back to whitespace when
+  // token counter is unavailable).
+  const auto chunks = TextChunker::Chunk(content, config_.chunking, token_counter_);
 
   std::optional<std::vector<std::vector<float>>> chunk_embeddings{};
   const auto embedder_identity_tag =
@@ -1181,11 +1182,8 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
       StageVectorIndexEmbedding(vector_index_.get(), frame_id, embedding);
       const int vector_dims = vector_index_ != nullptr ? vector_index_->dimensions() : 0;
       StagePersistedEmbeddingRecord(store_, frame_id, embedding, vector_dims, embedder_identity_tag);
-      if (!embedding.empty() && config_.embedding_cache_capacity > 0) {
-        if (embedding_cache_.size() >= static_cast<std::size_t>(config_.embedding_cache_capacity)) {
-          embedding_cache_.clear();
-        }
-        embedding_cache_[frame_id] = std::move(embedding);
+      if (!embedding.empty()) {
+        embedding_cache_.Set(frame_id, std::move(embedding));
       }
     }
   }
@@ -1215,7 +1213,7 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
       config_.enable_text_search,
       config_.enable_vector_search,
       req);
-  const auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
+  auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
 
   // Record frame accesses for importance-based tier selection.
   if (!response.results.empty()) {
@@ -1224,6 +1222,12 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
     for (const auto& r : response.results) accessed_ids.push_back(r.frame_id);
     access_stats_.RecordAccesses(accessed_ids);
   }
+
+  // Enrich results with tier-appropriate surrogate text before context assembly.
+  EnrichResultsWithSurrogates(response, query, store_, tier_selector_,
+                              access_stats_, surrogate_map_,
+                              config_.rag.enable_query_aware_tier_selection,
+                              config_.rag.deterministic_now_ms);
 
   auto context = BuildFastRAGContext(req, response);
 
@@ -1269,7 +1273,7 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
       config_.enable_text_search,
       config_.enable_vector_search,
       req);
-  const auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
+  auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
 
   // Record frame accesses for importance-based tier selection.
   if (!response.results.empty()) {
@@ -1278,6 +1282,12 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
     for (const auto& r : response.results) accessed_ids.push_back(r.frame_id);
     access_stats_.RecordAccesses(accessed_ids);
   }
+
+  // Enrich results with tier-appropriate surrogate text before context assembly.
+  EnrichResultsWithSurrogates(response, query, store_, tier_selector_,
+                              access_stats_, surrogate_map_,
+                              config_.rag.enable_query_aware_tier_selection,
+                              config_.rag.deterministic_now_ms);
 
   auto context = BuildFastRAGContext(req, response);
 
@@ -1394,7 +1404,8 @@ void MemoryOrchestrator::Flush() {
                                    store_text_index_,
                                    structured_text_index_,
                                    vector_index_,
-                                   embedding_cache_);
+                                   embedding_cache_,
+                                   surrogate_map_);
     }
     throw;
   } catch (...) {
@@ -1406,7 +1417,8 @@ void MemoryOrchestrator::Flush() {
                                    store_text_index_,
                                    structured_text_index_,
                                    vector_index_,
-                                   embedding_cache_);
+                                   embedding_cache_,
+                                   surrogate_map_);
     }
     throw;
   }

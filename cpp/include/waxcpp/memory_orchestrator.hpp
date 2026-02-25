@@ -2,6 +2,7 @@
 
 #include "waxcpp/access_stats.hpp"
 #include "waxcpp/answer_extractor.hpp"
+#include "waxcpp/embedding_memoizer.hpp"
 #include "waxcpp/embeddings.hpp"
 #include "waxcpp/fts5_search_engine.hpp"
 #include "waxcpp/tier_selector.hpp"
@@ -11,6 +12,7 @@
 #include "waxcpp/vector_engine.hpp"
 #include "waxcpp/wax_store.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <mutex>
 #include <memory>
@@ -50,7 +52,7 @@ class MemoryOrchestrator {
   WaxStore store_;
   std::shared_ptr<EmbeddingProvider> embedder_;
   const TokenCounter* token_counter_ = nullptr;
-  std::unordered_map<std::uint64_t, std::vector<float>> embedding_cache_;
+  EmbeddingMemoizer embedding_cache_;
   StructuredMemoryStore structured_memory_;
   FTS5SearchEngine store_text_index_;
   FTS5SearchEngine structured_text_index_;
@@ -58,6 +60,8 @@ class MemoryOrchestrator {
   AccessStatsManager access_stats_;
   SurrogateTierSelector tier_selector_;
   DeterministicAnswerExtractor answer_extractor_;
+  /// Maps source frame ID → active surrogate frame ID.
+  std::unordered_map<std::uint64_t, std::uint64_t> surrogate_map_;
   bool closed_ = false;
   mutable std::mutex mutex_{};
 };

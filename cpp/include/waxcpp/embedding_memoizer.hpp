@@ -63,6 +63,9 @@ class EmbeddingMemoizer {
   /// Reset hit/miss counters.
   void ResetStats();
 
+  /// Remove all cached entries and reset statistics.
+  void Clear();
+
   /// Current number of entries in the cache.
   std::size_t Size() const;
 

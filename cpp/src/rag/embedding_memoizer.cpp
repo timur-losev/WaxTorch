@@ -143,6 +143,15 @@ void EmbeddingMemoizer::SetBatch(
   }
 }
 
+void EmbeddingMemoizer::Clear() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  entries_.clear();
+  head_ = std::nullopt;
+  tail_ = std::nullopt;
+  hits_ = 0;
+  misses_ = 0;
+}
+
 double EmbeddingMemoizer::HitRate() const {
   std::lock_guard<std::mutex> lock(mutex_);
   const auto total = hits_ + misses_;
