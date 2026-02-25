@@ -19,6 +19,9 @@ struct LlamaCppEmbeddingProviderConfig {
   int dimensions = 1024;
   bool normalize = true;
   int timeout_ms = 30000;
+  int max_retries = 2;
+  int retry_backoff_ms = 100;
+  int max_batch_concurrency = 4;
   std::size_t memoization_capacity = 4096;
   std::function<std::string(const std::string& body)> request_fn{};
 };
@@ -40,6 +43,8 @@ class LlamaCppEmbeddingProvider final : public waxcpp::BatchEmbeddingProvider {
  private:
   std::string RequestEmbeddingPayload(const std::string& text) const;
   std::vector<float> FetchEmbedding(const std::string& text) const;
+  std::vector<float> FetchEmbeddingWithRetry(const std::string& text) const;
+  std::vector<float> GetCachedEmbedding(const std::string& key) const;
   void MemoizeLocked(const std::string& key, const std::vector<float>& embedding);
 
   LlamaCppEmbeddingProviderConfig config_{};

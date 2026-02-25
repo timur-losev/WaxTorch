@@ -22,7 +22,8 @@ Current runtime source decision:
 - M5 in progress:
   - added `LlamaCppEmbeddingProvider` (HTTP llama.cpp embedding endpoint adapter),
   - server now wires provider when `enable_vector_search=true`,
-  - added parser/provider unit tests with deterministic request-function stubs.
+  - added parser/provider unit tests with deterministic request-function stubs,
+  - added retry/backoff and bounded-concurrency `EmbedBatch` execution with key-dedup.
 
 ## Scope
 - Build an ingest/search/generation server path for very large C++ codebases (UE5 scale).
@@ -86,7 +87,7 @@ Current runtime source decision:
 - Implement `LlamaCppEmbeddingProvider` (batch-capable).
 - Wire to Wax vector ingest path.
 - Add retries/timeouts and bounded concurrency.
-- Status: partially implemented (sync HTTP path + timeout + memoization + parser coverage; retries/concurrency controls pending).
+- Status: mostly implemented (sync HTTP path + timeout + memoization + parser coverage + retries/backoff + bounded batch concurrency).
 
 ### M6. WAL-Safe Massive Ingest
 - Batch ingest with periodic commit/checkpoint.

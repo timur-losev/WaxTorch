@@ -153,6 +153,12 @@ protected:
                                             "http://127.0.0.1:8081/embedding (default)"));
             logger.information("llama.cpp embedding dimensions: " +
                                EnvOrDefault("WAXCPP_LLAMA_EMBED_DIMS", "1024 (default)"));
+            logger.information("llama.cpp embedding max retries: " +
+                               EnvOrDefault("WAXCPP_LLAMA_EMBED_MAX_RETRIES", "2 (default)"));
+            logger.information("llama.cpp embedding retry backoff ms: " +
+                               EnvOrDefault("WAXCPP_LLAMA_EMBED_RETRY_BACKOFF_MS", "100 (default)"));
+            logger.information("llama.cpp embedding batch concurrency: " +
+                               EnvOrDefault("WAXCPP_LLAMA_EMBED_MAX_BATCH_CONCURRENCY", "4 (default)"));
         }
         if (runtime_config_path.has_value()) {
             logger.information("Runtime config file: " + runtime_config_path->string());

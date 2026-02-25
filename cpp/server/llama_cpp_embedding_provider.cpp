@@ -11,10 +11,15 @@
 #include <Poco/URI.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
+#include <unordered_map>
 #include <utility>
 
 namespace waxcpp::server {
@@ -136,6 +141,18 @@ LlamaCppEmbeddingProvider::LlamaCppEmbeddingProvider(LlamaCppEmbeddingProviderCo
   if (config_.dimensions <= 0) {
     throw std::runtime_error("llama.cpp embedding provider requires positive dimensions");
   }
+  if (config_.timeout_ms <= 0) {
+    throw std::runtime_error("llama.cpp embedding provider timeout must be positive");
+  }
+  if (config_.max_retries < 0) {
+    throw std::runtime_error("llama.cpp embedding provider max_retries must be >= 0");
+  }
+  if (config_.retry_backoff_ms < 0) {
+    throw std::runtime_error("llama.cpp embedding provider retry_backoff_ms must be >= 0");
+  }
+  if (config_.max_batch_concurrency <= 0) {
+    throw std::runtime_error("llama.cpp embedding provider max_batch_concurrency must be positive");
+  }
   if (config_.request_fn == nullptr && config_.endpoint.empty()) {
     throw std::runtime_error(
         "llama.cpp embedding provider requires endpoint or request_fn");
@@ -160,15 +177,11 @@ std::optional<waxcpp::EmbeddingIdentity> LlamaCppEmbeddingProvider::identity() c
 }
 
 std::vector<float> LlamaCppEmbeddingProvider::Embed(const std::string& text) {
-  if (config_.memoization_capacity > 0) {
-    std::lock_guard<std::mutex> lock(memoization_mutex_);
-    const auto it = memoized_embeddings_.find(text);
-    if (it != memoized_embeddings_.end()) {
-      return it->second;
-    }
+  if (auto cached = GetCachedEmbedding(text); !cached.empty()) {
+    return cached;
   }
 
-  auto embedding = FetchEmbedding(text);
+  auto embedding = FetchEmbeddingWithRetry(text);
   if (config_.normalize) {
     NormalizeL2(embedding);
   }
@@ -185,10 +198,97 @@ std::vector<float> LlamaCppEmbeddingProvider::Embed(const std::string& text) {
 }
 
 std::vector<std::vector<float>> LlamaCppEmbeddingProvider::EmbedBatch(const std::vector<std::string>& texts) {
-  std::vector<std::vector<float>> out{};
-  out.reserve(texts.size());
-  for (const auto& text : texts) {
-    out.push_back(Embed(text));
+  std::vector<std::vector<float>> out(texts.size());
+  std::unordered_map<std::string, std::vector<std::size_t>> missing_key_to_indexes{};
+  missing_key_to_indexes.reserve(texts.size());
+
+  for (std::size_t i = 0; i < texts.size(); ++i) {
+    if (auto cached = GetCachedEmbedding(texts[i]); !cached.empty()) {
+      out[i] = std::move(cached);
+      continue;
+    }
+    missing_key_to_indexes[texts[i]].push_back(i);
+  }
+
+  if (missing_key_to_indexes.empty()) {
+    return out;
+  }
+
+  std::vector<std::string> missing_keys{};
+  missing_keys.reserve(missing_key_to_indexes.size());
+  for (const auto& [key, _] : missing_key_to_indexes) {
+    missing_keys.push_back(key);
+  }
+  std::sort(missing_keys.begin(), missing_keys.end());
+
+  std::unordered_map<std::string, std::vector<float>> fetched_embeddings{};
+  fetched_embeddings.reserve(missing_keys.size());
+
+  const std::size_t worker_count =
+      std::min<std::size_t>(static_cast<std::size_t>(config_.max_batch_concurrency), missing_keys.size());
+  if (worker_count <= 1) {
+    for (const auto& key : missing_keys) {
+      auto embedding = FetchEmbeddingWithRetry(key);
+      if (config_.normalize) {
+        NormalizeL2(embedding);
+      }
+      fetched_embeddings.emplace(key, std::move(embedding));
+    }
+  } else {
+    std::mutex fetched_mutex{};
+    std::mutex error_mutex{};
+    std::exception_ptr first_error{};
+    std::atomic<std::size_t> cursor{0};
+
+    auto worker = [&]() {
+      while (true) {
+        const auto idx = cursor.fetch_add(1);
+        if (idx >= missing_keys.size()) {
+          break;
+        }
+        try {
+          auto embedding = FetchEmbeddingWithRetry(missing_keys[idx]);
+          if (config_.normalize) {
+            NormalizeL2(embedding);
+          }
+          {
+            std::lock_guard<std::mutex> lock(fetched_mutex);
+            fetched_embeddings.emplace(missing_keys[idx], std::move(embedding));
+          }
+        } catch (...) {
+          std::lock_guard<std::mutex> lock(error_mutex);
+          if (first_error == nullptr) {
+            first_error = std::current_exception();
+          }
+        }
+      }
+    };
+
+    std::vector<std::thread> workers{};
+    workers.reserve(worker_count);
+    for (std::size_t i = 0; i < worker_count; ++i) {
+      workers.emplace_back(worker);
+    }
+    for (auto& thread : workers) {
+      thread.join();
+    }
+    if (first_error != nullptr) {
+      std::rethrow_exception(first_error);
+    }
+  }
+
+  for (const auto& [key, indexes] : missing_key_to_indexes) {
+    const auto embedding_it = fetched_embeddings.find(key);
+    if (embedding_it == fetched_embeddings.end()) {
+      throw std::runtime_error("failed to fetch embedding for batch key");
+    }
+    if (config_.memoization_capacity > 0) {
+      std::lock_guard<std::mutex> lock(memoization_mutex_);
+      MemoizeLocked(key, embedding_it->second);
+    }
+    for (const auto index : indexes) {
+      out[index] = embedding_it->second;
+    }
   }
   return out;
 }
@@ -265,7 +365,46 @@ std::vector<float> LlamaCppEmbeddingProvider::FetchEmbedding(const std::string& 
   return ParseEmbeddingResponse(response_text.str(), config_.dimensions);
 }
 
+std::vector<float> LlamaCppEmbeddingProvider::FetchEmbeddingWithRetry(const std::string& text) const {
+  std::exception_ptr last_error{};
+  const int total_attempts = config_.max_retries + 1;
+  for (int attempt = 1; attempt <= total_attempts; ++attempt) {
+    try {
+      return FetchEmbedding(text);
+    } catch (...) {
+      last_error = std::current_exception();
+      if (attempt >= total_attempts) {
+        break;
+      }
+      if (config_.retry_backoff_ms > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(config_.retry_backoff_ms));
+      }
+    }
+  }
+  if (last_error != nullptr) {
+    std::rethrow_exception(last_error);
+  }
+  throw std::runtime_error("embedding retry failed without exception");
+}
+
+std::vector<float> LlamaCppEmbeddingProvider::GetCachedEmbedding(const std::string& key) const {
+  if (config_.memoization_capacity == 0) {
+    return {};
+  }
+  std::lock_guard<std::mutex> lock(memoization_mutex_);
+  const auto it = memoized_embeddings_.find(key);
+  if (it == memoized_embeddings_.end()) {
+    return {};
+  }
+  return it->second;
+}
+
 void LlamaCppEmbeddingProvider::MemoizeLocked(const std::string& key, const std::vector<float>& embedding) {
+  const auto existing = memoized_embeddings_.find(key);
+  if (existing != memoized_embeddings_.end()) {
+    existing->second = embedding;
+    return;
+  }
   while (memoized_embeddings_.size() >= config_.memoization_capacity && !memoization_order_.empty()) {
     const auto evicted_key = memoization_order_.front();
     memoization_order_.pop_front();

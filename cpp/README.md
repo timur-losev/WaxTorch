@@ -123,6 +123,12 @@ export WAXCPP_LLAMA_EMBED_ENDPOINT=http://127.0.0.1:8081/embedding
 export WAXCPP_LLAMA_EMBED_DIMS=1024
 # request timeout in milliseconds
 export WAXCPP_LLAMA_EMBED_TIMEOUT_MS=30000
+# retry count on transient failures (additional attempts)
+export WAXCPP_LLAMA_EMBED_MAX_RETRIES=2
+# fixed retry backoff in milliseconds
+export WAXCPP_LLAMA_EMBED_RETRY_BACKOFF_MS=100
+# max parallel workers for unique texts in EmbedBatch
+export WAXCPP_LLAMA_EMBED_MAX_BATCH_CONCURRENCY=4
 ```
 
 Example `server-runtime.json`:

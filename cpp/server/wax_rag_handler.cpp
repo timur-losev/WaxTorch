@@ -63,6 +63,23 @@ int ParsePositiveIntEnv(const char* name, int fallback) {
     }
 }
 
+int ParseNonNegativeIntEnv(const char* name, int fallback) {
+    const auto raw = EnvString(name);
+    if (!raw.has_value()) {
+        return fallback;
+    }
+    try {
+        std::size_t consumed = 0;
+        const int parsed = std::stoi(*raw, &consumed, 10);
+        if (consumed != raw->size() || parsed < 0) {
+            throw std::runtime_error("");
+        }
+        return parsed;
+    } catch (...) {
+        throw std::runtime_error(std::string("invalid non-negative integer env value for ") + name + ": " + *raw);
+    }
+}
+
 std::string ReadFileText(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
@@ -100,6 +117,10 @@ WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
         embedder_config.model_path = runtime_models_.embedding_model.model_path;
         embedder_config.dimensions = ParsePositiveIntEnv("WAXCPP_LLAMA_EMBED_DIMS", 1024);
         embedder_config.timeout_ms = ParsePositiveIntEnv("WAXCPP_LLAMA_EMBED_TIMEOUT_MS", 30000);
+        embedder_config.max_retries = ParseNonNegativeIntEnv("WAXCPP_LLAMA_EMBED_MAX_RETRIES", 2);
+        embedder_config.retry_backoff_ms = ParseNonNegativeIntEnv("WAXCPP_LLAMA_EMBED_RETRY_BACKOFF_MS", 100);
+        embedder_config.max_batch_concurrency =
+            ParsePositiveIntEnv("WAXCPP_LLAMA_EMBED_MAX_BATCH_CONCURRENCY", 4);
         embedder = std::make_shared<LlamaCppEmbeddingProvider>(std::move(embedder_config));
     }
 

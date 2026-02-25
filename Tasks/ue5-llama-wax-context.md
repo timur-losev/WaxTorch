@@ -70,6 +70,10 @@
      - `WAXCPP_LLAMA_EMBED_TIMEOUT_MS` (default `30000`)
 12. Added provider unit coverage:
    - `cpp/tests/unit/llama_cpp_embedding_provider_test.cpp`
+13. Extended provider robustness controls:
+   - retry/backoff in single-request path (`max_retries`, `retry_backoff_ms`)
+   - bounded-concurrency batch execution (`max_batch_concurrency`)
+   - batch dedup by text key to avoid duplicate HTTP calls
 
 ## Validation Rules Now Enforced
 1. `generation_model.runtime` must be `llama_cpp`.
@@ -80,10 +84,10 @@
 6. Vector-search enablement requires embedding runtime to be `llama_cpp` with `.gguf` path.
 
 ## Pending Next Steps
-1. Add retries/backoff and bounded-concurrency batch mode for llama embedding requests.
-2. Add end-to-end retrieval + answer path with citation metadata.
-3. Move long-running index execution off request thread (background worker + cancellation-safe stop).
-4. Add crash-window regression tests for interrupted index job across manifests/checkpoints.
+1. Add end-to-end retrieval + answer path with citation metadata.
+2. Move long-running index execution off request thread (background worker + cancellation-safe stop).
+3. Add crash-window regression tests for interrupted index job across manifests/checkpoints.
+4. Add rate-limit aware retry policy (e.g., `Retry-After`) and structured transport errors.
 
 ## Operational Notes
 1. Server now expects llama runtime root via:
