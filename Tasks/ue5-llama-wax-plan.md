@@ -38,7 +38,7 @@ Current runtime source decision:
   - `index.start` now accepts operational controls: `flush_every_chunks`, `max_files`, and `max_chunks`,
   - orchestrator ingest throttles can be tuned via env: `WAXCPP_ORCH_INGEST_CONCURRENCY`, `WAXCPP_ORCH_INGEST_BATCH_SIZE`,
   - UE5 scanner supports cancel callback; `index.stop` can interrupt scan phase before full traversal,
-  - added deterministic regressions for scanner-cancel path, capped-scan indexing path, capped-ingest (`max_chunks`) path, and interrupted-resume committed-watermark fallback path,
+  - added deterministic regressions for scanner-cancel path, capped-scan indexing path, capped-ingest (`max_chunks`) path, interrupted-resume committed-watermark fallback path, and repeated-run byte-identical chunk-manifest path,
   - added phase/progress logs for indexing pipeline (enabled via `WAXCPP_SERVER_LOG`),
   - `index.status` now exposes persisted `phase` for runtime introspection (`starting/scanning/ingesting/persisting_manifests/...`),
   - `index.status` now exposes runtime throughput metrics (`elapsed_ms`, `indexed_chunks_per_sec`, `committed_chunks_per_sec`).

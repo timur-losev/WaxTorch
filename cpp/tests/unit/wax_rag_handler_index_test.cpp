@@ -58,6 +58,19 @@ void WriteTextFile(const std::filesystem::path& path, const std::string& body) {
   }
 }
 
+std::string ReadTextFile(const std::filesystem::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    throw std::runtime_error("failed to open file for read: " + path.string());
+  }
+  std::ostringstream out;
+  out << in.rdbuf();
+  if (!in.good() && !in.eof()) {
+    throw std::runtime_error("failed to read file: " + path.string());
+  }
+  return out.str();
+}
+
 std::string MakeLargeCppBody(int lines) {
   std::ostringstream out;
   out << "#include <cstdint>\n\n";
@@ -478,6 +491,76 @@ void ScenarioResumeWithoutFileManifestSkipsCommittedWatermark() {
   ec.clear();
 }
 
+void ScenarioRepeatedRunsProduceIdenticalChunkManifest() {
+  waxcpp::tests::Log("scenario: repeated runs produce byte-identical chunk manifests");
+  const auto temp_root = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_repo_", "");
+  const auto first_store_path = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_store_first_", ".mv2s");
+  const auto second_store_path = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_store_second_", ".mv2s");
+  const auto first_checkpoint_path = std::filesystem::path(first_store_path.string() + ".index.checkpoint");
+  const auto second_checkpoint_path = std::filesystem::path(second_store_path.string() + ".index.checkpoint");
+  const auto first_scan_manifest = std::filesystem::path(first_checkpoint_path.string() + ".scan_manifest");
+  const auto first_chunk_manifest = std::filesystem::path(first_checkpoint_path.string() + ".chunk_manifest");
+  const auto first_file_manifest = std::filesystem::path(first_checkpoint_path.string() + ".file_manifest");
+  const auto second_scan_manifest = std::filesystem::path(second_checkpoint_path.string() + ".scan_manifest");
+  const auto second_chunk_manifest = std::filesystem::path(second_checkpoint_path.string() + ".chunk_manifest");
+  const auto second_file_manifest = std::filesystem::path(second_checkpoint_path.string() + ".file_manifest");
+
+  std::error_code ec;
+  std::filesystem::create_directories(temp_root, ec);
+  if (ec) {
+    throw std::runtime_error("failed to create test repo directory: " + temp_root.string());
+  }
+  WriteTextFile(temp_root / "A.h", "struct A { int x; };");
+  WriteTextFile(temp_root / "B.cpp", MakeLargeCppBody(120));
+  WriteTextFile(temp_root / "C.inl", "inline int CValue(int v) { return v * 2; }\n");
+
+  SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
+  const auto models = MakeRuntimeConfigForTests(temp_root);
+
+  auto run_and_read_manifest = [&](const std::filesystem::path& store_path,
+                                   const std::filesystem::path& chunk_manifest_path) {
+    waxcpp::server::WaxRAGHandler handler(store_path, models);
+    Poco::JSON::Object::Ptr start_params = new Poco::JSON::Object();
+    start_params->set("repo_root", temp_root.string());
+    start_params->set("resume", false);
+    start_params->set("flush_every_chunks", 1);
+    const auto start_raw = handler.handle_index_start(start_params);
+    Require(start_raw.rfind("Error:", 0) != 0, "index.start must not fail");
+    const auto done = WaitForTerminalState(handler, 25000);
+    Require(done.state == "stopped", "index run must stop");
+    Require(done.indexed_chunks > 0, "index run must ingest chunks");
+    Require(std::filesystem::exists(chunk_manifest_path), "chunk manifest must be created");
+    return std::make_pair(done.indexed_chunks, ReadTextFile(chunk_manifest_path));
+  };
+
+  const auto first = run_and_read_manifest(first_store_path, first_chunk_manifest);
+  const auto second = run_and_read_manifest(second_store_path, second_chunk_manifest);
+
+  Require(first.first == second.first, "repeated runs must produce same indexed chunk count");
+  Require(first.second == second.second, "repeated runs must produce byte-identical chunk manifest");
+
+  std::filesystem::remove_all(temp_root, ec);
+  ec.clear();
+  waxcpp::tests::CleanupStoreArtifacts(first_store_path);
+  waxcpp::tests::CleanupStoreArtifacts(second_store_path);
+  std::filesystem::remove(first_checkpoint_path, ec);
+  ec.clear();
+  std::filesystem::remove(first_scan_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(first_chunk_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(first_file_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(second_checkpoint_path, ec);
+  ec.clear();
+  std::filesystem::remove(second_scan_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(second_chunk_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(second_file_manifest, ec);
+  ec.clear();
+}
+
 void ScenarioMaxFilesCapsScanDeterministically() {
   waxcpp::tests::Log("scenario: index.start max_files caps deterministic scan set");
   const auto temp_root = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_repo_", "");
@@ -582,6 +665,7 @@ int main() {
     ScenarioResumeSkipsUnchangedFilesThenIndexesChangedFile();
     ScenarioInterruptedIndexResumesAfterHandlerRecreate();
     ScenarioResumeWithoutFileManifestSkipsCommittedWatermark();
+    ScenarioRepeatedRunsProduceIdenticalChunkManifest();
     ScenarioMaxFilesCapsScanDeterministically();
     ScenarioMaxChunksCapsIngestDeterministically();
     waxcpp::tests::Log("wax_rag_handler_index_test: finished");
