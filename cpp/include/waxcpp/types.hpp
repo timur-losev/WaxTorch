@@ -77,6 +77,9 @@ struct RAGContext {
   std::string query;
   std::vector<RAGItem> items;
   int total_tokens = 0;
+
+  /// Optional extracted answer span (populated by DeterministicAnswerExtractor).
+  std::string extracted_answer;
 };
 
 struct ChunkingStrategy {
@@ -109,6 +112,9 @@ struct FastRAGConfig {
   bool enable_answer_focused_ranking = true;
   int answer_rerank_window = 12;
   float answer_distractor_penalty = 0.30f;
+
+  /// Enable deterministic answer extraction as post-processing on RAGContext.
+  bool enable_answer_extraction = true;
 
   /// Enable query-aware tier selection (boosts tier for specific queries).
   bool enable_query_aware_tier_selection = true;

@@ -35,6 +35,7 @@ set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/maintenance.hpp
   include/waxcpp/surrogate_generator.hpp
   include/waxcpp/live_set_rewrite.hpp
+  include/waxcpp/embedding_memoizer.hpp
   include/waxcpp/text_chunker.hpp
   include/waxcpp/tier_selector.hpp
   include/waxcpp/token_counter.hpp
@@ -55,6 +56,7 @@ add_library(waxcpp STATIC
   src/vector/mv2v_format.cpp
   src/rag/access_stats.cpp
   src/rag/answer_extractor.cpp
+  src/rag/embedding_memoizer.cpp
   src/rag/importance_scorer.cpp
   src/rag/maintenance.cpp
   src/rag/query_analyzer.cpp
@@ -412,6 +414,16 @@ if (WAXCPP_BUILD_TESTS)
   target_precompile_headers(waxcpp_text_chunker_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_text_chunker_test COMMAND waxcpp_text_chunker_test)
 
+  add_executable(waxcpp_intent_rerank_test tests/unit/intent_rerank_test.cpp)
+  target_link_libraries(waxcpp_intent_rerank_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_intent_rerank_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_intent_rerank_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_intent_rerank_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_intent_rerank_test COMMAND waxcpp_intent_rerank_test)
+
   add_executable(waxcpp_tier_selector_test tests/unit/tier_selector_test.cpp)
   target_link_libraries(waxcpp_tier_selector_test PRIVATE waxcpp)
   if (MSVC)
@@ -421,6 +433,16 @@ if (WAXCPP_BUILD_TESTS)
   endif()
   target_precompile_headers(waxcpp_tier_selector_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_tier_selector_test COMMAND waxcpp_tier_selector_test)
+
+  add_executable(waxcpp_embedding_memoizer_test tests/unit/embedding_memoizer_test.cpp)
+  target_link_libraries(waxcpp_embedding_memoizer_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_embedding_memoizer_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_embedding_memoizer_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_embedding_memoizer_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_embedding_memoizer_test COMMAND waxcpp_embedding_memoizer_test)
 
   add_executable(waxcpp_mv2s_parity_test tests/parity/mv2s_fixture_parity_test.cpp)
   target_link_libraries(waxcpp_mv2s_parity_test PRIVATE waxcpp)

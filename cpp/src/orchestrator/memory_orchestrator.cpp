@@ -1225,7 +1225,14 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
     access_stats_.RecordAccesses(accessed_ids);
   }
 
-  return BuildFastRAGContext(req, response);
+  auto context = BuildFastRAGContext(req, response);
+
+  // Optional deterministic answer extraction as post-processing.
+  if (config_.rag.enable_answer_extraction && !context.items.empty()) {
+    context.extracted_answer = answer_extractor_.ExtractAnswer(query, context.items);
+  }
+
+  return context;
 }
 
 RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vector<float>& embedding) {
@@ -1272,7 +1279,14 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
     access_stats_.RecordAccesses(accessed_ids);
   }
 
-  return BuildFastRAGContext(req, response);
+  auto context = BuildFastRAGContext(req, response);
+
+  // Optional deterministic answer extraction as post-processing.
+  if (config_.rag.enable_answer_extraction && !context.items.empty()) {
+    context.extracted_answer = answer_extractor_.ExtractAnswer(query, context.items);
+  }
+
+  return context;
 }
 
 void MemoryOrchestrator::RememberFact(const std::string& entity,

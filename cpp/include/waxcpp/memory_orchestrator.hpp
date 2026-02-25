@@ -1,6 +1,7 @@
 #pragma once
 
 #include "waxcpp/access_stats.hpp"
+#include "waxcpp/answer_extractor.hpp"
 #include "waxcpp/embeddings.hpp"
 #include "waxcpp/fts5_search_engine.hpp"
 #include "waxcpp/tier_selector.hpp"
@@ -56,6 +57,7 @@ class MemoryOrchestrator {
   std::unique_ptr<USearchVectorEngine> vector_index_;
   AccessStatsManager access_stats_;
   SurrogateTierSelector tier_selector_;
+  DeterministicAnswerExtractor answer_extractor_;
   bool closed_ = false;
   mutable std::mutex mutex_{};
 };
