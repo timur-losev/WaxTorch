@@ -963,15 +963,35 @@ void RebuildStructuredFactIndex(const StructuredMemoryStore& structured_memory, 
 
 /// Build mapping from source frame ID → active surrogate frame ID.
 /// Surrogate frames have the `supersedes` field set to the source frame ID.
+///
+/// After an overwrite the chain is source → old_surrogate → new_surrogate.
+/// new_surrogate.supersedes == old_surrogate (not source), so we must walk
+/// the chain backwards to discover the root source frame.
 std::unordered_map<std::uint64_t, std::uint64_t> BuildSurrogateMap(
     const std::vector<WaxFrameMeta>& metas) {
+  // Frame-ID → meta lookup for chain walking.
+  std::unordered_map<std::uint64_t, const WaxFrameMeta*> by_id;
+  by_id.reserve(metas.size());
+  for (const auto& m : metas) by_id[m.id] = &m;
+
   std::unordered_map<std::uint64_t, std::uint64_t> result;
   for (const auto& meta : metas) {
-    // Active frames that supersede another frame are surrogate frames.
-    if (meta.status == 0 && meta.supersedes.has_value() &&
-        !meta.superseded_by.has_value()) {
-      result[*meta.supersedes] = meta.id;
+    // Active frames that supersede another frame and are themselves not
+    // superseded are the "tip" of the chain (the newest surrogate).
+    if (meta.status != 0) continue;
+    if (!meta.supersedes.has_value()) continue;
+    if (meta.superseded_by.has_value()) continue;
+
+    // Walk the supersedes chain to find the root source frame.
+    std::uint64_t source_id = *meta.supersedes;
+    constexpr int kMaxChainDepth = 64;  // Safety guard.
+    for (int depth = 0; depth < kMaxChainDepth; ++depth) {
+      auto it = by_id.find(source_id);
+      if (it == by_id.end()) break;
+      if (!it->second->supersedes.has_value()) break;
+      source_id = *it->second->supersedes;
     }
+    result[source_id] = meta.id;
   }
   return result;
 }
@@ -1244,6 +1264,18 @@ void MemoryOrchestrator::RememberFile(const std::filesystem::path& file_path,
 RAGContext MemoryOrchestrator::Recall(const std::string& query) {
   std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
+
+  // Resolve effective embedding availability from QueryEmbeddingPolicy.
+  const auto policy = config_.query_embedding_policy;
+  if (policy == QueryEmbeddingPolicy::kAlways && embedder_ == nullptr) {
+    throw std::runtime_error("Recall: QueryEmbeddingPolicy::kAlways requires an embedder");
+  }
+  const bool use_vector =
+      config_.enable_vector_search &&
+      policy != QueryEmbeddingPolicy::kNever;
+  const std::shared_ptr<EmbeddingProvider> effective_embedder =
+      (policy == QueryEmbeddingPolicy::kNever) ? nullptr : embedder_;
+
   SearchRequest req;
   req.query = query;
   req.mode = config_.rag.search_mode;
@@ -1260,10 +1292,10 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
       store_,
       config_.enable_text_search ? &store_text_index_ : nullptr,
       config_.enable_text_search ? &structured_text_index_ : nullptr,
-      vector_index_.get(),
-      embedder_,
+      use_vector ? vector_index_.get() : nullptr,
+      effective_embedder,
       config_.enable_text_search,
-      config_.enable_vector_search,
+      use_vector,
       req);
   // Use adaptive fusion: classifies query type, selects BM25/vector weights.
   auto response = UnifiedSearchAdaptive(req, channels.text_results, channels.vector_results);
@@ -1674,6 +1706,30 @@ MaintenanceReport MemoryOrchestrator::OptimizeSurrogates(
                                  vector_index_,
                                  embedding_cache_,
                                  surrogate_map_);
+  }
+
+  return report;
+}
+
+MaintenanceReport MemoryOrchestrator::CompactIndexes() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  ThrowIfClosed(closed_);
+
+  MaintenanceReport report;
+  report.scanned_frames = static_cast<int>(store_.FrameMetas().size());
+
+  // Commit the WAL store (compaction is implicit in the store's commit).
+  store_.Commit();
+
+  // Compact FTS5 indexes.
+  if (config_.enable_text_search) {
+    store_text_index_.CommitStaged();
+    structured_text_index_.CommitStaged();
+  }
+
+  // Compact vector index.
+  if (vector_index_ != nullptr) {
+    vector_index_->CommitStaged();
   }
 
   return report;

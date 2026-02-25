@@ -62,6 +62,10 @@ class MemoryOrchestrator {
   /// Run surrogate optimization on the store using the built-in generator.
   MaintenanceReport OptimizeSurrogates(const MaintenanceOptions& options = {});
 
+  /// Compact all indexes (FTS5 + vector) to reduce disk footprint.
+  /// Returns a lightweight report with scanned frame count.
+  MaintenanceReport CompactIndexes();
+
   void Flush();
   void Close();
 

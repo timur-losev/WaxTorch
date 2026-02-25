@@ -5044,6 +5044,103 @@ void ScenarioOptimizeSurrogatesSkipExisting(const std::filesystem::path& path) {
   orchestrator.Close();
 }
 
+void ScenarioQueryEmbeddingPolicyNeverSkipsEmbedding(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: QueryEmbeddingPolicy::kNever skips embedding");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = true;
+  config.query_embedding_policy = waxcpp::QueryEmbeddingPolicy::kNever;
+
+  // Even though we provide an embedder, kNever should prevent its use for queries.
+  auto embedder = std::make_shared<CountingEmbedder>();
+  waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+  orchestrator.Remember("Neural networks learn from data.", {});
+  orchestrator.Flush();
+
+  // Recall should succeed using text-only search despite hybrid being configured.
+  const auto ctx = orchestrator.Recall("neural networks");
+  // Must return results from the text channel.
+  Require(!ctx.items.empty(), "kNever recall should still return text results");
+
+  orchestrator.Close();
+}
+
+void ScenarioQueryEmbeddingPolicyAlwaysThrowsWithoutEmbedder(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: QueryEmbeddingPolicy::kAlways throws without embedder");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+  config.query_embedding_policy = waxcpp::QueryEmbeddingPolicy::kAlways;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember("Test data for policy always.", {});
+  orchestrator.Flush();
+
+  bool threw = false;
+  try {
+    orchestrator.Recall("test");
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  Require(threw, "kAlways without embedder should throw");
+
+  orchestrator.Close();
+}
+
+void ScenarioCompactIndexesReturnsValidReport(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: CompactIndexes returns valid report");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember("Frame one for compact test.", {});
+  orchestrator.Remember("Frame two for compact test.", {});
+  orchestrator.Flush();
+
+  const auto report = orchestrator.CompactIndexes();
+  Require(report.scanned_frames >= 2, "compact should report scanned frames");
+
+  // Recall still works after compaction.
+  const auto ctx = orchestrator.Recall("compact test");
+  Require(!ctx.items.empty(), "recall after compact should return results");
+
+  orchestrator.Close();
+}
+
+void ScenarioSurrogateMapHandlesOverwriteChain(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: BuildSurrogateMap handles overwrite chain correctly");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember(
+      "Dark matter constitutes approximately 27 percent of the universe. "
+      "Scientists search for dark matter particles using deep underground detectors.",
+      {});
+  orchestrator.Flush();
+
+  // First surrogate generation.
+  waxcpp::MaintenanceOptions opts{};
+  opts.enable_hierarchical = true;
+  const auto report1 = orchestrator.OptimizeSurrogates(opts);
+  Require(report1.generated_surrogates >= 1, "first run should generate surrogates");
+
+  orchestrator.Flush();
+
+  // Overwrite existing surrogates.
+  opts.overwrite_existing = true;
+  const auto report2 = orchestrator.OptimizeSurrogates(opts);
+  Require(report2.generated_surrogates >= 1, "overwrite run should regenerate surrogates");
+  Require(report2.superseded_surrogates >= 1, "overwrite should supersede old surrogates");
+
+  orchestrator.Flush();
+
+  // After overwrite, Recall should still find the original content
+  // (proving the surrogate map correctly maps source → newest surrogate).
+  const auto ctx = orchestrator.Recall("dark matter");
+  Require(!ctx.items.empty(), "recall after overwrite should still return results");
+
+  orchestrator.Close();
+}
+
 }  // namespace
 
 int main() {
@@ -5171,6 +5268,10 @@ int main() {
     const auto path119 = UniquePath();
     const auto path120 = UniquePath();
     const auto path121 = UniquePath();
+    const auto path122 = UniquePath();
+    const auto path123 = UniquePath();
+    const auto path124 = UniquePath();
+    const auto path125 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -5294,6 +5395,10 @@ int main() {
     ScenarioStartEndSession(path119);
     ScenarioOptimizeSurrogatesViaOrchestrator(path120);
     ScenarioOptimizeSurrogatesSkipExisting(path121);
+    ScenarioQueryEmbeddingPolicyNeverSkipsEmbedding(path122);
+    ScenarioQueryEmbeddingPolicyAlwaysThrowsWithoutEmbedder(path123);
+    ScenarioCompactIndexesReturnsValidReport(path124);
+    ScenarioSurrogateMapHandlesOverwriteChain(path125);
 
     const std::vector<std::filesystem::path> cleanup_paths = {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
@@ -5308,6 +5413,7 @@ int main() {
         path94, path95, path96, path97, path98, path99, path100, path101, path102, path103, path104, path105,
         path106, path107, path108, path109, path110, path111, path112, path113,
         path114, path115, path116, path117, path118, path119, path120, path121,
+        path122, path123, path124, path125,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

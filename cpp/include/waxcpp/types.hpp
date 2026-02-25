@@ -127,6 +127,15 @@ struct FastRAGConfig {
   std::optional<std::int64_t> deterministic_now_ms;
 };
 
+// ── Query embedding policy ───────────────────────────────────
+
+/// Controls whether the orchestrator computes a query embedding during Recall.
+enum class QueryEmbeddingPolicy {
+  kNever,        // Never compute a query embedding; use text search only.
+  kIfAvailable,  // Use embedding if an embedder is available (default).
+  kAlways,       // Require an embedder; throw if unavailable.
+};
+
 // ── Direct search types ──────────────────────────────────────
 
 /// Direct search mode for raw candidate retrieval without RAG context assembly.
@@ -163,6 +172,7 @@ struct RuntimeStats {
 struct OrchestratorConfig {
   bool enable_text_search = true;
   bool enable_vector_search = true;
+  QueryEmbeddingPolicy query_embedding_policy = QueryEmbeddingPolicy::kIfAvailable;
   FastRAGConfig rag{};
   ChunkingStrategy chunking{};
   int ingest_concurrency = 1;
