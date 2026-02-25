@@ -39,7 +39,8 @@ Current runtime source decision:
   - UE5 scanner supports cancel callback; `index.stop` can interrupt scan phase before full traversal,
   - added deterministic regressions for scanner-cancel path and capped-scan indexing path,
   - added phase/progress logs for indexing pipeline (enabled via `WAXCPP_SERVER_LOG`),
-  - `index.status` now exposes persisted `phase` for runtime introspection (`starting/scanning/ingesting/persisting_manifests/...`).
+  - `index.status` now exposes persisted `phase` for runtime introspection (`starting/scanning/ingesting/persisting_manifests/...`),
+  - `index.status` now exposes runtime throughput metrics (`elapsed_ms`, `indexed_chunks_per_sec`, `committed_chunks_per_sec`).
 
 ## Scope
 - Build an ingest/search/generation server path for very large C++ codebases (UE5 scale).

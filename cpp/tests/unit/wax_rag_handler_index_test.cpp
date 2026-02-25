@@ -208,6 +208,16 @@ void ScenarioIndexCompleteWritesManifests() {
   const auto view = WaitForTerminalState(handler, 20000);
   Require(view.state == "stopped", "index job must eventually complete");
   Require(view.indexed_chunks > 0, "index job must ingest at least one chunk");
+  const auto status_raw = handler.handle_index_status(Poco::JSON::Object::Ptr{});
+  Require(status_raw.rfind("Error:", 0) != 0, "index.status must not fail");
+  const auto status_json = ParseObject(status_raw);
+  Require(status_json->has("elapsed_ms"), "index.status must expose elapsed_ms");
+  Require(status_json->has("indexed_chunks_per_sec"), "index.status must expose indexed_chunks_per_sec");
+  Require(status_json->has("committed_chunks_per_sec"), "index.status must expose committed_chunks_per_sec");
+  Require(status_json->optValue<double>("indexed_chunks_per_sec", -1.0) >= 0.0,
+          "indexed_chunks_per_sec must be non-negative");
+  Require(status_json->optValue<double>("committed_chunks_per_sec", -1.0) >= 0.0,
+          "committed_chunks_per_sec must be non-negative");
   Require(std::filesystem::exists(scan_manifest), "scan manifest must exist");
   Require(std::filesystem::exists(chunk_manifest), "chunk manifest must exist");
   Require(std::filesystem::exists(file_manifest), "file manifest must exist");

@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 #include <iostream>
+#include <chrono>
 
 namespace waxcpp::server {
 
@@ -142,6 +143,11 @@ void ServerLog(std::string_view message) {
         return;
     }
     std::cerr << "[waxcpp-server] " << message << "\n";
+}
+
+std::uint64_t NowMs() {
+    const auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
+    return static_cast<std::uint64_t>(now.time_since_epoch().count());
 }
 
 struct CitationInfo {
@@ -801,6 +807,19 @@ std::string WaxRAGHandler::make_index_status_json(const IndexJobStatus& status) 
     response.set("committed_chunks", status.committed_chunks);
     response.set("resume_requested", status.resume_requested);
     response.set("last_error", status.last_error.value_or(""));
+    const std::uint64_t now_ms = NowMs();
+    const std::uint64_t elapsed_ms = (status.started_at_ms > 0 && now_ms >= status.started_at_ms)
+                                         ? (now_ms - status.started_at_ms)
+                                         : 0;
+    response.set("elapsed_ms", elapsed_ms);
+    if (elapsed_ms > 0) {
+        const double seconds = static_cast<double>(elapsed_ms) / 1000.0;
+        response.set("indexed_chunks_per_sec", static_cast<double>(status.indexed_chunks) / seconds);
+        response.set("committed_chunks_per_sec", static_cast<double>(status.committed_chunks) / seconds);
+    } else {
+        response.set("indexed_chunks_per_sec", 0.0);
+        response.set("committed_chunks_per_sec", 0.0);
+    }
 
     std::ostringstream out;
     response.stringify(out);
