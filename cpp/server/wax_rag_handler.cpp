@@ -1,21 +1,39 @@
 // cpp/server/wax_rag_handler.cpp
 #include "wax_rag_handler.hpp"
+#include "runtime_config.hpp"
 
 #include <Poco/Exception.h>
 #include <Poco/JSON/Array.h>
 #include <Poco/JSON/Object.h>
 
 #include <sstream>
+#include <stdexcept>
+#include <utility>
 
 namespace waxcpp::server {
 
-WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path) {
+WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
+                             waxcpp::RuntimeModelsConfig runtime_models)
+    : runtime_models_(std::move(runtime_models)) {
+    if (runtime_models_.generation_model.runtime.empty() &&
+        runtime_models_.generation_model.model_path.empty() &&
+        runtime_models_.embedding_model.runtime.empty() &&
+        runtime_models_.embedding_model.model_path.empty() &&
+        runtime_models_.llama_cpp_root.empty() &&
+        !runtime_models_.enable_vector_search) {
+        runtime_models_ = DefaultServerRuntimeConfig().models;
+    }
+    waxcpp::ValidateRuntimeModelsConfig(runtime_models_);
     waxcpp::OrchestratorConfig config{};
-    // Server baseline uses text-only path by default; vector can be enabled later
-    // once embedder runtime wiring is configured.
-    config.enable_vector_search = false;
+    config.enable_vector_search = runtime_models_.enable_vector_search;
     config.require_on_device_providers = false;
-    orchestrator_ = std::make_unique<waxcpp::MemoryOrchestrator>(store_path, config);
+
+    if (runtime_models_.enable_vector_search) {
+        throw std::runtime_error(
+            "vector search requested, but llama.cpp embedding provider wiring is not enabled yet");
+    }
+
+    orchestrator_ = std::make_unique<waxcpp::MemoryOrchestrator>(store_path, config, nullptr);
 }
 
 std::string WaxRAGHandler::handle_remember(const Poco::JSON::Object::Ptr& params) {

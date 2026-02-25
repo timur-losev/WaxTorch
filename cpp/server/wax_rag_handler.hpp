@@ -2,6 +2,7 @@
 #pragma once
 
 #include "../include/waxcpp/memory_orchestrator.hpp"
+#include "../include/waxcpp/runtime_model_config.hpp"
 #include "json_rpc.hpp"
 
 #include <Poco/JSON/Object.h>
@@ -14,7 +15,9 @@ namespace waxcpp::server {
 
 class WaxRAGHandler {
 public:
-    explicit WaxRAGHandler(const std::filesystem::path& store_path = "wax-server.mv2s");
+    explicit WaxRAGHandler(
+        const std::filesystem::path& store_path = "wax-server.mv2s",
+        waxcpp::RuntimeModelsConfig runtime_models = {});
     
     // Обработчики JSON-RPC методов
     std::string handle_remember(const Poco::JSON::Object::Ptr& params);
@@ -23,6 +26,7 @@ public:
 
 private:
     std::unique_ptr<waxcpp::MemoryOrchestrator> orchestrator_;
+    waxcpp::RuntimeModelsConfig runtime_models_{};
     std::mutex mutex_;
 };
 

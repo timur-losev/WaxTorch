@@ -31,6 +31,7 @@ set(WAXCPP_PUBLIC_HEADERS
   include/waxcpp/mv2v_format.hpp
   include/waxcpp/pch.hpp
   include/waxcpp/query_analyzer.hpp
+  include/waxcpp/runtime_model_config.hpp
   include/waxcpp/search.hpp
   include/waxcpp/maintenance.hpp
   include/waxcpp/surrogate_generator.hpp
@@ -61,6 +62,7 @@ add_library(waxcpp STATIC
   src/rag/importance_scorer.cpp
   src/rag/maintenance.cpp
   src/rag/query_analyzer.cpp
+  src/rag/runtime_model_config.cpp
   src/rag/search.cpp
   src/rag/surrogate_generator.cpp
   src/rag/text_chunker.cpp
@@ -306,6 +308,16 @@ if (WAXCPP_BUILD_TESTS)
   endif()
   target_precompile_headers(waxcpp_search_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_search_test COMMAND waxcpp_search_test)
+
+  add_executable(waxcpp_runtime_model_config_test tests/unit/runtime_model_config_test.cpp)
+  target_link_libraries(waxcpp_runtime_model_config_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_runtime_model_config_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_runtime_model_config_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_runtime_model_config_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_runtime_model_config_test COMMAND waxcpp_runtime_model_config_test)
 
   add_executable(waxcpp_structured_memory_store_test tests/unit/structured_memory_store_test.cpp)
   target_link_libraries(waxcpp_structured_memory_store_test PRIVATE waxcpp)

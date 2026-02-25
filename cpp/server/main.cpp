@@ -1,5 +1,6 @@
 // cpp/server/main.cpp
 #include "wax_rag_handler.hpp"
+#include "runtime_config.hpp"
 #include <Poco/Net/HTTPServer.h>
 #include <Poco/Net/HTTPRequestHandlerFactory.h>
 #include <Poco/Net/HTTPRequestHandler.h>
@@ -15,6 +16,7 @@
 #include <Poco/PatternFormatter.h>
 #include <iterator>
 #include <iostream>
+#include <string>
 
 using namespace Poco::Net;
 using namespace Poco::Util;
@@ -97,9 +99,28 @@ protected:
         params->setMaxQueued(maxQueue);
         params->setMaxThreads(maxThreads);
 
+        auto runtime_config_path = waxcpp::server::ResolveServerRuntimeConfigPathFromEnv();
+        auto runtime_config = waxcpp::server::LoadServerRuntimeConfig(runtime_config_path);
+        logger.information("Generation runtime: " + runtime_config.models.generation_model.runtime);
+        logger.information("Generation model: " + runtime_config.models.generation_model.model_path);
+        logger.information("Embedding runtime: " + runtime_config.models.embedding_model.runtime);
+        logger.information("Embedding model: " +
+                           (runtime_config.models.embedding_model.model_path.empty()
+                                ? std::string("(disabled)")
+                                : runtime_config.models.embedding_model.model_path));
+        logger.information("llama.cpp root: " +
+                           (runtime_config.models.llama_cpp_root.empty()
+                                ? std::string("(not set)")
+                                : runtime_config.models.llama_cpp_root));
+        logger.information("Vector search enabled: " +
+                           std::string(runtime_config.models.enable_vector_search ? "true" : "false"));
+        if (runtime_config_path.has_value()) {
+            logger.information("Runtime config file: " + runtime_config_path->string());
+        }
+
         // Инициализация WAX
         logger.information("Initializing WAX orchestrator...");
-        waxcpp::server::WaxRAGHandler handler;
+        waxcpp::server::WaxRAGHandler handler("wax-server.mv2s", runtime_config.models);
         logger.information("WAX orchestrator initialized");
 
         // Запуск сервера
