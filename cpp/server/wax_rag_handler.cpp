@@ -22,6 +22,13 @@
 #include <vector>
 #include <iostream>
 #include <chrono>
+#if defined(_WIN32)
+#include <windows.h>
+#include <psapi.h>
+#pragma comment(lib, "Psapi.lib")
+#elif defined(__linux__)
+#include <unistd.h>
+#endif
 
 namespace waxcpp::server {
 
@@ -150,6 +157,37 @@ void ServerLog(std::string_view message) {
 std::uint64_t NowMs() {
     const auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
     return static_cast<std::uint64_t>(now.time_since_epoch().count());
+}
+
+std::optional<std::uint64_t> CurrentProcessRSSBytes() {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    if (!GetProcessMemoryInfo(GetCurrentProcess(),
+                              reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                              sizeof(counters))) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint64_t>(counters.WorkingSetSize);
+#elif defined(__linux__)
+    std::ifstream statm("/proc/self/statm", std::ios::in);
+    if (!statm) {
+        return std::nullopt;
+    }
+    std::uint64_t resident_pages = 0;
+    std::uint64_t ignored_pages = 0;
+    statm >> ignored_pages >> resident_pages;
+    (void)ignored_pages;
+    if (!statm) {
+        return std::nullopt;
+    }
+    const long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0) {
+        return std::nullopt;
+    }
+    return resident_pages * static_cast<std::uint64_t>(page_size);
+#else
+    return std::nullopt;
+#endif
 }
 
 struct CitationInfo {
@@ -542,9 +580,33 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                 << " resume=" << (resume_requested ? "true" : "false")
                 << " flush_every_chunks=" << options.flush_every_chunks
                 << " max_files=" << options.max_files
-                << " max_chunks=" << options.max_chunks;
+                << " max_chunks=" << options.max_chunks
+                << " max_ram_mb=" << options.max_ram_mb;
             ServerLog(msg.str());
         }
+        const std::uint64_t max_ram_bytes = options.max_ram_mb * 1024ULL * 1024ULL;
+        bool logged_missing_rss_probe = false;
+        auto enforce_memory_cap = [&]() {
+            if (max_ram_bytes == 0) {
+                return;
+            }
+            const auto rss_bytes = CurrentProcessRSSBytes();
+            if (!rss_bytes.has_value()) {
+                if (!logged_missing_rss_probe) {
+                    ServerLog("process RSS probe unavailable; max_ram_mb cap ignored");
+                    logged_missing_rss_probe = true;
+                }
+                return;
+            }
+            if (*rss_bytes > max_ram_bytes) {
+                std::ostringstream error;
+                error << "index max_ram_mb exceeded: rss_bytes=" << *rss_bytes
+                      << " limit_bytes=" << max_ram_bytes;
+                throw std::runtime_error(error.str());
+            }
+        };
+
+        enforce_memory_cap();
         (void)index_job_manager_.SetPhase("scanning");
         const auto repo_root_path = std::filesystem::path(repo_root);
         auto entries = ue5_scanner_.Scan(repo_root_path, is_cancelled);
@@ -612,6 +674,7 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                 if (is_cancelled()) {
                     return;
                 }
+                enforce_memory_cap();
                 if (resume_requested && unchanged_paths.contains(chunk.relative_path)) {
                     return;
                 }
@@ -743,6 +806,7 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
         ParsePositiveIntParam(params, "flush_every_chunks", static_cast<int>(kIndexFlushEveryChunks));
     const int max_files_param = ParseNonNegativeIntParam(params, "max_files", 0);
     const int max_chunks_param = ParseNonNegativeIntParam(params, "max_chunks", 0);
+    const int max_ram_mb_param = ParseNonNegativeIntParam(params, "max_ram_mb", 0);
     if (flush_every_chunks_param <= 0 ||
         static_cast<std::uint64_t>(flush_every_chunks_param) > kMaxIndexControlValue) {
         return "Error: flush_every_chunks must be within [1, 1000000]";
@@ -753,10 +817,14 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
     if (max_chunks_param < 0 || static_cast<std::uint64_t>(max_chunks_param) > kMaxIndexControlValue) {
         return "Error: max_chunks must be within [0, 1000000]";
     }
+    if (max_ram_mb_param < 0 || static_cast<std::uint64_t>(max_ram_mb_param) > kMaxIndexControlValue) {
+        return "Error: max_ram_mb must be within [0, 1000000]";
+    }
     const IndexRunOptions options{
         .flush_every_chunks = static_cast<std::uint64_t>(flush_every_chunks_param),
         .max_files = static_cast<std::uint64_t>(max_files_param),
         .max_chunks = static_cast<std::uint64_t>(max_chunks_param),
+        .max_ram_mb = static_cast<std::uint64_t>(max_ram_mb_param),
     };
 
     try {
