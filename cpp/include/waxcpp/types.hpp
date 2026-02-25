@@ -3,6 +3,7 @@
 #include "waxcpp/live_set_rewrite.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -125,6 +126,39 @@ struct FastRAGConfig {
   /// When nullopt, uses wall clock time.
   std::optional<std::int64_t> deterministic_now_ms;
 };
+
+// ── Direct search types ──────────────────────────────────────
+
+/// Direct search mode for raw candidate retrieval without RAG context assembly.
+enum class DirectSearchMode {
+  kText,     // Text-only search (FTS5).
+  kHybrid,   // Text + vector fusion.
+};
+
+/// A single raw search hit returned by Search().
+struct MemorySearchHit {
+  std::uint64_t frame_id = 0;
+  float score = 0.0f;
+  std::optional<std::string> preview_text;
+  std::vector<SearchSource> sources;
+};
+
+// ── Runtime stats ────────────────────────────────────────────
+
+/// Forward-declare WaxWALStats (defined in wax_store.hpp) to avoid circular include.
+struct WaxWALStats;
+
+/// Lightweight runtime statistics DTO for operators and diagnostics.
+struct RuntimeStats {
+  std::uint64_t frame_count = 0;
+  std::uint64_t pending_frames = 0;
+  std::uint64_t generation = 0;
+  std::filesystem::path store_path;
+  bool vector_search_enabled = false;
+  std::string embedder_identity;
+};
+
+// ── Orchestrator config ──────────────────────────────────────
 
 struct OrchestratorConfig {
   bool enable_text_search = true;

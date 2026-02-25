@@ -1,8 +1,10 @@
 #include "waxcpp/memory_orchestrator.hpp"
 #include "waxcpp/fts5_search_engine.hpp"
 #include "waxcpp/live_set_rewrite.hpp"
+#include "waxcpp/maintenance.hpp"
 #include "waxcpp/query_analyzer.hpp"
 #include "waxcpp/search.hpp"
+#include "waxcpp/surrogate_generator.hpp"
 #include "waxcpp/text_chunker.hpp"
 #include "waxcpp/token_counter.hpp"
 
@@ -19,6 +21,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <stdexcept>
 #include <span>
 #include <string_view>
@@ -1135,6 +1138,13 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
   std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
   last_write_activity_ms_ = NowMs();
+
+  // Stamp session ID if active.
+  Metadata effective_meta = metadata;
+  if (!current_session_id_.empty()) {
+    effective_meta["session_id"] = current_session_id_;
+  }
+
   EnsureEmbedderRequiredForRemember(config_, embedder_);
   // Use TextChunker for BPE-aware chunking (falls back to whitespace when
   // token counter is unavailable).
@@ -1171,7 +1181,7 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
     for (const char ch : chunk) {
       payload.push_back(static_cast<std::byte>(static_cast<unsigned char>(ch)));
     }
-    const auto frame_id = store_.Put(payload, metadata);
+    const auto frame_id = store_.Put(payload, effective_meta);
     if (config_.enable_text_search) {
       store_text_index_.StageIndex(frame_id, chunk);
     }
@@ -1370,8 +1380,15 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
   if (attribute.empty()) {
     throw std::runtime_error("RememberFact attribute must be non-empty");
   }
-  const auto payload = BuildStructuredFactUpsertPayload(entity, attribute, value, metadata);
-  const auto fact_id = structured_memory_.StageUpsert(entity, attribute, value, metadata);
+
+  // Stamp session ID if active.
+  Metadata effective_meta = metadata;
+  if (!current_session_id_.empty()) {
+    effective_meta["session_id"] = current_session_id_;
+  }
+
+  const auto payload = BuildStructuredFactUpsertPayload(entity, attribute, value, effective_meta);
+  const auto fact_id = structured_memory_.StageUpsert(entity, attribute, value, effective_meta);
   if (config_.enable_text_search) {
     StructuredMemoryEntry preview_entry{};
     preview_entry.id = fact_id;
@@ -1380,7 +1397,7 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
     preview_entry.value = value;
     structured_text_index_.StageIndex(kStructuredMemoryFrameIdBase + fact_id, StructuredFactPreviewText(preview_entry));
   }
-  (void)store_.Put(payload, {});
+  (void)store_.Put(payload, effective_meta);
 }
 
 bool MemoryOrchestrator::ForgetFact(const std::string& entity, const std::string& attribute) {
@@ -1506,6 +1523,163 @@ void MemoryOrchestrator::Flush() {
     throw;
   }
 }
+
+// ── Search (direct, without RAG assembly) ───────────────────
+
+std::vector<MemorySearchHit> MemoryOrchestrator::Search(
+    const std::string& query,
+    DirectSearchMode mode,
+    float hybrid_alpha,
+    int top_k) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  ThrowIfClosed(closed_);
+  if (top_k <= 0) return {};
+
+  // Trim whitespace.
+  std::string_view sv{query};
+  while (!sv.empty() && IsAsciiWhitespace(sv.front())) sv.remove_prefix(1);
+  while (!sv.empty() && IsAsciiWhitespace(sv.back())) sv.remove_suffix(1);
+  if (sv.empty()) return {};
+  const std::string trimmed{sv};
+
+  // Determine search mode.
+  SearchMode search_mode;
+  switch (mode) {
+    case DirectSearchMode::kText:
+      search_mode = {SearchModeKind::kTextOnly, 0.0f};
+      break;
+    case DirectSearchMode::kHybrid: {
+      const float clamped_alpha = std::min(1.0f, std::max(0.0f, hybrid_alpha));
+      if (config_.enable_vector_search && embedder_ != nullptr) {
+        search_mode = {SearchModeKind::kHybrid, clamped_alpha};
+      } else {
+        // Fall back to text-only when vector is unavailable.
+        search_mode = {SearchModeKind::kTextOnly, 0.0f};
+      }
+      break;
+    }
+  }
+
+  // Build search request.
+  SearchRequest req;
+  req.query = trimmed;
+  req.mode = search_mode;
+  req.top_k = top_k;
+  req.rrf_k = config_.rag.rrf_k;
+  req.preview_max_bytes = config_.rag.preview_max_bytes;
+
+  // BuildStoreChannels will compute query embedding internally if needed.
+  const auto channels = BuildStoreChannels(
+      store_,
+      config_.enable_text_search ? &store_text_index_ : nullptr,
+      config_.enable_text_search ? &structured_text_index_ : nullptr,
+      vector_index_.get(),
+      embedder_,
+      config_.enable_text_search,
+      config_.enable_vector_search,
+      req);
+
+  auto response = UnifiedSearchAdaptive(req, channels.text_results, channels.vector_results);
+
+  // Convert to MemorySearchHit.
+  std::vector<MemorySearchHit> hits;
+  hits.reserve(response.results.size());
+  for (const auto& r : response.results) {
+    MemorySearchHit hit;
+    hit.frame_id = r.frame_id;
+    hit.score = r.score;
+    hit.preview_text = r.preview_text;
+    hit.sources = r.sources;
+    hits.push_back(std::move(hit));
+  }
+  return hits;
+}
+
+// ── RuntimeStats ─────────────────────────────────────────────
+
+RuntimeStats MemoryOrchestrator::GetRuntimeStats() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  RuntimeStats stats;
+  const auto store_stats = store_.Stats();
+  stats.frame_count = store_stats.frame_count;
+  stats.pending_frames = store_stats.pending_frames;
+  stats.generation = store_stats.generation;
+  stats.store_path = store_.Path();
+  stats.vector_search_enabled = config_.enable_vector_search && (embedder_ != nullptr);
+  if (embedder_ != nullptr) {
+    const auto ident = embedder_->identity();
+    if (ident.has_value()) {
+      std::string id_str;
+      if (ident->provider.has_value()) id_str += *ident->provider;
+      if (ident->model.has_value()) {
+        if (!id_str.empty()) id_str += "/";
+        id_str += *ident->model;
+      }
+      stats.embedder_identity = id_str;
+    }
+  }
+  return stats;
+}
+
+// ── Session tagging ──────────────────────────────────────────
+
+namespace {
+
+std::string GenerateSessionId() {
+  static thread_local std::mt19937_64 rng{std::random_device{}()};
+  std::uniform_int_distribution<unsigned> dist(0, 15);
+  const char hex[] = "0123456789abcdef";
+  // 8-4-4-4-12 = 32 hex chars + 4 dashes
+  std::string out;
+  out.reserve(36);
+  for (int i = 0; i < 32; ++i) {
+    if (i == 8 || i == 12 || i == 16 || i == 20) out.push_back('-');
+    out.push_back(hex[dist(rng)]);
+  }
+  return out;
+}
+
+}  // namespace
+
+std::string MemoryOrchestrator::StartSession() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  current_session_id_ = GenerateSessionId();
+  return current_session_id_;
+}
+
+void MemoryOrchestrator::EndSession() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  current_session_id_.clear();
+}
+
+// ── OptimizeSurrogates ───────────────────────────────────────
+
+MaintenanceReport MemoryOrchestrator::OptimizeSurrogates(
+    const MaintenanceOptions& options) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  ThrowIfClosed(closed_);
+
+  ExtractiveSurrogateGenerator generator{token_counter_};
+  auto report = waxcpp::OptimizeSurrogates(store_, generator, options);
+
+  // Rebuild runtime state to pick up new surrogate frames and update the surrogate map.
+  if (report.generated_surrogates > 0 || report.superseded_surrogates > 0) {
+    RebuildRuntimeStateFromStore(store_,
+                                 config_,
+                                 embedder_,
+                                 structured_memory_,
+                                 store_text_index_,
+                                 structured_text_index_,
+                                 vector_index_,
+                                 embedding_cache_,
+                                 surrogate_map_);
+  }
+
+  return report;
+}
+
+// ── Close ────────────────────────────────────────────────────
 
 void MemoryOrchestrator::Close() {
   std::lock_guard<std::mutex> lock(mutex_);

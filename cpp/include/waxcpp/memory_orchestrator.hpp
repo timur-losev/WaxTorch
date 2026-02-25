@@ -5,6 +5,7 @@
 #include "waxcpp/embedding_memoizer.hpp"
 #include "waxcpp/embeddings.hpp"
 #include "waxcpp/fts5_search_engine.hpp"
+#include "waxcpp/maintenance.hpp"
 #include "waxcpp/tier_selector.hpp"
 #include "waxcpp/token_counter.hpp"
 #include "waxcpp/types.hpp"
@@ -40,6 +41,27 @@ class MemoryOrchestrator {
   bool ForgetFact(const std::string& entity, const std::string& attribute);
   std::vector<StructuredMemoryEntry> RecallFactsByEntityPrefix(const std::string& entity_prefix, int limit = 32);
 
+  /// Direct search: raw candidate retrieval without RAG context assembly.
+  /// Returns ranked hits suitable for MCP and other raw-search callers.
+  std::vector<MemorySearchHit> Search(
+      const std::string& query,
+      DirectSearchMode mode = DirectSearchMode::kHybrid,
+      float hybrid_alpha = 0.5f,
+      int top_k = 10);
+
+  /// Returns lightweight runtime statistics for operators and diagnostics.
+  RuntimeStats GetRuntimeStats() const;
+
+  /// Begin a tagged session; returns the session ID string.
+  /// All subsequent Remember/RememberFact calls stamp this ID.
+  std::string StartSession();
+
+  /// End the current tagged session.
+  void EndSession();
+
+  /// Run surrogate optimization on the store using the built-in generator.
+  MaintenanceReport OptimizeSurrogates(const MaintenanceOptions& options = {});
+
   void Flush();
   void Close();
 
@@ -66,6 +88,9 @@ class MemoryOrchestrator {
   DeterministicAnswerExtractor answer_extractor_;
   /// Maps source frame ID → active surrogate frame ID.
   std::unordered_map<std::uint64_t, std::uint64_t> surrogate_map_;
+
+  /// Session tagging.
+  std::string current_session_id_;
 
   /// Maintenance bookkeeping.
   std::uint64_t flush_count_ = 0;

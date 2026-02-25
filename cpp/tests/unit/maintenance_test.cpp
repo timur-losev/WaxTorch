@@ -382,15 +382,11 @@ void ScenarioSkipExistingSurrogates() {
   Require(report1.generated_surrogates == 1, "first run: should generate 1, got " +
               std::to_string(report1.generated_surrogates));
 
-  // The surrogate frame has the WAXSURR1 header, so on second run the
-  // maintenance loop will skip it (detected by content prefix).
+  // On second run, the source frame is now superseded by its surrogate via
+  // the supersede chain, so it is skipped entirely. No new surrogates generated.
   auto report2 = waxcpp::OptimizeSurrogates(store, gen);
 
-  // On second run, the source frame is still eligible but the surrogate
-  // frame itself (WAXSURR1 prefix) is skipped. Since we don't have metadata
-  // persistence for up-to-date detection, the source is re-processed.
-  // This verifies that surrogate frames themselves are not recursively processed.
-  Require(report2.generated_surrogates >= 1, "second run: source re-processed, got " +
+  Require(report2.generated_surrogates == 0, "second run: should generate 0 (source superseded), got " +
               std::to_string(report2.generated_surrogates));
 
   store.Close();

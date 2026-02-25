@@ -57,14 +57,30 @@ std::string_view TrimWhitespace(std::string_view sv) {
   return sv;
 }
 
-/// Build a set of frame IDs that are superseded by another frame.
-/// These frames have existing surrogates (the superseding frame is the surrogate).
+/// Build a set of source frame IDs that already have surrogate frames linked
+/// via the supersede chain.
+/// A surrogate is identified by checking the superseding frame's content for
+/// the WAXSURR1 magic header, distinguishing surrogates from content updates.
 std::unordered_set<std::uint64_t> BuildSupersededSourceSet(
-    const std::vector<WaxFrameMeta>& frames) {
+    const std::vector<WaxFrameMeta>& frames,
+    WaxStore& store) {
   std::unordered_set<std::uint64_t> result;
   for (const auto& f : frames) {
-    if (f.supersedes.has_value()) {
-      result.insert(*f.supersedes);
+    if (f.status != 0) continue;
+    if (!f.supersedes.has_value()) continue;
+    if (f.superseded_by.has_value()) continue;
+    // Check if this frame's content starts with the surrogate magic header.
+    if (f.payload_length >= 8) {
+      const auto content = store.FrameContent(f.id);
+      if (content.size() >= 8) {
+        constexpr std::byte kMagic[] = {
+            std::byte{'W'}, std::byte{'A'}, std::byte{'X'}, std::byte{'S'},
+            std::byte{'U'}, std::byte{'R'}, std::byte{'R'}, std::byte{'1'},
+        };
+        if (std::equal(std::begin(kMagic), std::end(kMagic), content.begin())) {
+          result.insert(*f.supersedes);
+        }
+      }
     }
   }
   return result;
@@ -118,7 +134,7 @@ MaintenanceReport OptimizeSurrogates(
 
   // Build a set of frame IDs that already have surrogates linked via
   // the supersedes chain (used for skip-existing detection).
-  const auto superseded_sources = BuildSupersededSourceSet(frames);
+  const auto superseded_sources = BuildSupersededSourceSet(frames, store);
 
   int pending_batch = 0;
 
@@ -138,7 +154,9 @@ MaintenanceReport OptimizeSurrogates(
     if (frame.status != kFrameStatusActive) continue;
 
     // Skip frames that have already been superseded.
-    if (frame.superseded_by.has_value()) continue;
+    // When overwrite_existing is requested, still allow superseded frames
+    // through so their surrogates can be regenerated.
+    if (frame.superseded_by.has_value() && !options.overwrite_existing) continue;
 
     // Skip zero-length payloads.
     if (frame.payload_length == 0) continue;
@@ -194,10 +212,10 @@ MaintenanceReport OptimizeSurrogates(
     const auto surrogate_id = store.Put(StringToBytes(surrogate_payload), meta);
     report.generated_surrogates += 1;
 
-    // If overwriting existing, supersede the old surrogate frame.
-    // The source frame itself stays active; only old surrogates get superseded.
     if (has_existing) {
-      // Find the existing surrogate frame that supersedes this source.
+      // Overwriting: supersede the OLD surrogate frame with the new one.
+      // The source → old_surrogate link already exists; the old surrogate
+      // now becomes superseded by the new one, inheriting the chain.
       for (const auto& candidate : frames) {
         if (candidate.supersedes.has_value() &&
             *candidate.supersedes == frame.id &&
@@ -208,6 +226,11 @@ MaintenanceReport OptimizeSurrogates(
           break;
         }
       }
+    } else {
+      // New surrogate: establish source → surrogate link.
+      // This allows BuildSupersededSourceSet to detect existing surrogates,
+      // and BuildSurrogateMap to discover source → surrogate mappings.
+      store.Supersede(frame.id, surrogate_id);
     }
 
     ++pending_batch;

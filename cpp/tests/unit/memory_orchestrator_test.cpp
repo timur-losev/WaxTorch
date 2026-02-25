@@ -4841,6 +4841,209 @@ void ScenarioConcurrentRememberFactIsSerialized(const std::filesystem::path& pat
   }
 }
 
+// ── Direct search ──────────────────────────────────────────────
+
+void ScenarioSearchTextModeReturnsHits(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: Search text-mode returns ranked hits");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember("apple orange banana", {});
+  orchestrator.Remember("apple kiwi mango", {});
+  orchestrator.Remember("grape pear cherry", {});
+  orchestrator.Flush();
+
+  const auto hits = orchestrator.Search("apple", waxcpp::DirectSearchMode::kText, 0.5f, 10);
+  Require(!hits.empty(), "Search should return at least one hit for matching query");
+  Require(hits[0].frame_id == 0 || hits[0].frame_id == 1,
+          "top hit should be one of the apple-containing frames");
+  Require(hits[0].score > 0.0f, "hit score should be positive");
+
+  orchestrator.Close();
+}
+
+void ScenarioSearchEmptyQueryReturnsEmpty(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: Search with empty/whitespace query returns empty");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember("test content", {});
+  orchestrator.Flush();
+
+  Require(orchestrator.Search("", waxcpp::DirectSearchMode::kText).empty(),
+          "empty query should return no hits");
+  Require(orchestrator.Search("   \n\t  ", waxcpp::DirectSearchMode::kText).empty(),
+          "whitespace query should return no hits");
+  Require(orchestrator.Search("apple", waxcpp::DirectSearchMode::kText, 0.5f, 0).empty(),
+          "topK=0 should return no hits");
+
+  orchestrator.Close();
+}
+
+void ScenarioSearchHybridFallsBackToText(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: Search hybrid-mode without embedder falls back to text");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember("deep learning neural networks", {});
+  orchestrator.Flush();
+
+  // Hybrid mode without embedder should fall back to text-only.
+  const auto hits = orchestrator.Search("neural", waxcpp::DirectSearchMode::kHybrid, 0.5f, 5);
+  Require(!hits.empty(), "hybrid fallback to text should return results");
+  Require(hits[0].frame_id == 0, "should find the matching frame");
+
+  orchestrator.Close();
+}
+
+// ── RuntimeStats ──────────────────────────────────────────────
+
+void ScenarioRuntimeStatsReturnsValidData(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: GetRuntimeStats returns valid store info");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+
+  {
+    const auto stats = orchestrator.GetRuntimeStats();
+    Require(stats.frame_count == 0, "initial frame count should be 0");
+    Require(stats.store_path == path, "store_path should match constructor path");
+    Require(!stats.vector_search_enabled, "vector search should be disabled");
+    Require(stats.embedder_identity.empty(), "embedder identity should be empty without embedder");
+  }
+
+  orchestrator.Remember("test stats content", {});
+  orchestrator.Flush();
+
+  {
+    const auto stats = orchestrator.GetRuntimeStats();
+    Require(stats.frame_count == 1, "frame count should be 1 after remember+flush");
+    Require(stats.generation > 0, "generation should be positive after flush");
+  }
+
+  orchestrator.Close();
+}
+
+void ScenarioRuntimeStatsWithEmbedder(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: GetRuntimeStats reports embedder identity");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = true;
+
+  auto embedder = std::make_shared<CountingEmbedder>();
+  waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
+
+  const auto stats = orchestrator.GetRuntimeStats();
+  Require(stats.vector_search_enabled, "vector search should be enabled with embedder");
+  Require(!stats.embedder_identity.empty(), "embedder identity should not be empty");
+  Require(stats.embedder_identity.find("WaxCppTest") != std::string::npos,
+          "embedder identity should contain provider name");
+
+  orchestrator.Close();
+}
+
+// ── Session tagging ──────────────────────────────────────────
+
+void ScenarioStartEndSession(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: StartSession/EndSession lifecycle");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+
+  const auto session_id = orchestrator.StartSession();
+  Require(!session_id.empty(), "StartSession should return non-empty session ID");
+  Require(session_id.size() == 36, "session ID should be UUID-formatted (36 chars)");
+
+  // Verify format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  Require(session_id[8] == '-', "session ID should have dash at position 8");
+  Require(session_id[13] == '-', "session ID should have dash at position 13");
+  Require(session_id[18] == '-', "session ID should have dash at position 18");
+  Require(session_id[23] == '-', "session ID should have dash at position 23");
+
+  // Second start should return different ID.
+  const auto session_id2 = orchestrator.StartSession();
+  Require(!session_id2.empty(), "second StartSession should also return non-empty ID");
+  Require(session_id != session_id2, "session IDs should be unique");
+
+  orchestrator.EndSession();
+
+  orchestrator.Close();
+}
+
+// ── OptimizeSurrogates orchestrator method ───────────────────
+
+void ScenarioOptimizeSurrogatesViaOrchestrator(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: OptimizeSurrogates via orchestrator generates surrogates");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  // Ingest a few chunks of text.
+  orchestrator.Remember(
+      "Machine learning is a subset of artificial intelligence. "
+      "Deep learning uses neural networks with many layers. "
+      "Transfer learning reduces training time significantly.",
+      {});
+  orchestrator.Remember(
+      "Natural language processing handles text data. "
+      "Tokenization splits text into units. "
+      "Embeddings represent words as dense vectors.",
+      {});
+  orchestrator.Flush();
+
+  waxcpp::MaintenanceOptions opts{};
+  opts.overwrite_existing = false;
+  opts.enable_hierarchical = true;
+  const auto report = orchestrator.OptimizeSurrogates(opts);
+
+  Require(report.scanned_frames >= 2, "should scan at least 2 frames");
+  Require(report.eligible_frames >= 2, "both frames should be eligible");
+  Require(report.generated_surrogates >= 2, "should generate surrogates for eligible frames");
+  Require(!report.did_timeout, "should not timeout");
+
+  orchestrator.Close();
+
+  // Verify surrogates are persisted.
+  {
+    auto store = waxcpp::WaxStore::Open(path);
+    const auto stats = store.Stats();
+    Require(stats.frame_count >= 4, "should have original frames + surrogate frames");
+    store.Close();
+  }
+}
+
+void ScenarioOptimizeSurrogatesSkipExisting(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: OptimizeSurrogates skips existing surrogates");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember(
+      "Quantum computing uses qubits for computation. "
+      "Superposition allows multiple states simultaneously.",
+      {});
+  orchestrator.Flush();
+
+  // First run should generate surrogates.
+  waxcpp::MaintenanceOptions opts{};
+  const auto report1 = orchestrator.OptimizeSurrogates(opts);
+  Require(report1.generated_surrogates >= 1, "first run should generate at least 1 surrogate");
+
+  // Flush the new surrogates.
+  orchestrator.Flush();
+
+  // Second run should generate zero new surrogates.
+  // Source frames are now superseded by their surrogates and will be skipped.
+  const auto report2 = orchestrator.OptimizeSurrogates(opts);
+  Require(report2.generated_surrogates == 0, "second run should generate 0 surrogates");
+
+  orchestrator.Close();
+}
+
 }  // namespace
 
 int main() {
@@ -4960,6 +5163,14 @@ int main() {
     const auto path111 = UniquePath();
     const auto path112 = UniquePath();
     const auto path113 = UniquePath();
+    const auto path114 = UniquePath();
+    const auto path115 = UniquePath();
+    const auto path116 = UniquePath();
+    const auto path117 = UniquePath();
+    const auto path118 = UniquePath();
+    const auto path119 = UniquePath();
+    const auto path120 = UniquePath();
+    const auto path121 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -5075,6 +5286,14 @@ int main() {
     ScenarioConcurrentRememberIsSerialized(path36);
     ScenarioConcurrentRecallIsStable(path73);
     ScenarioConcurrentRememberFactIsSerialized(path105);
+    ScenarioSearchTextModeReturnsHits(path114);
+    ScenarioSearchEmptyQueryReturnsEmpty(path115);
+    ScenarioSearchHybridFallsBackToText(path116);
+    ScenarioRuntimeStatsReturnsValidData(path117);
+    ScenarioRuntimeStatsWithEmbedder(path118);
+    ScenarioStartEndSession(path119);
+    ScenarioOptimizeSurrogatesViaOrchestrator(path120);
+    ScenarioOptimizeSurrogatesSkipExisting(path121);
 
     const std::vector<std::filesystem::path> cleanup_paths = {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
@@ -5088,6 +5307,7 @@ int main() {
         path83, path84, path85, path86, path87, path88, path89, path90, path91, path92, path93,
         path94, path95, path96, path97, path98, path99, path100, path101, path102, path103, path104, path105,
         path106, path107, path108, path109, path110, path111, path112, path113,
+        path114, path115, path116, path117, path118, path119, path120, path121,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);
