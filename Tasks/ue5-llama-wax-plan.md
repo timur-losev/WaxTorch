@@ -35,7 +35,8 @@ Current runtime source decision:
 - M8 in progress:
   - `index.start` now accepts operational controls: `flush_every_chunks` and `max_files`,
   - UE5 scanner supports cancel callback; `index.stop` can interrupt scan phase before full traversal,
-  - added deterministic regressions for scanner-cancel path and capped-scan indexing path.
+  - added deterministic regressions for scanner-cancel path and capped-scan indexing path,
+  - added phase/progress logs for indexing pipeline (enabled via `WAXCPP_SERVER_LOG`).
 
 ## Scope
 - Build an ingest/search/generation server path for very large C++ codebases (UE5 scale).
@@ -117,7 +118,7 @@ Current runtime source decision:
 - Add ingest throttles: max RAM, batch size, worker count.
 - Add server metrics/logging for indexing phases and failures.
 - Add regression tests for deterministic outputs across repeated runs.
-- Status: partially implemented (`max_files` + `flush_every_chunks` controls in `index.start`, cancel-aware scan support, regression coverage for both).
+- Status: partially implemented (`max_files` + `flush_every_chunks` controls in `index.start`, cancel-aware scan support, indexed-phase logging, regression coverage for controls).
 
 ## Acceptance Gates
 1. Same source tree produces identical chunk manifest and stable top-k ordering.

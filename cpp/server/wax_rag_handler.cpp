@@ -20,6 +20,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 namespace waxcpp::server {
 
@@ -28,6 +29,7 @@ constexpr std::uint64_t kIndexFlushEveryChunks = 128;
 constexpr std::uint64_t kMaxIndexControlValue = 1'000'000;
 constexpr const char* kDefaultLlamaEmbedEndpoint = "http://127.0.0.1:8081/embedding";
 constexpr const char* kDefaultLlamaGenEndpoint = "http://127.0.0.1:8081/completion";
+constexpr const char* kServerLogEnv = "WAXCPP_SERVER_LOG";
 
 std::optional<std::string> EnvString(const char* name) {
 #if defined(_MSC_VER)
@@ -124,6 +126,22 @@ int ParseNonNegativeIntParam(const Poco::JSON::Object::Ptr& params,
     } catch (const Poco::Exception&) {
         return fallback;
     }
+}
+
+bool ServerLogEnabled() {
+    const auto raw = EnvString(kServerLogEnv);
+    if (!raw.has_value()) {
+        return false;
+    }
+    const auto& value = *raw;
+    return value == "1" || value == "true" || value == "TRUE" || value == "on" || value == "ON";
+}
+
+void ServerLog(std::string_view message) {
+    if (!ServerLogEnabled()) {
+        return;
+    }
+    std::cerr << "[waxcpp-server] " << message << "\n";
 }
 
 struct CitationInfo {
@@ -470,13 +488,27 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
     };
 
     try {
+        {
+            std::ostringstream msg;
+            msg << "index job started repo_root=" << repo_root
+                << " resume=" << (resume_requested ? "true" : "false")
+                << " flush_every_chunks=" << options.flush_every_chunks
+                << " max_files=" << options.max_files;
+            ServerLog(msg.str());
+        }
         const auto repo_root_path = std::filesystem::path(repo_root);
         auto entries = ue5_scanner_.Scan(repo_root_path, is_cancelled);
         if (options.max_files > 0 && entries.size() > options.max_files) {
             entries.resize(static_cast<std::size_t>(options.max_files));
         }
         if (is_cancelled()) {
+            ServerLog("index job cancelled during scan");
             return;
+        }
+        {
+            std::ostringstream msg;
+            msg << "scan completed files=" << entries.size();
+            ServerLog(msg.str());
         }
 
         const auto running_status = index_job_manager_.status();
@@ -499,6 +531,12 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
         const auto chunk_records = ue5_chunk_builder_.Build(repo_root_path, entries, {}, &current_file_digests);
         const auto unchanged_paths =
             Ue5ChunkManifestBuilder::ComputeUnchangedPaths(previous_file_digests, current_file_digests);
+        {
+            std::ostringstream msg;
+            msg << "chunk manifest prepared chunks=" << chunk_records.size()
+                << " unchanged_files=" << unchanged_paths.size();
+            ServerLog(msg.str());
+        }
 
         std::uint64_t indexed_chunks = 0;
         std::uint64_t committed_chunks = 0;
@@ -539,9 +577,14 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                     (void)index_job_manager_.UpdateProgress(static_cast<std::uint64_t>(entries.size()),
                                                             indexed_chunks,
                                                             committed_chunks);
+                    std::ostringstream msg;
+                    msg << "index progress indexed_chunks=" << indexed_chunks
+                        << " committed_chunks=" << committed_chunks;
+                    ServerLog(msg.str());
                 }
             });
         if (is_cancelled()) {
+            ServerLog("index job cancelled during ingest");
             return;
         }
 
@@ -554,6 +597,7 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                                                 indexed_chunks,
                                                 committed_chunks);
         if (is_cancelled()) {
+            ServerLog("index job cancelled before manifest write");
             return;
         }
 
@@ -570,13 +614,24 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                       "failed to open file manifest file for write",
                       "failed to persist file manifest file");
         if (is_cancelled()) {
+            ServerLog("index job cancelled after manifest write");
             return;
         }
 
         (void)index_job_manager_.Complete(static_cast<std::uint64_t>(entries.size()), indexed_chunks, committed_chunks);
+        {
+            std::ostringstream msg;
+            msg << "index job completed scanned_files=" << entries.size()
+                << " indexed_chunks=" << indexed_chunks
+                << " committed_chunks=" << committed_chunks;
+            ServerLog(msg.str());
+        }
     } catch (const std::exception& e) {
         if (!is_cancelled()) {
             (void)index_job_manager_.Fail(e.what());
+            std::ostringstream msg;
+            msg << "index job failed: " << e.what();
+            ServerLog(msg.str());
         }
     }
 }
@@ -643,6 +698,7 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
                 return std::string("Error: failed to start index worker: ") + e.what();
             }
         }
+        ServerLog("index.start accepted");
         return make_index_status_json(index_job_manager_.status());
     } catch (const std::exception& e) {
         return std::string("Error: ") + e.what();
@@ -682,6 +738,7 @@ std::string WaxRAGHandler::handle_index_stop(const Poco::JSON::Object::Ptr& para
         if (worker_to_join.joinable()) {
             worker_to_join.join();
         }
+        ServerLog("index.stop completed");
         return make_index_status_json(index_job_manager_.status());
     } catch (const std::exception& e) {
         return std::string("Error: ") + e.what();
