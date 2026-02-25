@@ -104,6 +104,40 @@ Windows CUDA artifact prep (PowerShell):
   -ZipPath "C:\Downloads\libtorch-win-shared-with-deps-2.5.1+cu124.zip"
 ```
 
+Server runtime config (llama.cpp + GGUF):
+```bash
+# Required when server uses llama_cpp runtime:
+# point to your local llama.cpp binaries/runtime root directory
+export WAXCPP_LLAMA_CPP_ROOT=/abs/path/to/llama-cpp
+
+# Optional: override generation model path (default is Qwen3-Coder-Next-Q4_K_M.gguf)
+export WAXCPP_GENERATION_MODEL=/abs/path/to/Qwen3-Coder-Next-Q4_K_M.gguf
+
+# Optional: JSON file with explicit runtime model config
+export WAXCPP_SERVER_CONFIG=/abs/path/to/server-runtime.json
+```
+
+Example `server-runtime.json`:
+```json
+{
+  "llama_cpp_root": "g:/Proj/Agents1/llama-cpp",
+  "retrieval": {
+    "enable_vector_search": false,
+    "require_distinct_models": true
+  },
+  "models": {
+    "generation_model": {
+      "runtime": "llama_cpp",
+      "model_path": "g:/Proj/Agents1/Models/Qwen/Qwen3-Coder-Next-Q4_K_M.gguf"
+    },
+    "embedding_model": {
+      "runtime": "disabled",
+      "model_path": ""
+    }
+  }
+}
+```
+
 SQLite backend (optional, currently disabled by default in favor of WAL-focused track):
 ```bash
 cmake -S cpp -B cpp/build -DWAXCPP_ENABLE_SQLITE_BACKEND=ON

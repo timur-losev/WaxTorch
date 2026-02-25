@@ -1,0 +1,88 @@
+# UE5 Codebase Indexing Plan (Wax + llama.cpp, no Torch)
+
+## Summary
+Target: index Unreal Engine 5 C++ source code into Wax with WAL-safe ingest and use `llama.cpp` for model runtime.
+
+Current generation model decision:
+- `g:/Proj/Agents1/Models/Qwen/Qwen3-Coder-Next-Q4_K_M.gguf` (256K context).
+
+Current runtime source decision:
+- local llama.cpp runtime root from `WAXCPP_LLAMA_CPP_ROOT` (no submodule in this iteration).
+
+## Scope
+- Build an ingest/search/generation server path for very large C++ codebases (UE5 scale).
+- Keep deterministic indexing and WAL-safe commit behavior.
+- Avoid Torch runtime for both generation and embeddings in this track.
+
+## Architecture
+1. Wax:
+   - stores chunk payloads + metadata
+   - maintains WAL/commit safety
+   - serves retrieval (text/vector/hybrid)
+2. llama.cpp (generation):
+   - uses Qwen3-Coder-Next GGUF for answer generation.
+3. llama.cpp (embeddings, later milestone):
+   - separate GGUF embedding model, independent from generation model path.
+
+## Milestones
+### M0. Runtime Contract and Policy Gates
+- Add strict runtime model config schema:
+  - `generation_model` and `embedding_model` are separate.
+  - `generation_model.runtime=llama_cpp` and `.gguf` path required.
+  - `embedding_model.runtime=torch/libtorch` forbidden.
+  - `WAXCPP_LLAMA_CPP_ROOT` required whenever llama runtime is used.
+- Add unit tests for the contract.
+
+### M1. Server Config Loader
+- Load runtime config from:
+  - defaults
+  - `WAXCPP_GENERATION_MODEL`
+  - `WAXCPP_LLAMA_CPP_ROOT`
+  - optional `WAXCPP_SERVER_CONFIG` JSON
+- Validate config at server startup and fail early with explicit errors.
+
+### M2. Indexing Endpoint Skeleton
+- Add JSON-RPC endpoints for:
+  - `index.start`
+  - `index.status`
+  - `index.stop`
+- Add persistent job checkpoint state for resume after restart.
+
+### M3. UE5 Filesystem Scanner
+- Deterministic scanner for UE5 tree:
+  - include code extensions (`.h/.hpp/.cpp/.inl/.inc`)
+  - exclude generated/build folders
+  - stable sort order
+- Add reproducibility test for scanner manifest.
+
+### M4. Code Chunking + Metadata
+- Token-aware chunking with overlap and symbol-aware boundaries.
+- Metadata fields:
+  - repo_root, relative_path, language, symbol, line_start, line_end, hash.
+- Deterministic chunk id generation from `(path, symbol, line range, hash)`.
+
+### M5. Embedding Provider via llama.cpp
+- Implement `LlamaCppEmbeddingProvider` (batch-capable).
+- Wire to Wax vector ingest path.
+- Add retries/timeouts and bounded concurrency.
+
+### M6. WAL-Safe Massive Ingest
+- Batch ingest with periodic commit/checkpoint.
+- Resume-from-manifest-hash logic to skip unchanged files.
+- Crash-recovery regression tests for mid-index interruption.
+
+### M7. Query Pipeline + RAG
+- Query embedding + retrieval + deterministic rerank.
+- Build context budget pipeline for Qwen3-Coder-Next 256K runtime.
+- Add response path with source citations (`path + lines`).
+
+### M8. Performance and Operational Controls
+- Add ingest throttles: max RAM, batch size, worker count.
+- Add server metrics/logging for indexing phases and failures.
+- Add regression tests for deterministic outputs across repeated runs.
+
+## Acceptance Gates
+1. Same source tree produces identical chunk manifest and stable top-k ordering.
+2. Interrupted indexing resumes without WAL corruption or duplicate committed chunks.
+3. Server startup fails fast on invalid runtime config (clear error messages).
+4. UE5-scale indexing can run incrementally (changed files only).
