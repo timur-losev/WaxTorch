@@ -32,6 +32,8 @@ add_executable(waxcpp_rag_server
   main.cpp
   json_rpc.cpp
   runtime_config.cpp
+  ue5_chunk_manifest.cpp
+  ue5_filesystem_scanner.cpp
   wax_rag_handler.cpp
 )
 

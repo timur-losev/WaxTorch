@@ -6,6 +6,7 @@
 #include <Poco/JSON/Array.h>
 #include <Poco/JSON/Object.h>
 
+#include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -127,8 +128,49 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
         if (!started) {
             return "Error: index job is already running";
         }
+        const auto entries = ue5_scanner_.Scan(std::filesystem::path(repo_root));
+        const auto chunk_records = ue5_chunk_builder_.Build(std::filesystem::path(repo_root), entries);
+        const auto running_status = index_job_manager_.status();
+        auto manifest_path = running_status.checkpoint_path;
+        manifest_path += ".scan_manifest";
+        auto chunk_manifest_path = running_status.checkpoint_path;
+        chunk_manifest_path += ".chunk_manifest";
+        {
+            std::ofstream out(manifest_path, std::ios::binary | std::ios::trunc);
+            if (!out) {
+                const bool marked_failed = index_job_manager_.Fail("failed to write scan manifest file");
+                (void)marked_failed;
+                return "Error: failed to open scan manifest file for write";
+            }
+            out << Ue5FilesystemScanner::SerializeManifest(entries);
+            if (!out) {
+                const bool marked_failed = index_job_manager_.Fail("failed to persist scan manifest file");
+                (void)marked_failed;
+                return "Error: failed to persist scan manifest file";
+            }
+        }
+        {
+            std::ofstream out(chunk_manifest_path, std::ios::binary | std::ios::trunc);
+            if (!out) {
+                const bool marked_failed = index_job_manager_.Fail("failed to write chunk manifest file");
+                (void)marked_failed;
+                return "Error: failed to open chunk manifest file for write";
+            }
+            out << Ue5ChunkManifestBuilder::SerializeManifest(chunk_records);
+            if (!out) {
+                const bool marked_failed = index_job_manager_.Fail("failed to persist chunk manifest file");
+                (void)marked_failed;
+                return "Error: failed to persist chunk manifest file";
+            }
+        }
+        if (!index_job_manager_.Complete(static_cast<std::uint64_t>(entries.size()),
+                                         static_cast<std::uint64_t>(chunk_records.size()),
+                                         0)) {
+            return "Error: failed to complete index job state transition";
+        }
         return make_index_status_json(index_job_manager_.status());
     } catch (const std::exception& e) {
+        (void)index_job_manager_.Fail(e.what());
         return std::string("Error: ") + e.what();
     }
 }

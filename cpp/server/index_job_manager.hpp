@@ -40,6 +40,9 @@ class IndexJobManager {
 
   [[nodiscard]] IndexJobStatus status() const;
   [[nodiscard]] bool Start(const std::filesystem::path& repo_root, bool resume_requested);
+  [[nodiscard]] bool Complete(std::uint64_t scanned_files,
+                              std::uint64_t indexed_chunks,
+                              std::uint64_t committed_chunks);
   [[nodiscard]] bool Stop();
   [[nodiscard]] bool Fail(std::string error);
 

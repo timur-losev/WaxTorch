@@ -333,6 +333,35 @@ if (WAXCPP_BUILD_TESTS)
   target_precompile_headers(waxcpp_index_job_manager_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_index_job_manager_test COMMAND waxcpp_index_job_manager_test)
 
+  add_executable(waxcpp_ue5_filesystem_scanner_test
+    tests/unit/ue5_filesystem_scanner_test.cpp
+    server/ue5_filesystem_scanner.cpp
+  )
+  target_link_libraries(waxcpp_ue5_filesystem_scanner_test PRIVATE waxcpp)
+  target_include_directories(waxcpp_ue5_filesystem_scanner_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server)
+  if (MSVC)
+    target_compile_options(waxcpp_ue5_filesystem_scanner_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_ue5_filesystem_scanner_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_ue5_filesystem_scanner_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_ue5_filesystem_scanner_test COMMAND waxcpp_ue5_filesystem_scanner_test)
+
+  add_executable(waxcpp_ue5_chunk_manifest_test
+    tests/unit/ue5_chunk_manifest_test.cpp
+    server/ue5_chunk_manifest.cpp
+    server/ue5_filesystem_scanner.cpp
+  )
+  target_link_libraries(waxcpp_ue5_chunk_manifest_test PRIVATE waxcpp)
+  target_include_directories(waxcpp_ue5_chunk_manifest_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server)
+  if (MSVC)
+    target_compile_options(waxcpp_ue5_chunk_manifest_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_ue5_chunk_manifest_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_ue5_chunk_manifest_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_ue5_chunk_manifest_test COMMAND waxcpp_ue5_chunk_manifest_test)
+
   add_executable(waxcpp_structured_memory_store_test tests/unit/structured_memory_store_test.cpp)
   target_link_libraries(waxcpp_structured_memory_store_test PRIVATE waxcpp)
   if (MSVC)

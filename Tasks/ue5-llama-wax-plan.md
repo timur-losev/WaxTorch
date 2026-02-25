@@ -9,6 +9,16 @@ Current generation model decision:
 Current runtime source decision:
 - local llama.cpp runtime root from `WAXCPP_LLAMA_CPP_ROOT` (no submodule in this iteration).
 
+## Status Snapshot (2026-02-25)
+- M0 complete.
+- M1 complete.
+- M2 complete (index RPC + checkpoint state machine).
+- M3 complete (deterministic UE5 scanner + scan manifest serialization + tests).
+- M4 in progress:
+  - implemented deterministic chunk-manifest builder (line/token-aware windows, metadata, deterministic chunk ids),
+  - `index.start` now writes both `.scan_manifest` and `.chunk_manifest`,
+  - `index.status.indexed_chunks` now reflects chunk-manifest count.
+
 ## Scope
 - Build an ingest/search/generation server path for very large C++ codebases (UE5 scale).
 - Keep deterministic indexing and WAL-safe commit behavior.
@@ -58,12 +68,14 @@ Current runtime source decision:
   - exclude generated/build folders
   - stable sort order
 - Add reproducibility test for scanner manifest.
+- Status: implemented.
 
 ### M4. Code Chunking + Metadata
 - Token-aware chunking with overlap and symbol-aware boundaries.
 - Metadata fields:
   - repo_root, relative_path, language, symbol, line_start, line_end, hash.
 - Deterministic chunk id generation from `(path, symbol, line range, hash)`.
+- Status: partially implemented (chunk-manifest generator + deterministic ids + metadata serialization).
 
 ### M5. Embedding Provider via llama.cpp
 - Implement `LlamaCppEmbeddingProvider` (batch-capable).

@@ -1,7 +1,7 @@
 # Context: UE5 Indexing with Wax + llama.cpp (No Torch)
 
 **Created**: 2026-02-25  
-**Current Phase**: M0-M2 baseline bootstrap  
+**Current Phase**: M3 complete, M4 in progress  
 **Owner**: wax-rag-specialist
 
 ## Decisions Locked
@@ -34,6 +34,17 @@
    - `cpp/server/index_job_manager.cpp`
    - `cpp/tests/unit/index_job_manager_test.cpp`
    - RPC methods: `index.start`, `index.status`, `index.stop`
+7. Added deterministic UE5 scanner integration:
+   - `cpp/server/ue5_filesystem_scanner.hpp`
+   - `cpp/server/ue5_filesystem_scanner.cpp`
+   - `cpp/tests/unit/ue5_filesystem_scanner_test.cpp`
+   - `index.start` now writes `<checkpoint>.scan_manifest`
+8. Added deterministic chunk-manifest builder (M4 partial):
+   - `cpp/server/ue5_chunk_manifest.hpp`
+   - `cpp/server/ue5_chunk_manifest.cpp`
+   - `cpp/tests/unit/ue5_chunk_manifest_test.cpp`
+   - `index.start` now writes `<checkpoint>.chunk_manifest`
+   - `index_job_manager.Complete(scanned,indexed,committed)` now records scanned files and indexed chunk count
 
 ## Validation Rules Now Enforced
 1. `generation_model.runtime` must be `llama_cpp`.
@@ -44,9 +55,9 @@
 6. Vector-search enablement requires embedding runtime to be `llama_cpp` with `.gguf` path.
 
 ## Pending Next Steps
-1. Implement `LlamaCppEmbeddingProvider` and runtime call path (HTTP or native binding).
-2. Extend `index.start` from state-machine skeleton to real UE5 scanner + chunking + ingest.
-3. Add progress accounting integration (`scanned_files/indexed_chunks/committed_chunks`) from live pipeline.
+1. Implement real ingest path from chunk manifest into Wax WAL (currently manifests are produced, but ingest/commit is not executed).
+2. Add resume-from-manifest hash logic (incremental indexing over changed files only).
+3. Implement `LlamaCppEmbeddingProvider` and wire vector ingest/search path.
 4. Add end-to-end retrieval + answer path with citation metadata.
 
 ## Operational Notes

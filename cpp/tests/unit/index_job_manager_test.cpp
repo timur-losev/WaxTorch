@@ -96,6 +96,29 @@ void ScenarioFailTransitionsToFailed(const std::filesystem::path& checkpoint_pat
           "last_error must be persisted");
 }
 
+void ScenarioCompletePersistsCounters(const std::filesystem::path& checkpoint_path) {
+  {
+    waxcpp::server::IndexJobManager manager(checkpoint_path);
+    Require(manager.Start("g:/Proj/UE5/Engine/Source", false), "start must succeed");
+    Require(manager.Complete(321, 654, 600), "complete must succeed while running");
+    const auto status = manager.status();
+    Require(status.state == waxcpp::server::IndexJobState::kStopped, "complete must move state to stopped");
+    Require(status.scanned_files == 321, "complete must persist scanned_files");
+    Require(status.indexed_chunks == 654, "complete must persist indexed_chunks");
+    Require(status.committed_chunks == 600, "complete must persist committed_chunks");
+  }
+
+  {
+    waxcpp::server::IndexJobManager reloaded(checkpoint_path);
+    const auto status = reloaded.status();
+    Require(status.state == waxcpp::server::IndexJobState::kStopped,
+            "reloaded state must stay stopped after complete");
+    Require(status.scanned_files == 321, "reloaded scanned_files mismatch");
+    Require(status.indexed_chunks == 654, "reloaded indexed_chunks mismatch");
+    Require(status.committed_chunks == 600, "reloaded committed_chunks mismatch");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -105,6 +128,7 @@ int main() {
     ScenarioCheckpointReloadConvertsRunningToStopped(checkpoint_path);
     ScenarioResumeKeepsCountersForSameRepo(checkpoint_path);
     ScenarioFailTransitionsToFailed(checkpoint_path);
+    ScenarioCompletePersistsCounters(checkpoint_path);
     waxcpp::tests::CleanupStoreArtifacts(checkpoint_path);
     waxcpp::tests::CleanupTempArtifactsByPrefix("waxcpp_index_job_manager_test_");
     return EXIT_SUCCESS;
