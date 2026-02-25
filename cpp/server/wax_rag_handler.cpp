@@ -138,6 +138,32 @@ int ParseNonNegativeIntParam(const Poco::JSON::Object::Ptr& params,
     }
 }
 
+struct IntParamParseResult {
+    bool present = false;
+    bool valid = false;
+    int value = 0;
+};
+
+IntParamParseResult ParseIntParamStrict(const Poco::JSON::Object::Ptr& params,
+                                        const std::string& key) {
+    if (params.isNull() || !params->has(key)) {
+        return IntParamParseResult{};
+    }
+    try {
+        return IntParamParseResult{
+            .present = true,
+            .valid = true,
+            .value = params->getValue<int>(key),
+        };
+    } catch (const Poco::Exception&) {
+        return IntParamParseResult{
+            .present = true,
+            .valid = false,
+            .value = 0,
+        };
+    }
+}
+
 bool ServerLogEnabled() {
     const auto raw = EnvString(kServerLogEnv);
     if (!raw.has_value()) {
@@ -802,11 +828,40 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
         return "Missing required parameter 'repo_root'";
     }
     const bool resume_requested = (params.isNull() ? false : params->optValue<bool>("resume", false));
-    const int flush_every_chunks_param =
-        ParsePositiveIntParam(params, "flush_every_chunks", static_cast<int>(kIndexFlushEveryChunks));
-    const int max_files_param = ParseNonNegativeIntParam(params, "max_files", 0);
-    const int max_chunks_param = ParseNonNegativeIntParam(params, "max_chunks", 0);
-    const int max_ram_mb_param = ParseNonNegativeIntParam(params, "max_ram_mb", 0);
+    int flush_every_chunks_param = static_cast<int>(kIndexFlushEveryChunks);
+    int max_files_param = 0;
+    int max_chunks_param = 0;
+    int max_ram_mb_param = 0;
+
+    const auto flush_raw = ParseIntParamStrict(params, "flush_every_chunks");
+    if (flush_raw.present) {
+        if (!flush_raw.valid) {
+            return "Error: flush_every_chunks must be an integer";
+        }
+        flush_every_chunks_param = flush_raw.value;
+    }
+    const auto max_files_raw = ParseIntParamStrict(params, "max_files");
+    if (max_files_raw.present) {
+        if (!max_files_raw.valid) {
+            return "Error: max_files must be an integer";
+        }
+        max_files_param = max_files_raw.value;
+    }
+    const auto max_chunks_raw = ParseIntParamStrict(params, "max_chunks");
+    if (max_chunks_raw.present) {
+        if (!max_chunks_raw.valid) {
+            return "Error: max_chunks must be an integer";
+        }
+        max_chunks_param = max_chunks_raw.value;
+    }
+    const auto max_ram_mb_raw = ParseIntParamStrict(params, "max_ram_mb");
+    if (max_ram_mb_raw.present) {
+        if (!max_ram_mb_raw.valid) {
+            return "Error: max_ram_mb must be an integer";
+        }
+        max_ram_mb_param = max_ram_mb_raw.value;
+    }
+
     if (flush_every_chunks_param <= 0 ||
         static_cast<std::uint64_t>(flush_every_chunks_param) > kMaxIndexControlValue) {
         return "Error: flush_every_chunks must be within [1, 1000000]";

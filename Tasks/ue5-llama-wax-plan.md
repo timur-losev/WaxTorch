@@ -36,6 +36,7 @@ Current runtime source decision:
     - added handler-level regressions (`wax_rag_handler_answer_test`) with stubbed generation backend for budget/citation behavior and stable citation ordering across repeated calls/reopen.
 - M8 in progress:
   - `index.start` now accepts operational controls: `flush_every_chunks`, `max_files`, `max_chunks`, and `max_ram_mb`,
+  - `index.start` control parsing is strict (invalid integer types/negative ranges return explicit errors instead of silent fallback),
   - orchestrator ingest throttles can be tuned via env: `WAXCPP_ORCH_INGEST_CONCURRENCY`, `WAXCPP_ORCH_INGEST_BATCH_SIZE`,
   - UE5 scanner supports cancel callback; `index.stop` can interrupt scan phase before full traversal,
   - added deterministic regressions for scanner-cancel path, capped-scan indexing path, capped-ingest (`max_chunks`) path, interrupted-resume committed-watermark fallback path, and repeated-run byte-identical chunk-manifest path,
