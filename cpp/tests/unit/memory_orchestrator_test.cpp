@@ -5460,21 +5460,22 @@ void ScenarioFrameMetadataRoundTrip(const std::filesystem::path& path) {
 }
 
 void ScenarioRecallWithMetadataFilter(const std::filesystem::path& path) {
-  waxcpp::tests::Log("scenario: Recall with MetadataFilter filters by required_entries");
+  waxcpp::tests::Log("scenario: Recall with MetadataFilter filters by required_entries and required_labels");
   waxcpp::OrchestratorConfig config{};
   config.enable_vector_search = false;
 
   waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
 
   // Ingest two frames with different metadata.
-  orchestrator.Remember("Alpha content about cats.", {{"topic", "cats"}});
-  orchestrator.Remember("Beta content about dogs.", {{"topic", "dogs"}});
+  orchestrator.Remember("Alpha content about cats.", {{"topic", "cats"}, {"labels", "public,animal"}});
+  orchestrator.Remember("Beta content about dogs.", {{"topic", "dogs"}, {"labels", "internal,animal"}});
   orchestrator.Flush();
 
-  // Search with MetadataFilter requiring topic=cats.
+  // Search with MetadataFilter requiring topic=cats and label=public.
   waxcpp::FrameFilter ff{};
   waxcpp::MetadataFilter mf{};
   mf.required_entries["topic"] = "cats";
+  mf.required_labels.push_back("public");
   ff.metadata_filter = mf;
 
   const auto results = orchestrator.Search("content", ff);

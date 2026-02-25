@@ -1273,6 +1273,17 @@ bool MatchesMetadataFilter(const MetadataFilter& mf, const WaxFrameMeta& meta) {
     auto it = meta.metadata.find(key);
     if (it == meta.metadata.end() || it->second != value) return false;
   }
+  // Check required_tags against per-frame tags.
+  for (const auto& [required_key, required_value] : mf.required_tags) {
+    bool found = false;
+    for (const auto& [tag_key, tag_value] : meta.tags) {
+      if (tag_key == required_key && tag_value == required_value) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) return false;
+  }
   // Check required_labels against per-frame labels.
   for (const auto& required_label : mf.required_labels) {
     bool found = false;
@@ -1329,7 +1340,7 @@ void ApplyFrameFilter(SearchResponse& response,
                        // TimeRange check (uses persisted per-frame timestamp).
                        if (time_range.has_value() && !time_range->Contains(meta.timestamp_ms)) return true;
 
-                       // MetadataFilter check (uses persisted per-frame metadata and labels).
+                       // MetadataFilter check (uses persisted per-frame metadata, tags, and labels).
                        if (filter.metadata_filter.has_value() &&
                            !MatchesMetadataFilter(*filter.metadata_filter, meta)) return true;
 

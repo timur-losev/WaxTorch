@@ -6,6 +6,9 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace waxcpp::core::wal {
@@ -38,12 +41,17 @@ enum class WalMutationKind : std::uint8_t {
 
 struct WalPutFrameInfo {
   std::uint64_t frame_id = 0;
+  std::int64_t timestamp_ms = 0;
   std::uint64_t payload_offset = 0;
   std::uint64_t payload_length = 0;
   std::uint8_t canonical_encoding = 0;
   std::uint64_t canonical_length = 0;
   std::array<std::byte, 32> canonical_checksum{};
   std::array<std::byte, 32> stored_checksum{};
+  std::optional<std::string> kind;
+  std::unordered_map<std::string, std::string> metadata;
+  std::vector<std::pair<std::string, std::string>> tags;
+  std::vector<std::string> labels;
 };
 
 struct WalDeleteFrameInfo {

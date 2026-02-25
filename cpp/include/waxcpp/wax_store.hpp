@@ -47,6 +47,7 @@ struct WaxFrameMeta {
   std::uint8_t status = 0;
   std::optional<std::string> kind;
   std::unordered_map<std::string, std::string> metadata;
+  std::vector<std::pair<std::string, std::string>> tags;
   std::vector<std::string> labels;
   std::optional<std::uint64_t> supersedes;
   std::optional<std::uint64_t> superseded_by;

@@ -6,6 +6,8 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace waxcpp::core::mv2s {
@@ -103,12 +105,17 @@ struct FooterSlice {
 
 struct FrameSummary {
   std::uint64_t id = 0;
+  std::int64_t timestamp_ms = 0;
   std::uint64_t payload_offset = 0;
   std::uint64_t payload_length = 0;
   std::array<std::byte, 32> payload_checksum{};
   std::uint8_t canonical_encoding = 0;
   std::optional<std::uint64_t> canonical_length;
   std::optional<std::array<std::byte, 32>> stored_checksum;
+  std::optional<std::string> kind;
+  std::unordered_map<std::string, std::string> metadata;
+  std::vector<std::pair<std::string, std::string>> tags;
+  std::vector<std::string> labels;
   std::uint8_t status = 0;
   std::optional<std::uint64_t> supersedes;
   std::optional<std::uint64_t> superseded_by;

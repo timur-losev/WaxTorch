@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -56,11 +57,12 @@ struct TimeRange {
 // ── Frame filter ─────────────────────────────────────────────
 
 /// Metadata-based predicate for search candidate filtering.
-/// Note: In the C++ binary format, per-frame metadata/tags/labels are not
-/// persisted. required_entries is checked against in-memory metadata only.
+/// Per-frame metadata and labels are persisted in the MV2S binary format
+/// and available via WaxFrameMeta after read-back.
 struct MetadataFilter {
   std::unordered_map<std::string, std::string> required_entries;
-  // required_tags and required_labels not applicable in C++ binary format.
+  std::vector<std::pair<std::string, std::string>> required_tags;
+  std::vector<std::string> required_labels;
 };
 
 /// Frame filter predicate applied to search/recall results.

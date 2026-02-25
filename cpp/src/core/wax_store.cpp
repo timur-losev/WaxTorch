@@ -860,6 +860,7 @@ std::vector<WaxFrameMeta> ToWaxFrameMetas(std::span<const core::mv2s::FrameSumma
     meta.status = frame.status;
     meta.kind = frame.kind;
     meta.metadata = frame.metadata;
+    meta.tags = frame.tags;
     meta.labels = frame.labels;
     meta.supersedes = frame.supersedes;
     meta.superseded_by = frame.superseded_by;
@@ -1639,6 +1640,7 @@ std::vector<WaxFrameMeta> WaxStore::FrameMetas(bool include_pending) const {
         meta.status = 0;
         meta.kind = put.kind;
         meta.metadata = put.metadata;
+        meta.tags = put.tags;
         meta.labels = put.labels;
 
         if (put.frame_id == metas.size()) {
