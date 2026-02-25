@@ -362,6 +362,29 @@ if (WAXCPP_BUILD_TESTS)
   target_precompile_headers(waxcpp_ue5_chunk_manifest_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_ue5_chunk_manifest_test COMMAND waxcpp_ue5_chunk_manifest_test)
 
+  if (WAXCPP_BUILD_SERVER AND
+      TARGET Poco::Foundation AND
+      TARGET Poco::Net AND
+      TARGET Poco::JSON)
+    add_executable(waxcpp_llama_cpp_embedding_provider_test
+      tests/unit/llama_cpp_embedding_provider_test.cpp
+      server/llama_cpp_embedding_provider.cpp
+    )
+    target_link_libraries(waxcpp_llama_cpp_embedding_provider_test PRIVATE
+      waxcpp
+      Poco::Net
+      Poco::JSON
+      Poco::Foundation
+    )
+    target_include_directories(waxcpp_llama_cpp_embedding_provider_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server)
+    if (MSVC)
+      target_compile_options(waxcpp_llama_cpp_embedding_provider_test PRIVATE /W4 /permissive-)
+    else()
+      target_compile_options(waxcpp_llama_cpp_embedding_provider_test PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME waxcpp_llama_cpp_embedding_provider_test COMMAND waxcpp_llama_cpp_embedding_provider_test)
+  endif()
+
   add_executable(waxcpp_structured_memory_store_test tests/unit/structured_memory_store_test.cpp)
   target_link_libraries(waxcpp_structured_memory_store_test PRIVATE waxcpp)
   if (MSVC)

@@ -15,11 +15,38 @@
 #include <Poco/FormattingChannel.h>
 #include <Poco/PatternFormatter.h>
 #include <iterator>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 
 using namespace Poco::Net;
 using namespace Poco::Util;
+
+namespace {
+
+std::string EnvOrDefault(const char* name, const char* fallback) {
+#if defined(_MSC_VER)
+    char* value = nullptr;
+    std::size_t len = 0;
+    if (_dupenv_s(&value, &len, name) != 0 || value == nullptr) {
+        return std::string(fallback);
+    }
+    std::string out(value);
+    std::free(value);
+    if (out.empty()) {
+        return std::string(fallback);
+    }
+    return out;
+#else
+    const char* value = std::getenv(name);
+    if (value == nullptr || *value == '\0') {
+        return std::string(fallback);
+    }
+    return std::string(value);
+#endif
+}
+
+}  // namespace
 
 class RAGRequestHandler : public HTTPRequestHandler {
 public:
@@ -120,6 +147,13 @@ protected:
                                 : runtime_config.models.llama_cpp_root));
         logger.information("Vector search enabled: " +
                            std::string(runtime_config.models.enable_vector_search ? "true" : "false"));
+        if (runtime_config.models.enable_vector_search) {
+            logger.information("llama.cpp embedding endpoint: " +
+                               EnvOrDefault("WAXCPP_LLAMA_EMBED_ENDPOINT",
+                                            "http://127.0.0.1:8081/embedding (default)"));
+            logger.information("llama.cpp embedding dimensions: " +
+                               EnvOrDefault("WAXCPP_LLAMA_EMBED_DIMS", "1024 (default)"));
+        }
         if (runtime_config_path.has_value()) {
             logger.information("Runtime config file: " + runtime_config_path->string());
         }

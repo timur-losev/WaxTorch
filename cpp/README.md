@@ -115,6 +115,14 @@ export WAXCPP_GENERATION_MODEL=/abs/path/to/Qwen3-Coder-Next-Q4_K_M.gguf
 
 # Optional: JSON file with explicit runtime model config
 export WAXCPP_SERVER_CONFIG=/abs/path/to/server-runtime.json
+
+# Optional when enable_vector_search=true:
+# llama.cpp embedding endpoint (llama-server style)
+export WAXCPP_LLAMA_EMBED_ENDPOINT=http://127.0.0.1:8081/embedding
+# expected embedding dimension from the configured embedding model
+export WAXCPP_LLAMA_EMBED_DIMS=1024
+# request timeout in milliseconds
+export WAXCPP_LLAMA_EMBED_TIMEOUT_MS=30000
 ```
 
 Example `server-runtime.json`:
@@ -146,10 +154,10 @@ Indexing JSON-RPC methods (baseline skeleton):
 ```
 
 Current behavior:
-- `index.start` enters `running` state and persists checkpoint metadata.
+- `index.start` scans/chunks source files, ingests changed chunks into Wax, and persists checkpoint metadata.
 - `index.status` returns persisted state snapshot (`idle|running|stopped|failed`).
 - `index.stop` transitions `running -> stopped`.
-- Full UE5 scanning/chunk/embedding pipeline is not wired yet (next milestones).
+- `resume=true` uses `<checkpoint>.file_manifest` to skip unchanged files.
 
 SQLite backend (optional, currently disabled by default in favor of WAL-focused track):
 ```bash

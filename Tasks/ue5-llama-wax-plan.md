@@ -19,6 +19,10 @@ Current runtime source decision:
   - `index.start` now writes both `.scan_manifest` and `.chunk_manifest`,
   - `index.start` now performs text ingest into Wax (`remember` + periodic `flush`) and updates job progress counters,
   - added file hash manifest (`.file_manifest`) and resume-time unchanged-file skipping.
+- M5 in progress:
+  - added `LlamaCppEmbeddingProvider` (HTTP llama.cpp embedding endpoint adapter),
+  - server now wires provider when `enable_vector_search=true`,
+  - added parser/provider unit tests with deterministic request-function stubs.
 
 ## Scope
 - Build an ingest/search/generation server path for very large C++ codebases (UE5 scale).
@@ -82,6 +86,7 @@ Current runtime source decision:
 - Implement `LlamaCppEmbeddingProvider` (batch-capable).
 - Wire to Wax vector ingest path.
 - Add retries/timeouts and bounded concurrency.
+- Status: partially implemented (sync HTTP path + timeout + memoization + parser coverage; retries/concurrency controls pending).
 
 ### M6. WAL-Safe Massive Ingest
 - Batch ingest with periodic commit/checkpoint.

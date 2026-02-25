@@ -7,8 +7,10 @@
 #include <Poco/JSON/Object.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -20,6 +22,46 @@ namespace waxcpp::server {
 
 namespace {
 constexpr std::uint64_t kIndexFlushEveryChunks = 128;
+constexpr const char* kDefaultLlamaEmbedEndpoint = "http://127.0.0.1:8081/embedding";
+
+std::optional<std::string> EnvString(const char* name) {
+#if defined(_MSC_VER)
+    char* value = nullptr;
+    std::size_t len = 0;
+    if (_dupenv_s(&value, &len, name) != 0 || value == nullptr) {
+        return std::nullopt;
+    }
+    std::string out(value);
+    std::free(value);
+    if (out.empty()) {
+        return std::nullopt;
+    }
+    return out;
+#else
+    const char* value = std::getenv(name);
+    if (value == nullptr || *value == '\0') {
+        return std::nullopt;
+    }
+    return std::string(value);
+#endif
+}
+
+int ParsePositiveIntEnv(const char* name, int fallback) {
+    const auto raw = EnvString(name);
+    if (!raw.has_value()) {
+        return fallback;
+    }
+    try {
+        std::size_t consumed = 0;
+        const int parsed = std::stoi(*raw, &consumed, 10);
+        if (consumed != raw->size() || parsed <= 0) {
+            throw std::runtime_error("");
+        }
+        return parsed;
+    } catch (...) {
+        throw std::runtime_error(std::string("invalid positive integer env value for ") + name + ": " + *raw);
+    }
+}
 
 std::string ReadFileText(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
@@ -51,13 +93,17 @@ WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
     waxcpp::OrchestratorConfig config{};
     config.enable_vector_search = runtime_models_.enable_vector_search;
     config.require_on_device_providers = false;
-
+    std::shared_ptr<waxcpp::EmbeddingProvider> embedder{};
     if (runtime_models_.enable_vector_search) {
-        throw std::runtime_error(
-            "vector search requested, but llama.cpp embedding provider wiring is not enabled yet");
+        LlamaCppEmbeddingProviderConfig embedder_config{};
+        embedder_config.endpoint = EnvString("WAXCPP_LLAMA_EMBED_ENDPOINT").value_or(kDefaultLlamaEmbedEndpoint);
+        embedder_config.model_path = runtime_models_.embedding_model.model_path;
+        embedder_config.dimensions = ParsePositiveIntEnv("WAXCPP_LLAMA_EMBED_DIMS", 1024);
+        embedder_config.timeout_ms = ParsePositiveIntEnv("WAXCPP_LLAMA_EMBED_TIMEOUT_MS", 30000);
+        embedder = std::make_shared<LlamaCppEmbeddingProvider>(std::move(embedder_config));
     }
 
-    orchestrator_ = std::make_unique<waxcpp::MemoryOrchestrator>(store_path, config, nullptr);
+    orchestrator_ = std::make_unique<waxcpp::MemoryOrchestrator>(store_path, config, std::move(embedder));
 }
 
 std::string WaxRAGHandler::handle_remember(const Poco::JSON::Object::Ptr& params) {

@@ -29,6 +29,7 @@ endif()
 
 add_executable(waxcpp_rag_server
   index_job_manager.cpp
+  llama_cpp_embedding_provider.cpp
   main.cpp
   json_rpc.cpp
   runtime_config.cpp

@@ -1,7 +1,7 @@
 # Context: UE5 Indexing with Wax + llama.cpp (No Torch)
 
 **Created**: 2026-02-25  
-**Current Phase**: M3 complete, M4 in progress  
+**Current Phase**: M4 complete (core path), M5 in progress  
 **Owner**: wax-rag-specialist
 
 ## Decisions Locked
@@ -55,6 +55,21 @@
    - unchanged path detection (`previous` vs `current` manifests)
    - with `resume=true`, chunks from unchanged files are skipped during ingest
    - `index.start` now persists `<checkpoint>.file_manifest` after successful pass
+11. Added `LlamaCppEmbeddingProvider` and vector-runtime wiring:
+   - `cpp/server/llama_cpp_embedding_provider.hpp`
+   - `cpp/server/llama_cpp_embedding_provider.cpp`
+   - supports llama.cpp HTTP embedding endpoint (`POST`) with accepted response schemas:
+     - `{"embedding":[...]}`
+     - `{"embeddings":[[...], ...]}`
+     - `{"data":[{"embedding":[...]}]}`
+   - supports timeout, normalization, and memoization
+   - `WaxRAGHandler` now instantiates provider when `enable_vector_search=true`
+   - env controls:
+     - `WAXCPP_LLAMA_EMBED_ENDPOINT` (default `http://127.0.0.1:8081/embedding`)
+     - `WAXCPP_LLAMA_EMBED_DIMS` (default `1024`)
+     - `WAXCPP_LLAMA_EMBED_TIMEOUT_MS` (default `30000`)
+12. Added provider unit coverage:
+   - `cpp/tests/unit/llama_cpp_embedding_provider_test.cpp`
 
 ## Validation Rules Now Enforced
 1. `generation_model.runtime` must be `llama_cpp`.
@@ -65,7 +80,7 @@
 6. Vector-search enablement requires embedding runtime to be `llama_cpp` with `.gguf` path.
 
 ## Pending Next Steps
-1. Implement `LlamaCppEmbeddingProvider` and wire vector ingest/search path.
+1. Add retries/backoff and bounded-concurrency batch mode for llama embedding requests.
 2. Add end-to-end retrieval + answer path with citation metadata.
 3. Move long-running index execution off request thread (background worker + cancellation-safe stop).
 4. Add crash-window regression tests for interrupted index job across manifests/checkpoints.

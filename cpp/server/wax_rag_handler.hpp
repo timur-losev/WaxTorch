@@ -5,6 +5,7 @@
 #include "../include/waxcpp/runtime_model_config.hpp"
 #include "index_job_manager.hpp"
 #include "json_rpc.hpp"
+#include "llama_cpp_embedding_provider.hpp"
 #include "ue5_chunk_manifest.hpp"
 #include "ue5_filesystem_scanner.hpp"
 
