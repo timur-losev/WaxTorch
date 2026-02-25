@@ -166,10 +166,33 @@ Indexing JSON-RPC methods (baseline skeleton):
 {"jsonrpc":"2.0","id":4,"method":"answer.generate","params":{"query":"How does FName hashing work in UE5?","max_context_items":10,"max_output_tokens":768}}
 ```
 
+`index.start` optional controls:
+```json
+{
+  "jsonrpc":"2.0",
+  "id":5,
+  "method":"index.start",
+  "params":{
+    "repo_root":"g:/Proj/UnrealEngine/Engine/Source",
+    "resume":true,
+    "flush_every_chunks":128,
+    "max_files":0
+  }
+}
+```
+
+- `flush_every_chunks`: commit/checkpoint cadence during ingest (`1..1000000`).
+- `max_files`: deterministic cap on scanned file count (`0..1000000`, `0` means no cap).
+
+Optional server log:
+```bash
+export WAXCPP_SERVER_LOG=1
+```
+
 Current behavior:
-- `index.start` scans/chunks source files, ingests changed chunks into Wax, and persists checkpoint metadata.
+- `index.start` is asynchronous (starts background worker), scans/chunks source files, ingests changed chunks into Wax, and persists checkpoint metadata.
 - `index.status` returns persisted state snapshot (`idle|running|stopped|failed`).
-- `index.stop` transitions `running -> stopped`.
+- `index.stop` requests cancellation and waits worker shutdown (`running -> stopped`).
 - `resume=true` uses `<checkpoint>.file_manifest` to skip unchanged files.
 - `answer.generate` performs Recall + citation map assembly (`relative_path`, `line_start`, `line_end`) and calls llama.cpp generation endpoint.
 
