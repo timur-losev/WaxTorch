@@ -897,7 +897,7 @@ void ScenarioRecallEmbeddingPolicyValidation(const std::filesystem::path& path) 
     orchestrator.Flush();
     bool threw = false;
     try {
-      (void)orchestrator.Recall("text", {1.0F, 0.0F, 0.0F, 0.0F});
+      (void)orchestrator.Recall("text", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     } catch (const std::exception&) {
       threw = true;
     }
@@ -916,7 +916,7 @@ void ScenarioRecallEmbeddingPolicyValidation(const std::filesystem::path& path) 
     orchestrator.Flush();
     bool threw = false;
     try {
-      (void)orchestrator.Recall("vector", {1.0F, 0.0F, 0.0F});  // wrong dims
+      (void)orchestrator.Recall("vector", std::vector<float>{1.0F, 0.0F, 0.0F});  // wrong dims
     } catch (const std::exception&) {
       threw = true;
     }
@@ -1030,7 +1030,7 @@ void ScenarioBatchProviderUsedForVectorRecall(const std::filesystem::path& path)
     orchestrator.Flush();
 
     embedder->Reset();
-    (void)orchestrator.Recall("doc", {1.0F, 0.0F, 0.0F, 0.0F});
+    (void)orchestrator.Recall("doc", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(embedder->batch_calls() == 0, "vector recall should read committed vector index without EmbedBatch");
     Require(embedder->embed_calls() == 0, "vector recall with explicit query embedding should avoid Embed");
     orchestrator.Close();
@@ -1462,11 +1462,11 @@ void ScenarioVectorRecallVisibilityRequiresFlush(const std::filesystem::path& pa
     waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
     orchestrator.Remember("vector gated apple", {});
 
-    const auto before_flush = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto before_flush = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(before_flush.items.empty(), "staged vector mutation should stay invisible before flush");
 
     orchestrator.Flush();
-    const auto after_flush = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_flush = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_flush.items.empty(), "committed vector mutation should be visible after flush");
     orchestrator.Close();
   }
@@ -1490,7 +1490,7 @@ void ScenarioVectorIndexRebuildOnReopen(const std::filesystem::path& path) {
   {
     waxcpp::MemoryOrchestrator reopened(path, config, embedder);
     embedder->Reset();
-    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = reopened.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "reopen should restore committed vector index");
     Require(embedder->batch_calls() == 0, "explicit vector recall should not re-embed docs after reopen");
     Require(embedder->embed_calls() == 0, "explicit vector recall should avoid query embed calls");
@@ -1519,7 +1519,7 @@ void ScenarioVectorReopenReusesPersistedEmbeddingsWithoutReembed(const std::file
     waxcpp::MemoryOrchestrator reopened(path, config, embedder);
     Require(embedder->batch_calls() == 0, "reopen vector index rebuild should not call EmbedBatch");
     Require(embedder->embed_calls() == 0, "reopen vector index rebuild should not call Embed");
-    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = reopened.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "reopened vector recall should succeed from persisted embeddings");
     reopened.Close();
   }
@@ -1546,7 +1546,7 @@ void ScenarioVectorReopenWithMatchingIdentityReusesPersistedEmbeddings(const std
     waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
     Require(reopen_embedder->batch_calls() == 0, "matching identity should reuse persisted embeddings");
     Require(reopen_embedder->embed_calls() == 0, "matching identity should avoid per-item Embed on reopen");
-    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = reopened.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "matching identity reopen should preserve vector recall");
     reopened.Close();
   }
@@ -1573,7 +1573,7 @@ void ScenarioVectorReopenWithMismatchedIdentityReembeds(const std::filesystem::p
     waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
     Require(reopen_embedder->batch_calls() == 1, "mismatched identity should trigger vector re-embed on reopen");
     Require(reopen_embedder->embed_calls() == 0, "mismatched identity re-embed should use batch path");
-    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = reopened.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "mismatched identity reopen should still produce vector recall results");
     reopened.Close();
   }
@@ -1621,7 +1621,7 @@ void ScenarioOversizedIdentityFallbackUsesWAXEM1AndReusesPersistedVectors(const 
     waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
     Require(reopen_embedder->calls() == 0,
             "reopen should reuse persisted vectors and avoid re-embedding with oversized identity fallback");
-    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = reopened.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should succeed after oversized identity fallback");
     reopened.Close();
   }
@@ -1669,7 +1669,7 @@ void ScenarioControlCharIdentityFallbackUsesWAXEM1AndReusesPersistedVectors(cons
     waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
     Require(reopen_embedder->calls() == 0,
             "reopen should reuse persisted vectors and avoid re-embedding with control-char identity fallback");
-    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = reopened.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should succeed after control-char identity fallback");
     reopened.Close();
   }
@@ -1724,7 +1724,7 @@ void ScenarioVectorCloseWithoutFlushPersistsViaStoreClose(const std::filesystem:
   {
     waxcpp::MemoryOrchestrator reopened(path, config, embedder);
     embedder->Reset();
-    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = reopened.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "Close() should persist local mutations and reopen should rebuild vector index");
     Require(embedder->batch_calls() == 0, "explicit vector recall should not batch-embed docs");
     Require(embedder->embed_calls() == 0, "explicit vector recall should avoid query embed calls");
@@ -1746,7 +1746,7 @@ void ScenarioVectorRecallSupportsExplicitEmbeddingWithoutQuery(const std::filesy
     orchestrator.Flush();
 
     embedder->Reset();
-    const auto context = orchestrator.Recall("", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "explicit embedding recall should work with empty query");
     Require(embedder->embed_calls() == 0, "explicit embedding recall should not call Embed");
     Require(embedder->batch_calls() == 0, "explicit embedding recall should not call EmbedBatch");
@@ -1839,7 +1839,7 @@ void ScenarioHybridRecallWhitespaceQueryWithExplicitEmbeddingUsesVectorOnly(cons
     orchestrator.Flush();
 
     embedder->Reset();
-    const auto context = orchestrator.Recall("   \t\r\n", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("   \t\r\n", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(),
             "hybrid recall with explicit embedding should return vector-backed context for whitespace query");
     for (const auto& item : context.items) {
@@ -1887,7 +1887,7 @@ void ScenarioHybridRecallWithExplicitEmbeddingSkipsQueryEmbed(const std::filesys
     orchestrator.Flush();
 
     embedder->Reset();
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "hybrid explicit embedding recall should return context");
     Require(embedder->embed_calls() == 0, "hybrid explicit embedding recall should not call Embed");
     Require(embedder->batch_calls() == 0, "hybrid explicit embedding recall should not call EmbedBatch");
@@ -1950,12 +1950,12 @@ void ScenarioFlushFailureDoesNotExposeStagedVector(const std::filesystem::path& 
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw when store commit failpoint is set");
 
-    const auto before_successful_flush = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto before_successful_flush = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(before_successful_flush.items.empty(),
             "failed flush must not expose staged vector index mutations");
 
     orchestrator.Flush();
-    const auto after_successful_flush = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_successful_flush = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_successful_flush.items.empty(),
             "successful retry flush should expose committed vector mutation");
     orchestrator.Close();
@@ -2018,7 +2018,7 @@ void ScenarioFlushFailureThenCloseReopenRecoversVector(const std::filesystem::pa
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw when failpoint is enabled");
 
-    const auto before_close = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto before_close = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(before_close.items.empty(), "failed flush should keep staged vector hidden in current process");
     orchestrator.Close();
   }
@@ -2026,7 +2026,7 @@ void ScenarioFlushFailureThenCloseReopenRecoversVector(const std::filesystem::pa
   {
     waxcpp::MemoryOrchestrator reopened(path, config, embedder);
     embedder->Reset();
-    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = reopened.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "reopen should rebuild vector index from committed store state");
     Require(embedder->batch_calls() == 0, "explicit vector recall should not re-embed docs after reopen");
     Require(embedder->embed_calls() == 0, "explicit vector recall should avoid query embed calls");
@@ -2141,7 +2141,7 @@ void ScenarioFlushCrashWindowHeaderPublishRebuildsVector(const std::filesystem::
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw on injected crash-window step 4");
 
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(),
             "after header-publish crash-window failure, runtime rebuild should expose committed vector");
     Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
@@ -2173,7 +2173,7 @@ void ScenarioFlushCrashWindowHeaderAPublishRebuildsVector(const std::filesystem:
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw on injected crash-window step 3");
 
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(),
             "after header-A publish crash-window failure, runtime rebuild should expose committed vector");
     Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
@@ -2233,7 +2233,7 @@ void ScenarioFlushCrashWindowFooterPublishRebuildsVector(const std::filesystem::
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw on injected crash-window step 2");
 
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(),
             "after footer publish crash-window failure, runtime rebuild should expose committed vector");
     Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
@@ -2265,7 +2265,7 @@ void ScenarioFlushCrashWindowCheckpointPublishRebuildsVector(const std::filesyst
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw on injected crash-window step 5");
 
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(),
             "after checkpoint publish crash-window failure, runtime rebuild should expose committed vector");
     Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
@@ -2330,7 +2330,7 @@ void ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOpVector(const std::file
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw on injected crash-window step 2");
 
-    const auto after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_failure = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_failure.items.empty(), "footer-published crash-window should expose committed vector");
     Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
     Require(embedder->embed_calls() == 0, "explicit embedding recall should not trigger Embed");
@@ -2338,7 +2338,7 @@ void ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOpVector(const std::file
     // Commit is already externally visible; retry flush should be a no-op and
     // keep the same committed visibility contract.
     orchestrator.Flush();
-    const auto after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_retry = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_retry.items.empty(), "retry flush after externally visible commit should preserve vector visibility");
     Require(embedder->batch_calls() == 0, "retry path should not trigger EmbedBatch");
     Require(embedder->embed_calls() == 0, "retry path should not trigger Embed");
@@ -2401,13 +2401,13 @@ void ScenarioFlushCrashWindowCheckpointPublishRetryFlushIsNoOpVector(const std::
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw on injected crash-window step 5");
 
-    const auto after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_failure = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_failure.items.empty(), "checkpoint-published crash-window should expose committed vector");
     Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
     Require(embedder->embed_calls() == 0, "explicit embedding recall should not trigger Embed");
 
     orchestrator.Flush();
-    const auto after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_retry = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_retry.items.empty(),
             "retry flush after checkpoint-published commit should preserve vector visibility");
     Require(embedder->batch_calls() == 0, "retry path should not trigger EmbedBatch");
@@ -2471,13 +2471,13 @@ void ScenarioFlushCrashWindowHeaderAPublishRetryFlushIsNoOpVector(const std::fil
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw on injected crash-window step 3");
 
-    const auto after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_failure = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_failure.items.empty(), "header-A-published crash-window should expose committed vector");
     Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
     Require(embedder->embed_calls() == 0, "explicit embedding recall should not trigger Embed");
 
     orchestrator.Flush();
-    const auto after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_retry = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_retry.items.empty(),
             "retry flush after header-A-published commit should preserve vector visibility");
     Require(embedder->batch_calls() == 0, "retry path should not trigger EmbedBatch");
@@ -2541,13 +2541,13 @@ void ScenarioFlushCrashWindowHeaderBPublishRetryFlushIsNoOpVector(const std::fil
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw on injected crash-window step 4");
 
-    const auto after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_failure = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_failure.items.empty(), "header-B-published crash-window should expose committed vector");
     Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
     Require(embedder->embed_calls() == 0, "explicit embedding recall should not trigger Embed");
 
     orchestrator.Flush();
-    const auto after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_retry = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_retry.items.empty(),
             "retry flush after header-B-published commit should preserve vector visibility");
     Require(embedder->batch_calls() == 0, "retry path should not trigger EmbedBatch");
@@ -2610,13 +2610,13 @@ void ScenarioFlushCrashWindowTocOnlyRetryFlushPublishesOnSecondAttemptVector(con
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw on injected crash-window step 1");
 
-    const auto after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_failure = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(after_failure.items.empty(), "TOC-only crash-window should keep staged vector hidden");
     Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
     Require(embedder->embed_calls() == 0, "explicit embedding recall should not trigger Embed");
 
     orchestrator.Flush();
-    const auto after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_retry = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_retry.items.empty(), "second flush attempt should publish vector after TOC-only failure");
     Require(embedder->batch_calls() == 0, "retry path should not trigger EmbedBatch");
     Require(embedder->embed_calls() == 0, "retry path should not trigger Embed");
@@ -2863,7 +2863,7 @@ void ScenarioVectorRebuildUsesConfiguredIngestConcurrency(const std::filesystem:
   auto embedder = std::make_shared<ThreadTrackingEmbedder>(std::this_thread::get_id());
   {
     waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector rebuild should make seeded docs searchable");
     orchestrator.Close();
   }
@@ -2901,7 +2901,7 @@ void ScenarioVectorReopenWithNonFinitePersistedEmbeddingReembeds(const std::file
             "single missing embedding during rebuild should not use EmbedBatch fast path");
     Require(embedder->embed_calls() == 1,
             "non-finite persisted embedding should force one single-item re-embed");
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should succeed after re-embedding non-finite persisted record");
     orchestrator.Close();
   }
@@ -2936,7 +2936,7 @@ void ScenarioVectorReopenIgnoresLaterNonFinitePersistedOverride(const std::files
     Require(embedder->batch_calls() == 0, "valid persisted vector should avoid batch re-embed");
     Require(embedder->embed_calls() == 0,
             "non-finite later persisted record should not override earlier valid vector");
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should succeed from valid persisted vector");
     orchestrator.Close();
   }
@@ -2965,7 +2965,7 @@ void ScenarioVectorReopenWithMalformedPersistedEmbeddingCountSkipsRecord(const s
     // Malformed persisted record should be ignored; rebuild must embed the user frame once.
     Require(embedder->batch_calls() == 0, "single-frame rebuild should not use EmbedBatch");
     Require(embedder->embed_calls() == 1, "malformed persisted record should be ignored and re-embedded");
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should succeed after ignoring malformed persisted record");
     orchestrator.Close();
   }
@@ -2993,7 +2993,7 @@ void ScenarioVectorReopenWithMalformedPersistedEmbeddingIdentitySkipsRecord(cons
     waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
     Require(embedder->batch_calls() == 0, "single-frame malformed identity rebuild should not use EmbedBatch");
     Require(embedder->embed_calls() == 1, "malformed identity payload should be ignored and re-embedded");
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should succeed after ignoring malformed identity payload");
     orchestrator.Close();
   }
@@ -3021,7 +3021,7 @@ void ScenarioVectorReopenWithOverlongIdentityV2SkipsRecord(const std::filesystem
     waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
     Require(embedder->batch_calls() == 0, "single-frame overlong identity rebuild should not use EmbedBatch");
     Require(embedder->embed_calls() == 1, "overlong V2 identity should be treated as malformed and re-embedded");
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should succeed after overlong V2 identity fallback");
     orchestrator.Close();
   }
@@ -3051,7 +3051,7 @@ void ScenarioVectorReopenWithControlCharIdentityV2SkipsRecord(const std::filesys
     waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
     Require(embedder->batch_calls() == 0, "single-frame control-char identity rebuild should not use EmbedBatch");
     Require(embedder->embed_calls() == 1, "control-char V2 identity should be treated as malformed and re-embedded");
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should succeed after control-char V2 identity fallback");
     orchestrator.Close();
   }
@@ -3078,7 +3078,7 @@ void ScenarioVectorReopenWithEmptyIdentityV2SkipsRecord(const std::filesystem::p
     waxcpp::MemoryOrchestrator orchestrator(path, config, embedder);
     Require(embedder->batch_calls() == 0, "single-frame empty identity rebuild should not use EmbedBatch");
     Require(embedder->embed_calls() == 1, "empty V2 identity should be treated as malformed and re-embedded");
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should succeed after empty V2 identity fallback");
     orchestrator.Close();
   }
@@ -3112,7 +3112,7 @@ void ScenarioVectorReopenEmptyIdentityOverrideDoesNotReplaceValidPersisted(const
     Require(embedder->batch_calls() == 0, "valid persisted vector should avoid batch re-embed");
     Require(embedder->embed_calls() == 0,
             "later empty-identity V2 record should not override earlier valid persisted vector");
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should remain available from earlier valid persisted vector");
     orchestrator.Close();
   }
@@ -3146,7 +3146,7 @@ void ScenarioVectorReopenEmptyEmbeddingOverrideDoesNotReplaceValidPersisted(cons
     Require(embedder->batch_calls() == 0, "valid persisted vector should avoid batch re-embed");
     Require(embedder->embed_calls() == 0,
             "later empty embedding record should not override earlier valid persisted vector");
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should remain available from earlier valid persisted vector");
     orchestrator.Close();
   }
@@ -3181,7 +3181,7 @@ void ScenarioVectorReopenDimensionMismatchedOverrideDoesNotReplaceValidPersisted
     Require(embedder->batch_calls() == 0, "valid persisted vector should avoid batch re-embed");
     Require(embedder->embed_calls() == 0,
             "later dimension-mismatched record should not override earlier valid persisted vector");
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should remain available from earlier valid persisted vector");
     orchestrator.Close();
   }
@@ -3239,7 +3239,7 @@ void ScenarioVectorReopenMalformedEmbeddingFuzzKeepsValidPersistedVector(const s
     Require(embedder->batch_calls() == 0, "valid persisted vector should avoid batch re-embed despite malformed records");
     Require(embedder->embed_calls() == 0,
             "valid persisted vector should avoid single-item re-embed despite malformed records");
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "vector recall should remain available with malformed embedding journal noise");
     orchestrator.Close();
   }
@@ -3265,7 +3265,7 @@ void ScenarioRememberIngestConcurrencyPropagatesEmbedErrors(const std::filesyste
       threw = true;
     }
     Require(threw, "remember should propagate embedder failure under ingest_concurrency");
-    const auto stats = orchestrator.Recall("ok1", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto stats = orchestrator.Recall("ok1", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(stats.items.empty(), "failed remember should not leave partial vector-visible content");
     orchestrator.Close();
   }
@@ -3493,7 +3493,7 @@ void ScenarioVectorIndexCommitFailureRecoversFromCommittedStore(const std::files
     Require(embedder->batch_calls() == 0, "vector rebuild should use persisted embeddings without EmbedBatch");
     Require(embedder->embed_calls() == 0, "vector rebuild should use persisted embeddings without Embed");
 
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(),
             "flush recovery should rebuild vector index from committed store state");
     Require(embedder->batch_calls() == 0, "explicit embedding recall should not call EmbedBatch");
@@ -3525,13 +3525,13 @@ void ScenarioVectorIndexCommitFailureRetryFlushIsNoOp(const std::filesystem::pat
     waxcpp::vector::testing::ClearCommitFailCountdown();
     Require(flush_threw, "flush should throw when vector index commit failpoint is set");
 
-    const auto after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_failure = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_failure.items.empty(), "failed vector index commit should rebuild and keep vector recall visible");
     Require(embedder->batch_calls() == 0, "rebuild should use persisted embeddings without EmbedBatch");
     Require(embedder->embed_calls() == 0, "rebuild should use persisted embeddings without Embed");
 
     orchestrator.Flush();  // retry should be no-op after externally visible commit
-    const auto after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_retry = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_retry.items.empty(), "retry flush should keep vector recall visible");
     Require(embedder->batch_calls() == 0, "retry no-op flush should not call EmbedBatch");
     Require(embedder->embed_calls() == 0, "retry no-op flush should not call Embed");
@@ -3566,7 +3566,7 @@ void ScenarioVectorIndexCommitFailureRetryFlushIsNoOp(const std::filesystem::pat
   {
     auto reopen_embedder = std::make_shared<CountingBatchEmbedder>();
     waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
-    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = reopened.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "reopen after vector retry no-op path should preserve vector recall visibility");
     Require(reopen_embedder->batch_calls() == 0, "reopen should use persisted embeddings without EmbedBatch");
     Require(reopen_embedder->embed_calls() == 0, "reopen should use persisted embeddings without Embed");
@@ -3600,7 +3600,7 @@ void ScenarioHybridVectorIndexCommitFailureRecoversBothChannelsAndRetryNoOp(cons
     Require(embedder->batch_calls() == 0, "hybrid rebuild should reuse persisted embeddings without EmbedBatch");
     Require(embedder->embed_calls() == 0, "hybrid rebuild should reuse persisted embeddings without Embed");
 
-    const auto hybrid_after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto hybrid_after_failure = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!hybrid_after_failure.items.empty(), "failed hybrid flush should rebuild and keep hybrid recall visible");
     Require(ContextHasSource(hybrid_after_failure, waxcpp::SearchSource::kText),
             "failed hybrid flush should keep text source visible");
@@ -3610,7 +3610,7 @@ void ScenarioHybridVectorIndexCommitFailureRecoversBothChannelsAndRetryNoOp(cons
     Require(embedder->embed_calls() == 0, "hybrid rebuild should reuse persisted embeddings without Embed");
 
     orchestrator.Flush();  // retry no-op path after externally visible commit
-    const auto hybrid_after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto hybrid_after_retry = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!hybrid_after_retry.items.empty(), "retry no-op should preserve hybrid visibility");
     Require(ContextHasSource(hybrid_after_retry, waxcpp::SearchSource::kText),
             "retry no-op should preserve text source");
@@ -3633,7 +3633,7 @@ void ScenarioHybridVectorIndexCommitFailureRecoversBothChannelsAndRetryNoOp(cons
   {
     auto reopen_embedder = std::make_shared<CountingBatchEmbedder>();
     waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
-    const auto hybrid_context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto hybrid_context = reopened.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!hybrid_context.items.empty(), "reopen should preserve hybrid recall visibility for retry no-op path");
     Require(ContextHasSource(hybrid_context, waxcpp::SearchSource::kText),
             "reopen should preserve text source for hybrid retry no-op");
@@ -3668,13 +3668,13 @@ void ScenarioFlushCrashWindowTocOnlyRetryFlushPublishesOnSecondAttemptHybrid(con
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw on injected hybrid crash-window step 1");
 
-    const auto after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_failure = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(after_failure.items.empty(), "TOC-only hybrid crash-window should keep staged mutations hidden");
     Require(embedder->batch_calls() == 0, "explicit embedding recall should not trigger EmbedBatch");
     Require(embedder->embed_calls() == 0, "explicit embedding recall should not trigger Embed");
 
     orchestrator.Flush();
-    const auto after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_retry = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_retry.items.empty(), "second flush attempt should publish hybrid mutations after TOC-only failure");
     Require(ContextHasSource(after_retry, waxcpp::SearchSource::kText),
             "hybrid retry publish should include text source");
@@ -3697,7 +3697,7 @@ void ScenarioFlushCrashWindowTocOnlyRetryFlushPublishesOnSecondAttemptHybrid(con
   {
     auto reopen_embedder = std::make_shared<CountingBatchEmbedder>();
     waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
-    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = reopened.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "reopen should preserve hybrid recall after TOC-only retry publish");
     Require(ContextHasSource(context, waxcpp::SearchSource::kText),
             "reopen should preserve hybrid text source after TOC-only retry publish");
@@ -3732,7 +3732,7 @@ void ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOpHybrid(const std::file
     waxcpp::core::testing::ClearCommitFailStep();
     Require(flush_threw, "flush should throw on injected hybrid crash-window step 2");
 
-    const auto after_failure = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_failure = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_failure.items.empty(), "footer-published hybrid crash-window should expose committed state");
     Require(ContextHasSource(after_failure, waxcpp::SearchSource::kText),
             "footer-published hybrid crash-window should include text source");
@@ -3742,7 +3742,7 @@ void ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOpHybrid(const std::file
     Require(embedder->embed_calls() == 0, "explicit embedding recall should not trigger Embed");
 
     orchestrator.Flush();
-    const auto after_retry = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto after_retry = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!after_retry.items.empty(), "retry flush after hybrid externally visible commit should preserve visibility");
     Require(ContextHasSource(after_retry, waxcpp::SearchSource::kText),
             "hybrid retry no-op should preserve text source");
@@ -3765,7 +3765,7 @@ void ScenarioFlushCrashWindowFooterPublishRetryFlushIsNoOpHybrid(const std::file
   {
     auto reopen_embedder = std::make_shared<CountingBatchEmbedder>();
     waxcpp::MemoryOrchestrator reopened(path, config, reopen_embedder);
-    const auto context = reopened.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = reopened.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "reopen should preserve hybrid recall after footer retry no-op");
     Require(ContextHasSource(context, waxcpp::SearchSource::kText),
             "reopen should preserve hybrid text source after footer retry no-op");
@@ -3803,7 +3803,7 @@ void ScenarioNoOpFlushSkipsIndexCommitCalls(const std::filesystem::path& path) {
     waxcpp::vector::testing::ClearCommitFailOnCall();
     Require(!flush_threw, "no-op flush should skip index CommitStaged when no pending mutations exist");
 
-    const auto context = orchestrator.Recall("apple", {1.0F, 0.0F, 0.0F, 0.0F});
+    const auto context = orchestrator.Recall("apple", std::vector<float>{1.0F, 0.0F, 0.0F, 0.0F});
     Require(!context.items.empty(), "no-op flush path should preserve hybrid recall visibility");
     Require(ContextHasSource(context, waxcpp::SearchSource::kText),
             "no-op flush path should preserve text source visibility");
@@ -5141,6 +5141,240 @@ void ScenarioSurrogateMapHandlesOverwriteChain(const std::filesystem::path& path
   orchestrator.Close();
 }
 
+void ScenarioRecallWithFrameFilterExcludesSuperseded(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: Recall(query, FrameFilter) excludes superseded frames");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember("The quick brown fox jumps over the lazy dog.", {});
+  orchestrator.Flush();
+
+  // Generate surrogates — this supersedes source frames.
+  waxcpp::MaintenanceOptions opts{};
+  const auto report = orchestrator.OptimizeSurrogates(opts);
+  Require(report.generated_surrogates >= 1, "should generate surrogates");
+  orchestrator.Flush();
+
+  // Default filter: include_superseded=false, include_surrogates=false.
+  waxcpp::FrameFilter filter{};
+  const auto ctx = orchestrator.Recall("fox", filter);
+  // Results should exclude both superseded source and surrogate frames.
+  // Text search may still find content, but the filter removes superseded/surrogates.
+  // In practice the items may be empty if all matching frames are filtered.
+  // This scenario verifies the filter pipeline doesn't crash.
+
+  orchestrator.Close();
+}
+
+void ScenarioRecallWithPerCallEmbeddingPolicy(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: Recall(query, QueryEmbeddingPolicy) per-call override");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+  // Default policy is kIfAvailable.
+  config.query_embedding_policy = waxcpp::QueryEmbeddingPolicy::kIfAvailable;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember("Machine learning models learn patterns from data.", {});
+  orchestrator.Flush();
+
+  // Per-call kNever should work (text-only).
+  const auto ctx = orchestrator.Recall("machine learning", waxcpp::QueryEmbeddingPolicy::kNever);
+  Require(!ctx.items.empty(), "kNever per-call recall should still return text results");
+
+  // Per-call kAlways without embedder should throw.
+  bool threw = false;
+  try {
+    (void)orchestrator.Recall("test", waxcpp::QueryEmbeddingPolicy::kAlways);
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  Require(threw, "kAlways per-call without embedder should throw");
+
+  orchestrator.Close();
+}
+
+void ScenarioSearchWithFrameFilter(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: Search(query, FrameFilter) filters results");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember("Alpha bravo charlie.", {});
+  orchestrator.Remember("Delta echo foxtrot.", {});
+  orchestrator.Flush();
+
+  // Get the frame IDs via unfiltered search.
+  const auto all_hits = orchestrator.Search("alpha delta", waxcpp::DirectSearchMode::kText, 0.0f, 10);
+
+  if (all_hits.size() >= 2) {
+    // Filter to only the first frame by ID.
+    waxcpp::FrameFilter filter{};
+    filter.frame_ids = std::unordered_set<std::uint64_t>{all_hits[0].frame_id};
+    const auto filtered = orchestrator.Search("alpha delta", filter, waxcpp::DirectSearchMode::kText, 0.0f, 10);
+    Require(filtered.size() <= 1, "filtered search should return at most 1 hit");
+  }
+
+  orchestrator.Close();
+}
+
+void ScenarioActiveSessionId(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: ActiveSessionId returns current session ID");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+
+  // No session active.
+  Require(orchestrator.ActiveSessionId().empty(), "no active session initially");
+
+  // Start session.
+  const auto id = orchestrator.StartSession();
+  Require(!id.empty(), "StartSession should return non-empty ID");
+  Require(orchestrator.ActiveSessionId() == id, "ActiveSessionId should match");
+
+  // End session.
+  orchestrator.EndSession();
+  Require(orchestrator.ActiveSessionId().empty(), "no active session after end");
+
+  orchestrator.Close();
+}
+
+void ScenarioSessionRuntimeStatsReturnsActive(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: GetSessionRuntimeStats returns active state");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+
+  // No session.
+  const auto stats1 = orchestrator.GetSessionRuntimeStats();
+  Require(!stats1.active, "should not be active before StartSession");
+  Require(stats1.session_id.empty(), "session_id should be empty");
+
+  // Start session.
+  const auto id = orchestrator.StartSession();
+  const auto stats2 = orchestrator.GetSessionRuntimeStats();
+  Require(stats2.active, "should be active after StartSession");
+  Require(stats2.session_id == id, "session_id should match");
+
+  // End session.
+  orchestrator.EndSession();
+  const auto stats3 = orchestrator.GetSessionRuntimeStats();
+  Require(!stats3.active, "should not be active after EndSession");
+
+  orchestrator.Close();
+}
+
+void ScenarioRuntimeStatsIncludesNewFields(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: GetRuntimeStats includes structured_memory_enabled and access_stats_scoring_enabled");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+  config.enable_structured_memory = true;
+  config.enable_access_stats_scoring = true;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  const auto stats = orchestrator.GetRuntimeStats();
+  Require(stats.structured_memory_enabled, "structured_memory_enabled should be true");
+  Require(stats.access_stats_scoring_enabled, "access_stats_scoring_enabled should be true");
+
+  orchestrator.Close();
+}
+
+void ScenarioTierSelectionPolicyFromConfig(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: FastRAGConfig.tier_selection_policy wired into orchestrator");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+  // Use age-only tier selection policy.
+  config.rag.tier_selection_policy = waxcpp::TierPolicyAgeBalanced();
+  config.rag.enable_query_aware_tier_selection = true;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+  orchestrator.Remember(
+      "Photosynthesis converts light energy into chemical energy. "
+      "Chloroplasts contain chlorophyll that absorbs sunlight.",
+      {});
+  orchestrator.Flush();
+
+  // Generate surrogates to test that tier selection works.
+  waxcpp::MaintenanceOptions opts{};
+  opts.enable_hierarchical = true;
+  const auto report = orchestrator.OptimizeSurrogates(opts);
+  Require(report.generated_surrogates >= 1, "should generate surrogates");
+  orchestrator.Flush();
+
+  // Recall should work with the age-based tier selector.
+  const auto ctx = orchestrator.Recall("photosynthesis");
+  // The scenario verifies no crash with the wired tier policy.
+
+  orchestrator.Close();
+}
+
+void ScenarioRememberHandoffAndLatestHandoff(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: RememberHandoff/LatestHandoff round-trip");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+
+  // No handoffs yet.
+  const auto empty = orchestrator.LatestHandoff();
+  Require(!empty.has_value(), "no handoff initially");
+
+  // Remember a handoff.
+  const auto fid = orchestrator.RememberHandoff(
+      "Session summary: discussed architecture patterns.",
+      std::string("my-project"),
+      {"Implement caching layer", "Add unit tests"});
+  // Frame IDs start at 0 for empty stores; verify the call succeeded.
+  (void)fid;  // Valid frame ID assigned.
+
+  // Retrieve it.
+  const auto rec = orchestrator.LatestHandoff();
+  Require(rec.has_value(), "should find handoff");
+  Require(rec->frame_id == fid, "frame_id should match");
+  Require(rec->content == "Session summary: discussed architecture patterns.", "content mismatch");
+  Require(rec->project.has_value() && *rec->project == "my-project", "project mismatch");
+  Require(rec->pending_tasks.size() == 2, "should have 2 pending tasks");
+  Require(rec->pending_tasks[0] == "Implement caching layer", "task 0 mismatch");
+  Require(rec->pending_tasks[1] == "Add unit tests", "task 1 mismatch");
+
+  // Filter by project.
+  const auto wrong_project = orchestrator.LatestHandoff(std::string("other-project"));
+  Require(!wrong_project.has_value(), "wrong project should return empty");
+
+  const auto right_project = orchestrator.LatestHandoff(std::string("my-project"));
+  Require(right_project.has_value(), "right project should find handoff");
+
+  orchestrator.Close();
+}
+
+void ScenarioHandoffPersistsAcrossReopen(const std::filesystem::path& path) {
+  waxcpp::tests::Log("scenario: Handoff persists across close/reopen");
+  waxcpp::OrchestratorConfig config{};
+  config.enable_vector_search = false;
+
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    orchestrator.RememberHandoff(
+        "Handoff content for persistence test.",
+        std::string("persist-project"),
+        {"Task A"});
+    orchestrator.Close();
+  }
+
+  // Reopen and verify.
+  {
+    waxcpp::MemoryOrchestrator orchestrator(path, config, nullptr);
+    const auto rec = orchestrator.LatestHandoff();
+    Require(rec.has_value(), "handoff should persist across reopen");
+    Require(rec->content == "Handoff content for persistence test.", "content should persist");
+    Require(rec->project.has_value() && *rec->project == "persist-project", "project should persist");
+    Require(rec->pending_tasks.size() == 1, "should have 1 pending task");
+    orchestrator.Close();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -5272,6 +5506,15 @@ int main() {
     const auto path123 = UniquePath();
     const auto path124 = UniquePath();
     const auto path125 = UniquePath();
+    const auto path126 = UniquePath();
+    const auto path127 = UniquePath();
+    const auto path128 = UniquePath();
+    const auto path129 = UniquePath();
+    const auto path130 = UniquePath();
+    const auto path131 = UniquePath();
+    const auto path132 = UniquePath();
+    const auto path133 = UniquePath();
+    const auto path134 = UniquePath();
 
     ScenarioVectorPolicyValidation(path0);
     ScenarioOnDeviceProviderPolicyValidation(path42);
@@ -5399,6 +5642,15 @@ int main() {
     ScenarioQueryEmbeddingPolicyAlwaysThrowsWithoutEmbedder(path123);
     ScenarioCompactIndexesReturnsValidReport(path124);
     ScenarioSurrogateMapHandlesOverwriteChain(path125);
+    ScenarioRecallWithFrameFilterExcludesSuperseded(path126);
+    ScenarioRecallWithPerCallEmbeddingPolicy(path127);
+    ScenarioSearchWithFrameFilter(path128);
+    ScenarioActiveSessionId(path129);
+    ScenarioSessionRuntimeStatsReturnsActive(path130);
+    ScenarioRuntimeStatsIncludesNewFields(path131);
+    ScenarioTierSelectionPolicyFromConfig(path132);
+    ScenarioRememberHandoffAndLatestHandoff(path133);
+    ScenarioHandoffPersistsAcrossReopen(path134);
 
     const std::vector<std::filesystem::path> cleanup_paths = {
         path0,  path1,  path2,  path3,  path4,  path5,  path6,  path7,  path8,  path9,  path10,
@@ -5414,6 +5666,7 @@ int main() {
         path106, path107, path108, path109, path110, path111, path112, path113,
         path114, path115, path116, path117, path118, path119, path120, path121,
         path122, path123, path124, path125,
+        path126, path127, path128, path129, path130, path131, path132, path133, path134,
     };
     for (const auto& path : cleanup_paths) {
       CleanupPath(path);

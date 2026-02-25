@@ -30,10 +30,17 @@ class MemoryOrchestrator {
                      std::shared_ptr<EmbeddingProvider> embedder = nullptr,
                      const TokenCounter* token_counter = nullptr);
 
+  // ── Ingest ─────────────────────────────────────────────────
   void Remember(const std::string& content, const Metadata& metadata = {});
   void RememberFile(const std::filesystem::path& file_path, const Metadata& metadata = {});
+
+  // ── Recall (RAG context assembly) ──────────────────────────
   RAGContext Recall(const std::string& query);
   RAGContext Recall(const std::string& query, const std::vector<float>& embedding);
+  RAGContext Recall(const std::string& query, const FrameFilter& frame_filter);
+  RAGContext Recall(const std::string& query, QueryEmbeddingPolicy policy);
+
+  // ── Structured memory (v1 entity/attribute/value) ──────────
   void RememberFact(const std::string& entity,
                     const std::string& attribute,
                     const std::string& value,
@@ -41,36 +48,49 @@ class MemoryOrchestrator {
   bool ForgetFact(const std::string& entity, const std::string& attribute);
   std::vector<StructuredMemoryEntry> RecallFactsByEntityPrefix(const std::string& entity_prefix, int limit = 32);
 
-  /// Direct search: raw candidate retrieval without RAG context assembly.
-  /// Returns ranked hits suitable for MCP and other raw-search callers.
+  // ── Direct search ──────────────────────────────────────────
   std::vector<MemorySearchHit> Search(
       const std::string& query,
       DirectSearchMode mode = DirectSearchMode::kHybrid,
       float hybrid_alpha = 0.5f,
       int top_k = 10);
 
-  /// Returns lightweight runtime statistics for operators and diagnostics.
+  std::vector<MemorySearchHit> Search(
+      const std::string& query,
+      const FrameFilter& frame_filter,
+      DirectSearchMode mode = DirectSearchMode::kHybrid,
+      float hybrid_alpha = 0.5f,
+      int top_k = 10);
+
+  // ── Runtime stats ──────────────────────────────────────────
   RuntimeStats GetRuntimeStats() const;
+  SessionRuntimeStats GetSessionRuntimeStats() const;
 
-  /// Begin a tagged session; returns the session ID string.
-  /// All subsequent Remember/RememberFact calls stamp this ID.
+  // ── Session management ─────────────────────────────────────
   std::string StartSession();
-
-  /// End the current tagged session.
   void EndSession();
+  std::string ActiveSessionId() const;
 
-  /// Run surrogate optimization on the store using the built-in generator.
+  // ── Handoff ────────────────────────────────────────────────
+  /// Store a handoff record (session summary with pending tasks).
+  /// Returns the frame ID of the stored handoff.
+  std::uint64_t RememberHandoff(
+      const std::string& content,
+      const std::optional<std::string>& project = std::nullopt,
+      const std::vector<std::string>& pending_tasks = {});
+
+  /// Retrieve the most recent handoff record, optionally filtered by project.
+  std::optional<HandoffRecord> LatestHandoff(
+      const std::optional<std::string>& project = std::nullopt) const;
+
+  // ── Maintenance ────────────────────────────────────────────
   MaintenanceReport OptimizeSurrogates(const MaintenanceOptions& options = {});
-
-  /// Compact all indexes (FTS5 + vector) to reduce disk footprint.
-  /// Returns a lightweight report with scanned frame count.
   MaintenanceReport CompactIndexes();
 
   void Flush();
   void Close();
 
   /// Access the frame access stats manager (thread-safe).
-  /// May be used to export/import stats for persistence.
   AccessStatsManager& GetAccessStats() { return access_stats_; }
   const AccessStatsManager& GetAccessStats() const { return access_stats_; }
 
@@ -104,6 +124,12 @@ class MemoryOrchestrator {
 
   bool closed_ = false;
   mutable std::mutex mutex_{};
+
+  /// Internal: shared Recall implementation with optional frame filter and policy override.
+  RAGContext RecallImpl(const std::string& query,
+                        const std::optional<std::vector<float>>& explicit_embedding,
+                        const std::optional<FrameFilter>& frame_filter,
+                        std::optional<QueryEmbeddingPolicy> policy_override);
 };
 
 }  // namespace waxcpp

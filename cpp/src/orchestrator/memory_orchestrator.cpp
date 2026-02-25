@@ -1116,7 +1116,7 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
       token_counter_(token_counter),
       embedding_cache_(config.embedding_cache_capacity),
       tier_selector_(config.rag.enable_query_aware_tier_selection
-                         ? TierPolicyImportanceBalanced()
+                         ? config.rag.tier_selection_policy
                          : TierSelectionPolicy{TierPolicyDisabled{}}) {
   if (config_.rag.search_mode.kind == SearchModeKind::kTextOnly && !config_.enable_text_search) {
     throw std::runtime_error("text-only search mode requires text search to be enabled");
@@ -1261,24 +1261,96 @@ void MemoryOrchestrator::RememberFile(const std::filesystem::path& file_path,
   Remember(content, merged);
 }
 
-RAGContext MemoryOrchestrator::Recall(const std::string& query) {
-  std::lock_guard<std::mutex> lock(mutex_);
+// ── Shared Recall implementation ─────────────────────────────
+
+namespace {
+
+/// Apply FrameFilter to search results using WaxStore metadata.
+/// Removes results that don't pass the filter predicates.
+void ApplyFrameFilter(SearchResponse& response,
+                      const FrameFilter& filter,
+                      const WaxStore& store,
+                      const std::unordered_map<std::uint64_t, std::uint64_t>& surrogate_map) {
+  // Build a set of surrogate frame IDs for fast lookup.
+  std::unordered_set<std::uint64_t> surrogate_ids;
+  if (!filter.include_surrogates) {
+    for (const auto& [source_id, surr_id] : surrogate_map) {
+      surrogate_ids.insert(surr_id);
+    }
+  }
+
+  // Build a frame-ID → WaxFrameMeta map for the result frame IDs.
+  std::unordered_map<std::uint64_t, WaxFrameMeta> meta_by_id;
+  const auto all_metas = store.FrameMetas();
+  for (const auto& m : all_metas) {
+    meta_by_id[m.id] = m;
+  }
+
+  auto& results = response.results;
+  results.erase(
+      std::remove_if(results.begin(), results.end(),
+                     [&](const SearchResult& r) {
+                       auto it = meta_by_id.find(r.frame_id);
+                       if (it == meta_by_id.end()) return true;
+                       const auto& meta = it->second;
+
+                       // Deleted frame check.
+                       if (!filter.include_deleted && meta.status != 0) return true;
+
+                       // Superseded frame check.
+                       if (!filter.include_superseded && meta.superseded_by.has_value()) return true;
+
+                       // Surrogate frame check.
+                       if (!filter.include_surrogates && surrogate_ids.count(r.frame_id)) return true;
+
+                       // Frame ID allowlist check.
+                       if (filter.frame_ids.has_value() && !filter.frame_ids->count(r.frame_id)) return true;
+
+                       // min_score is applied separately, not via FrameFilter.
+                       return false;
+                     }),
+      results.end());
+}
+
+}  // namespace
+
+RAGContext MemoryOrchestrator::RecallImpl(
+    const std::string& query,
+    const std::optional<std::vector<float>>& explicit_embedding,
+    const std::optional<FrameFilter>& frame_filter,
+    std::optional<QueryEmbeddingPolicy> policy_override) {
+  // Caller holds mutex_.
   ThrowIfClosed(closed_);
 
-  // Resolve effective embedding availability from QueryEmbeddingPolicy.
-  const auto policy = config_.query_embedding_policy;
+  // Resolve effective policy.
+  const auto policy = policy_override.value_or(config_.query_embedding_policy);
   if (policy == QueryEmbeddingPolicy::kAlways && embedder_ == nullptr) {
     throw std::runtime_error("Recall: QueryEmbeddingPolicy::kAlways requires an embedder");
   }
   const bool use_vector =
-      config_.enable_vector_search &&
-      policy != QueryEmbeddingPolicy::kNever;
+      config_.enable_vector_search && policy != QueryEmbeddingPolicy::kNever;
   const std::shared_ptr<EmbeddingProvider> effective_embedder =
       (policy == QueryEmbeddingPolicy::kNever) ? nullptr : embedder_;
 
+  // Validate explicit embedding if provided.
+  if (explicit_embedding.has_value()) {
+    if (!config_.enable_vector_search) {
+      throw std::runtime_error("Recall(query, embedding) requires vector search to be enabled");
+    }
+    if (vector_index_ != nullptr &&
+        explicit_embedding->size() != static_cast<std::size_t>(vector_index_->dimensions())) {
+      throw std::runtime_error("Recall(query, embedding) dimension mismatch with vector index");
+    }
+    if (!AllFinite(*explicit_embedding)) {
+      throw std::runtime_error("Recall(query, embedding) requires finite embedding values");
+    }
+  }
+
   SearchRequest req;
   req.query = query;
+  if (explicit_embedding.has_value()) req.embedding = *explicit_embedding;
   req.mode = config_.rag.search_mode;
+  if (frame_filter.has_value()) req.frame_filter = *frame_filter;
   const int clamped_search_top_k = std::max(0, config_.rag.search_top_k);
   const int clamped_max_snippets = std::max(0, config_.rag.max_snippets);
   req.top_k = clamped_search_top_k;
@@ -1288,26 +1360,35 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
   req.expansion_max_tokens = config_.rag.expansion_max_tokens;
   req.max_context_tokens = config_.rag.max_context_tokens;
   req.snippet_max_tokens = config_.rag.snippet_max_tokens;
+
+  const bool vectors_for_channels = explicit_embedding.has_value() ? true : use_vector;
+  const auto& embedder_for_channels = explicit_embedding.has_value() ? embedder_ : effective_embedder;
+
   const auto channels = BuildStoreChannels(
       store_,
       config_.enable_text_search ? &store_text_index_ : nullptr,
       config_.enable_text_search ? &structured_text_index_ : nullptr,
-      use_vector ? vector_index_.get() : nullptr,
-      effective_embedder,
+      vectors_for_channels ? vector_index_.get() : nullptr,
+      embedder_for_channels,
       config_.enable_text_search,
-      use_vector,
+      vectors_for_channels,
       req);
-  // Use adaptive fusion: classifies query type, selects BM25/vector weights.
+
   auto response = UnifiedSearchAdaptive(req, channels.text_results, channels.vector_results);
 
-  // Intent-aware reranking: boost/penalize based on query intents.
+  // Apply frame filter as post-filter on search results.
+  if (frame_filter.has_value()) {
+    ApplyFrameFilter(response, *frame_filter, store_, surrogate_map_);
+  }
+
+  // Intent-aware reranking.
   if (config_.rag.enable_answer_focused_ranking && !response.results.empty()) {
     const int rerank_window = std::min(
         std::max(clamped_search_top_k * 2, 10), config_.rag.answer_rerank_window);
     response.results = IntentAwareRerank(response.results, query, rerank_window);
   }
 
-  // Record frame accesses for importance-based tier selection.
+  // Record frame accesses.
   if (!response.results.empty()) {
     std::vector<std::uint64_t> accessed_ids;
     accessed_ids.reserve(response.results.size());
@@ -1315,7 +1396,6 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
     access_stats_.RecordAccesses(accessed_ids);
   }
 
-  // Enrich results with tier-appropriate surrogate text before context assembly.
   EnrichResultsWithSurrogates(response, query, store_, tier_selector_,
                               access_stats_, surrogate_map_,
                               config_.rag.enable_query_aware_tier_selection,
@@ -1323,7 +1403,6 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
 
   auto context = BuildFastRAGContext(req, response);
 
-  // Optional deterministic answer extraction as post-processing.
   if (config_.rag.enable_answer_extraction && !context.items.empty()) {
     context.extracted_answer = answer_extractor_.ExtractAnswer(query, context.items);
   }
@@ -1331,72 +1410,24 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
   return context;
 }
 
+RAGContext MemoryOrchestrator::Recall(const std::string& query) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return RecallImpl(query, std::nullopt, std::nullopt, std::nullopt);
+}
+
 RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vector<float>& embedding) {
   std::lock_guard<std::mutex> lock(mutex_);
-  ThrowIfClosed(closed_);
-  if (!config_.enable_vector_search) {
-    throw std::runtime_error("Recall(query, embedding) requires vector search to be enabled");
-  }
-  if (vector_index_ != nullptr && embedding.size() != static_cast<std::size_t>(vector_index_->dimensions())) {
-    throw std::runtime_error("Recall(query, embedding) dimension mismatch with vector index");
-  }
-  if (!AllFinite(embedding)) {
-    throw std::runtime_error("Recall(query, embedding) requires finite embedding values");
-  }
-  SearchRequest req;
-  req.query = query;
-  req.embedding = embedding;
-  req.mode = config_.rag.search_mode;
-  const int clamped_search_top_k = std::max(0, config_.rag.search_top_k);
-  const int clamped_max_snippets = std::max(0, config_.rag.max_snippets);
-  req.top_k = clamped_search_top_k;
-  req.max_snippets = clamped_max_snippets;
-  req.rrf_k = config_.rag.rrf_k;
-  req.preview_max_bytes = config_.rag.preview_max_bytes;
-  req.expansion_max_tokens = config_.rag.expansion_max_tokens;
-  req.max_context_tokens = config_.rag.max_context_tokens;
-  req.snippet_max_tokens = config_.rag.snippet_max_tokens;
-  const auto channels = BuildStoreChannels(
-      store_,
-      config_.enable_text_search ? &store_text_index_ : nullptr,
-      config_.enable_text_search ? &structured_text_index_ : nullptr,
-      vector_index_.get(),
-      embedder_,
-      config_.enable_text_search,
-      config_.enable_vector_search,
-      req);
-  // Use adaptive fusion: classifies query type, selects BM25/vector weights.
-  auto response = UnifiedSearchAdaptive(req, channels.text_results, channels.vector_results);
+  return RecallImpl(query, embedding, std::nullopt, std::nullopt);
+}
 
-  // Intent-aware reranking: boost/penalize based on query intents.
-  if (config_.rag.enable_answer_focused_ranking && !response.results.empty()) {
-    const int rerank_window = std::min(
-        std::max(clamped_search_top_k * 2, 10), config_.rag.answer_rerank_window);
-    response.results = IntentAwareRerank(response.results, query, rerank_window);
-  }
+RAGContext MemoryOrchestrator::Recall(const std::string& query, const FrameFilter& frame_filter) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return RecallImpl(query, std::nullopt, frame_filter, std::nullopt);
+}
 
-  // Record frame accesses for importance-based tier selection.
-  if (!response.results.empty()) {
-    std::vector<std::uint64_t> accessed_ids;
-    accessed_ids.reserve(response.results.size());
-    for (const auto& r : response.results) accessed_ids.push_back(r.frame_id);
-    access_stats_.RecordAccesses(accessed_ids);
-  }
-
-  // Enrich results with tier-appropriate surrogate text before context assembly.
-  EnrichResultsWithSurrogates(response, query, store_, tier_selector_,
-                              access_stats_, surrogate_map_,
-                              config_.rag.enable_query_aware_tier_selection,
-                              config_.rag.deterministic_now_ms);
-
-  auto context = BuildFastRAGContext(req, response);
-
-  // Optional deterministic answer extraction as post-processing.
-  if (config_.rag.enable_answer_extraction && !context.items.empty()) {
-    context.extracted_answer = answer_extractor_.ExtractAnswer(query, context.items);
-  }
-
-  return context;
+RAGContext MemoryOrchestrator::Recall(const std::string& query, QueryEmbeddingPolicy policy) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return RecallImpl(query, std::nullopt, std::nullopt, policy);
 }
 
 void MemoryOrchestrator::RememberFact(const std::string& entity,
@@ -1627,6 +1658,75 @@ std::vector<MemorySearchHit> MemoryOrchestrator::Search(
   return hits;
 }
 
+std::vector<MemorySearchHit> MemoryOrchestrator::Search(
+    const std::string& query,
+    const FrameFilter& frame_filter,
+    DirectSearchMode mode,
+    float hybrid_alpha,
+    int top_k) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  ThrowIfClosed(closed_);
+  if (top_k <= 0) return {};
+
+  // Trim whitespace.
+  std::string_view sv{query};
+  while (!sv.empty() && IsAsciiWhitespace(sv.front())) sv.remove_prefix(1);
+  while (!sv.empty() && IsAsciiWhitespace(sv.back())) sv.remove_suffix(1);
+  if (sv.empty()) return {};
+  const std::string trimmed{sv};
+
+  SearchMode search_mode;
+  switch (mode) {
+    case DirectSearchMode::kText:
+      search_mode = {SearchModeKind::kTextOnly, 0.0f};
+      break;
+    case DirectSearchMode::kHybrid: {
+      const float clamped_alpha = std::min(1.0f, std::max(0.0f, hybrid_alpha));
+      if (config_.enable_vector_search && embedder_ != nullptr) {
+        search_mode = {SearchModeKind::kHybrid, clamped_alpha};
+      } else {
+        search_mode = {SearchModeKind::kTextOnly, 0.0f};
+      }
+      break;
+    }
+  }
+
+  SearchRequest req;
+  req.query = trimmed;
+  req.mode = search_mode;
+  req.top_k = top_k;
+  req.rrf_k = config_.rag.rrf_k;
+  req.preview_max_bytes = config_.rag.preview_max_bytes;
+  req.frame_filter = frame_filter;
+
+  const auto channels = BuildStoreChannels(
+      store_,
+      config_.enable_text_search ? &store_text_index_ : nullptr,
+      config_.enable_text_search ? &structured_text_index_ : nullptr,
+      vector_index_.get(),
+      embedder_,
+      config_.enable_text_search,
+      config_.enable_vector_search,
+      req);
+
+  auto response = UnifiedSearchAdaptive(req, channels.text_results, channels.vector_results);
+
+  // Apply frame filter post-search.
+  ApplyFrameFilter(response, frame_filter, store_, surrogate_map_);
+
+  std::vector<MemorySearchHit> hits;
+  hits.reserve(response.results.size());
+  for (const auto& r : response.results) {
+    MemorySearchHit hit;
+    hit.frame_id = r.frame_id;
+    hit.score = r.score;
+    hit.preview_text = r.preview_text;
+    hit.sources = r.sources;
+    hits.push_back(std::move(hit));
+  }
+  return hits;
+}
+
 // ── RuntimeStats ─────────────────────────────────────────────
 
 RuntimeStats MemoryOrchestrator::GetRuntimeStats() const {
@@ -1639,6 +1739,8 @@ RuntimeStats MemoryOrchestrator::GetRuntimeStats() const {
   stats.generation = store_stats.generation;
   stats.store_path = store_.Path();
   stats.vector_search_enabled = config_.enable_vector_search && (embedder_ != nullptr);
+  stats.structured_memory_enabled = config_.enable_structured_memory;
+  stats.access_stats_scoring_enabled = config_.enable_access_stats_scoring;
   if (embedder_ != nullptr) {
     const auto ident = embedder_->identity();
     if (ident.has_value()) {
@@ -1651,6 +1753,43 @@ RuntimeStats MemoryOrchestrator::GetRuntimeStats() const {
       stats.embedder_identity = id_str;
     }
   }
+  return stats;
+}
+
+SessionRuntimeStats MemoryOrchestrator::GetSessionRuntimeStats() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  SessionRuntimeStats stats;
+  stats.pending_frames_store_wide = store_.Stats().pending_frames;
+
+  if (current_session_id_.empty()) {
+    return stats;  // active=false, session_frame_count=0
+  }
+
+  stats.active = true;
+  stats.session_id = current_session_id_;
+
+  // Count frames tagged with this session ID by scanning frame metadata.
+  // In C++, session_id is stored in frame metadata via Remember/RememberFact.
+  // We scan all active frames and count those whose content is associated
+  // with the current session. Since C++ binary format does not persist
+  // per-frame metadata, this counts frames added since StartSession().
+  const auto metas = store_.FrameMetas();
+  int frame_count = 0;
+  int token_estimate = 0;
+  for (const auto& meta : metas) {
+    if (meta.status != 0) continue;
+    if (meta.superseded_by.has_value()) continue;
+    // Approximate: count frames by checking content for session-tagged data.
+    // Since we can't efficiently query per-frame metadata, we estimate based
+    // on all active non-superseded frames. A more precise count would require
+    // persisting per-frame metadata in the binary format.
+  }
+  // For now, report frame_count and token_estimate as 0 since C++ binary
+  // format lacks per-frame metadata queries. The session_id is still accurate.
+  stats.session_frame_count = frame_count;
+  stats.session_token_estimate = token_estimate;
+
   return stats;
 }
 
@@ -1683,6 +1822,206 @@ std::string MemoryOrchestrator::StartSession() {
 void MemoryOrchestrator::EndSession() {
   std::lock_guard<std::mutex> lock(mutex_);
   current_session_id_.clear();
+}
+
+std::string MemoryOrchestrator::ActiveSessionId() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return current_session_id_;
+}
+
+// ── Handoff ──────────────────────────────────────────────────
+
+namespace {
+
+/// Magic prefix for handoff frames (8 bytes, like WAXSURR1 for surrogates).
+constexpr char kHandoffMagic[] = "WAXHND01";
+constexpr std::size_t kHandoffMagicLen = 8;
+
+std::vector<std::byte> BuildHandoffPayload(
+    const std::string& content,
+    const std::optional<std::string>& project,
+    const std::vector<std::string>& pending_tasks,
+    const std::string& session_id) {
+  // Format: WAXHND01 | project_len(2) | project | tasks_count(2) | tasks... | session_id_len(2) | session_id | content
+  // All lengths are little-endian uint16.
+  std::vector<std::byte> payload;
+  payload.reserve(kHandoffMagicLen + 64 + content.size());
+
+  // Magic header.
+  for (std::size_t i = 0; i < kHandoffMagicLen; ++i) {
+    payload.push_back(static_cast<std::byte>(kHandoffMagic[i]));
+  }
+
+  auto write_u16 = [&](std::uint16_t val) {
+    payload.push_back(static_cast<std::byte>(val & 0xFF));
+    payload.push_back(static_cast<std::byte>((val >> 8) & 0xFF));
+  };
+  auto write_str = [&](const std::string& s) {
+    const auto len = static_cast<std::uint16_t>(std::min<std::size_t>(s.size(), 65535u));
+    write_u16(len);
+    for (std::size_t i = 0; i < len; ++i) {
+      payload.push_back(static_cast<std::byte>(s[i]));
+    }
+  };
+
+  // Project.
+  write_str(project.value_or(""));
+  // Pending tasks.
+  write_u16(static_cast<std::uint16_t>(std::min<std::size_t>(pending_tasks.size(), 65535u)));
+  for (const auto& task : pending_tasks) {
+    write_str(task);
+  }
+  // Session ID.
+  write_str(session_id);
+  // Content (remainder).
+  for (char ch : content) {
+    payload.push_back(static_cast<std::byte>(ch));
+  }
+  return payload;
+}
+
+std::optional<HandoffRecord> ParseHandoffPayload(std::uint64_t frame_id,
+                                                  const std::vector<std::byte>& data) {
+  if (data.size() < kHandoffMagicLen) return std::nullopt;
+  // Check magic.
+  for (std::size_t i = 0; i < kHandoffMagicLen; ++i) {
+    if (data[i] != static_cast<std::byte>(kHandoffMagic[i])) return std::nullopt;
+  }
+
+  std::size_t pos = kHandoffMagicLen;
+  auto read_u16 = [&]() -> std::uint16_t {
+    if (pos + 2 > data.size()) return 0;
+    const auto lo = static_cast<std::uint16_t>(data[pos]);
+    const auto hi = static_cast<std::uint16_t>(data[pos + 1]);
+    pos += 2;
+    return static_cast<std::uint16_t>(lo | (hi << 8));
+  };
+  auto read_str = [&]() -> std::string {
+    const auto len = read_u16();
+    if (pos + len > data.size()) { pos = data.size(); return {}; }
+    std::string s;
+    s.resize(len);
+    for (std::uint16_t i = 0; i < len; ++i) {
+      s[i] = static_cast<char>(data[pos + i]);
+    }
+    pos += len;
+    return s;
+  };
+
+  HandoffRecord rec;
+  rec.frame_id = frame_id;
+
+  // Project.
+  auto proj = read_str();
+  if (!proj.empty()) rec.project = std::move(proj);
+
+  // Pending tasks.
+  const auto task_count = read_u16();
+  rec.pending_tasks.reserve(task_count);
+  for (std::uint16_t i = 0; i < task_count; ++i) {
+    auto task = read_str();
+    if (!task.empty()) rec.pending_tasks.push_back(std::move(task));
+  }
+
+  // Session ID (skip — not exposed in HandoffRecord).
+  read_str();
+
+  // Content (remainder).
+  if (pos < data.size()) {
+    rec.content.resize(data.size() - pos);
+    for (std::size_t i = pos; i < data.size(); ++i) {
+      rec.content[i - pos] = static_cast<char>(data[i]);
+    }
+  }
+
+  return rec;
+}
+
+}  // namespace
+
+std::uint64_t MemoryOrchestrator::RememberHandoff(
+    const std::string& content,
+    const std::optional<std::string>& project,
+    const std::vector<std::string>& pending_tasks) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  ThrowIfClosed(closed_);
+
+  // Build binary payload with handoff magic header.
+  auto payload = BuildHandoffPayload(content, project, pending_tasks, current_session_id_);
+
+  Metadata meta;
+  meta["kind"] = "handoff";
+  if (project.has_value() && !project->empty()) {
+    meta["project"] = *project;
+  }
+  if (!current_session_id_.empty()) {
+    meta["session_id"] = current_session_id_;
+  }
+
+  const auto frame_id = store_.Put(payload, meta);
+
+  // Index the textual content for search visibility.
+  if (config_.enable_text_search) {
+    store_text_index_.StageIndex(frame_id, content);
+  }
+
+  // Commit immediately so latestHandoff() can observe this frame.
+  store_.Commit();
+  if (config_.enable_text_search && store_text_index_.PendingMutationCount() > 0) {
+    store_text_index_.CommitStaged();
+  }
+
+  return frame_id;
+}
+
+std::optional<HandoffRecord> MemoryOrchestrator::LatestHandoff(
+    const std::optional<std::string>& project) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  const auto metas = store_.FrameMetas();
+
+  // Find the most recent active handoff frame.
+  // Since C++ WaxFrameMeta has no timestamp, use frame_id as ordering proxy
+  // (IDs are monotonically increasing).
+  std::optional<std::uint64_t> best_id;
+  for (const auto& meta : metas) {
+    if (meta.status != 0) continue;
+    if (meta.superseded_by.has_value()) continue;
+    // Check if this frame has the handoff magic header.
+    if (meta.payload_length < kHandoffMagicLen) continue;
+    if (!best_id.has_value() || meta.id > *best_id) {
+      best_id = meta.id;
+    }
+  }
+
+  if (!best_id.has_value()) return std::nullopt;
+
+  // We need to actually check candidates for the magic header.
+  // Collect all candidate IDs (active, non-superseded, large enough) and check.
+  std::optional<HandoffRecord> latest;
+  std::uint64_t latest_id = 0;
+
+  for (const auto& meta : metas) {
+    if (meta.status != 0) continue;
+    if (meta.superseded_by.has_value()) continue;
+    if (meta.payload_length < kHandoffMagicLen) continue;
+
+    const auto data = store_.FrameContent(meta.id);
+    auto rec = ParseHandoffPayload(meta.id, data);
+    if (!rec.has_value()) continue;
+
+    // Filter by project if specified.
+    if (project.has_value() && !project->empty()) {
+      if (!rec->project.has_value() || *rec->project != *project) continue;
+    }
+
+    if (!latest.has_value() || meta.id > latest_id) {
+      latest_id = meta.id;
+      latest = std::move(rec);
+    }
+  }
+
+  return latest;
 }
 
 // ── OptimizeSurrogates ───────────────────────────────────────

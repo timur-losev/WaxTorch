@@ -1,12 +1,14 @@
 #pragma once
 
 #include "waxcpp/live_set_rewrite.hpp"
+#include "waxcpp/tier_selector.hpp"
 
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace waxcpp {
@@ -37,18 +39,100 @@ enum class VectorEnginePreference {
   kCpuOnly,
 };
 
+// ── Time range ───────────────────────────────────────────────
+
+/// Temporal filter for search results.
+struct TimeRange {
+  std::optional<std::int64_t> after_ms;
+  std::optional<std::int64_t> before_ms;
+
+  bool Contains(std::int64_t timestamp_ms) const {
+    if (after_ms && timestamp_ms < *after_ms) return false;
+    if (before_ms && timestamp_ms >= *before_ms) return false;
+    return true;
+  }
+};
+
+// ── Frame filter ─────────────────────────────────────────────
+
+/// Metadata-based predicate for search candidate filtering.
+/// Note: In the C++ binary format, per-frame metadata/tags/labels are not
+/// persisted. required_entries is checked against in-memory metadata only.
+struct MetadataFilter {
+  std::unordered_map<std::string, std::string> required_entries;
+  // required_tags and required_labels not applicable in C++ binary format.
+};
+
+/// Frame filter predicate applied to search/recall results.
+struct FrameFilter {
+  bool include_deleted = false;
+  bool include_superseded = false;
+  bool include_surrogates = false;
+  std::optional<std::unordered_set<std::uint64_t>> frame_ids;
+  std::optional<MetadataFilter> metadata_filter;
+};
+
+// ── Structured memory search options ─────────────────────────
+
+/// Options for the structured-memory lane in unified search.
+struct StructuredMemorySearchOptions {
+  float weight = 0.2f;
+  int max_entity_candidates = 16;
+  int max_facts = 64;
+  int max_evidence_frames = 32;
+  bool require_evidence_span = false;
+};
+
+// ── Search request ───────────────────────────────────────────
+
 struct SearchRequest {
   std::optional<std::string> query;
   std::optional<std::vector<float>> embedding;
   VectorEnginePreference vector_preference = VectorEnginePreference::kAuto;
   SearchMode mode{};
   int top_k = 10;
+  std::optional<float> min_score;
+  std::optional<TimeRange> time_range;
+  std::optional<FrameFilter> frame_filter;
+  std::int64_t as_of_ms = INT64_MAX;
+  StructuredMemorySearchOptions structured_memory{};
+
   int max_snippets = 24;
   int rrf_k = 60;
   int preview_max_bytes = 512;
   int expansion_max_tokens = 600;
   int max_context_tokens = 1500;
   int snippet_max_tokens = 200;
+
+  /// Threshold for switching between lazy and batch metadata loading.
+  int metadata_loading_threshold = 50;
+  bool allow_timeline_fallback = false;
+  int timeline_fallback_limit = 10;
+  bool enable_ranking_diagnostics = false;
+  int ranking_diagnostics_top_k = 10;
+};
+
+// ── Search response ──────────────────────────────────────────
+
+enum class RankingTieBreakReason {
+  kTopResult,
+  kRerankComposite,
+  kFusedScore,
+  kBestLaneRank,
+  kFrameID,
+};
+
+struct RankingLaneContribution {
+  SearchSource source = SearchSource::kText;
+  float weight = 0.0f;
+  int rank = 0;
+  float rrf_score = 0.0f;
+};
+
+struct RankingDiagnostics {
+  std::optional<int> best_lane_rank;
+  std::vector<RankingLaneContribution> lane_contributions;
+  RankingTieBreakReason tie_break_reason = RankingTieBreakReason::kTopResult;
 };
 
 struct SearchResult {
@@ -56,11 +140,14 @@ struct SearchResult {
   float score = 0.0f;
   std::optional<std::string> preview_text;
   std::vector<SearchSource> sources;
+  std::optional<RankingDiagnostics> ranking_diagnostics;
 };
 
 struct SearchResponse {
   std::vector<SearchResult> results;
 };
+
+// ── RAG types ────────────────────────────────────────────────
 
 enum class RAGItemKind {
   kSnippet,
@@ -119,6 +206,9 @@ struct FastRAGConfig {
   /// Enable deterministic answer extraction as post-processing on RAGContext.
   bool enable_answer_extraction = true;
 
+  /// Policy for selecting which surrogate tier to use at retrieval time.
+  TierSelectionPolicy tier_selection_policy = TierPolicyImportanceBalanced();
+
   /// Enable query-aware tier selection (boosts tier for specific queries).
   bool enable_query_aware_tier_selection = true;
 
@@ -164,7 +254,31 @@ struct RuntimeStats {
   std::uint64_t generation = 0;
   std::filesystem::path store_path;
   bool vector_search_enabled = false;
+  bool structured_memory_enabled = false;
+  bool access_stats_scoring_enabled = false;
   std::string embedder_identity;
+};
+
+// ── Session runtime stats ────────────────────────────────────
+
+/// Session-scoped runtime statistics.
+struct SessionRuntimeStats {
+  bool active = false;
+  std::string session_id;
+  int session_frame_count = 0;
+  int session_token_estimate = 0;
+  std::uint64_t pending_frames_store_wide = 0;
+};
+
+// ── Handoff ──────────────────────────────────────────────────
+
+/// Record of a session handoff stored via rememberHandoff().
+struct HandoffRecord {
+  std::uint64_t frame_id = 0;
+  std::int64_t timestamp_ms = 0;
+  std::string content;
+  std::optional<std::string> project;
+  std::vector<std::string> pending_tasks;
 };
 
 // ── Orchestrator config ──────────────────────────────────────
@@ -172,6 +286,8 @@ struct RuntimeStats {
 struct OrchestratorConfig {
   bool enable_text_search = true;
   bool enable_vector_search = true;
+  bool enable_structured_memory = true;
+  bool enable_access_stats_scoring = false;
   QueryEmbeddingPolicy query_embedding_policy = QueryEmbeddingPolicy::kIfAvailable;
   FastRAGConfig rag{};
   ChunkingStrategy chunking{};
