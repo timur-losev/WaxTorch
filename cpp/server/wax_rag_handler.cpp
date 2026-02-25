@@ -124,20 +124,6 @@ int ParsePositiveIntParam(const Poco::JSON::Object::Ptr& params,
     }
 }
 
-int ParseNonNegativeIntParam(const Poco::JSON::Object::Ptr& params,
-                             const std::string& key,
-                             int fallback) {
-    if (params.isNull() || !params->has(key)) {
-        return fallback;
-    }
-    try {
-        const auto value = params->getValue<int>(key);
-        return value >= 0 ? value : fallback;
-    } catch (const Poco::Exception&) {
-        return fallback;
-    }
-}
-
 struct IntParamParseResult {
     bool present = false;
     bool valid = false;
@@ -605,6 +591,7 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
             msg << "index job started repo_root=" << repo_root
                 << " resume=" << (resume_requested ? "true" : "false")
                 << " flush_every_chunks=" << options.flush_every_chunks
+                << " ingest_batch_size=" << options.ingest_batch_size
                 << " max_files=" << options.max_files
                 << " max_chunks=" << options.max_chunks
                 << " max_ram_mb=" << options.max_ram_mb;
@@ -690,6 +677,39 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
         std::uint64_t indexed_chunks = 0;
         std::uint64_t committed_chunks = 0;
         bool reached_chunk_limit = false;
+        struct PendingIngestChunk {
+            std::string text{};
+            waxcpp::Metadata metadata{};
+        };
+        std::vector<PendingIngestChunk> pending_ingest{};
+        pending_ingest.reserve(static_cast<std::size_t>(std::min<std::uint64_t>(options.ingest_batch_size, 1024ULL)));
+        auto flush_pending_ingest = [&]() {
+            if (pending_ingest.empty()) {
+                return;
+            }
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                for (const auto& pending : pending_ingest) {
+                    orchestrator_->Remember(pending.text, pending.metadata);
+                    ++indexed_chunks;
+                    if (options.max_chunks > 0 && indexed_chunks >= options.max_chunks) {
+                        reached_chunk_limit = true;
+                    }
+                    if (indexed_chunks % options.flush_every_chunks == 0) {
+                        orchestrator_->Flush();
+                        committed_chunks = indexed_chunks;
+                        (void)index_job_manager_.UpdateProgress(static_cast<std::uint64_t>(entries.size()),
+                                                                indexed_chunks,
+                                                                committed_chunks);
+                        std::ostringstream msg;
+                        msg << "index progress indexed_chunks=" << indexed_chunks
+                            << " committed_chunks=" << committed_chunks;
+                        ServerLog(msg.str());
+                    }
+                }
+            }
+            pending_ingest.clear();
+        };
         (void)ue5_chunk_builder_.Build(
             repo_root_path,
             entries,
@@ -705,6 +725,14 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                     --remaining_resume_skip_chunks;
                     return;
                 }
+                if (options.max_chunks > 0) {
+                    const std::uint64_t scheduled_chunks =
+                        indexed_chunks + static_cast<std::uint64_t>(pending_ingest.size());
+                    if (scheduled_chunks >= options.max_chunks) {
+                        reached_chunk_limit = true;
+                        return;
+                    }
+                }
 
                 waxcpp::Metadata metadata{};
                 metadata["source_kind"] = "ue5_chunk";
@@ -717,32 +745,21 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                 metadata["chunk_id"] = chunk.chunk_id;
                 metadata["chunk_hash"] = chunk.content_hash;
                 metadata["token_estimate"] = std::to_string(chunk.token_estimate);
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    orchestrator_->Remember(std::string(chunk_text), metadata);
-                }
-                ++indexed_chunks;
-                if (options.max_chunks > 0 && indexed_chunks >= options.max_chunks) {
+                pending_ingest.push_back(PendingIngestChunk{
+                    .text = std::string(chunk_text),
+                    .metadata = std::move(metadata),
+                });
+                if (options.max_chunks > 0 &&
+                    indexed_chunks + static_cast<std::uint64_t>(pending_ingest.size()) >= options.max_chunks) {
                     reached_chunk_limit = true;
                 }
-
-                if (indexed_chunks % options.flush_every_chunks == 0) {
-                    {
-                        std::lock_guard<std::mutex> lock(mutex_);
-                        orchestrator_->Flush();
-                    }
-                    committed_chunks = indexed_chunks;
-                    (void)index_job_manager_.UpdateProgress(static_cast<std::uint64_t>(entries.size()),
-                                                            indexed_chunks,
-                                                            committed_chunks);
-                    std::ostringstream msg;
-                    msg << "index progress indexed_chunks=" << indexed_chunks
-                        << " committed_chunks=" << committed_chunks;
-                    ServerLog(msg.str());
+                if (pending_ingest.size() >= options.ingest_batch_size) {
+                    flush_pending_ingest();
                 }
             },
             nullptr,
             (resume_requested && !unchanged_paths.empty()) ? &unchanged_paths : nullptr);
+        flush_pending_ingest();
         if (reached_chunk_limit) {
             ServerLog("index job reached max_chunks cap");
         }
@@ -828,6 +845,7 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
     }
     const bool resume_requested = (params.isNull() ? false : params->optValue<bool>("resume", false));
     int flush_every_chunks_param = static_cast<int>(kIndexFlushEveryChunks);
+    int ingest_batch_size_param = 1;
     int max_files_param = 0;
     int max_chunks_param = 0;
     int max_ram_mb_param = 0;
@@ -838,6 +856,13 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
             return "Error: flush_every_chunks must be an integer";
         }
         flush_every_chunks_param = flush_raw.value;
+    }
+    const auto ingest_batch_size_raw = ParseIntParamStrict(params, "ingest_batch_size");
+    if (ingest_batch_size_raw.present) {
+        if (!ingest_batch_size_raw.valid) {
+            return "Error: ingest_batch_size must be an integer";
+        }
+        ingest_batch_size_param = ingest_batch_size_raw.value;
     }
     const auto max_files_raw = ParseIntParamStrict(params, "max_files");
     if (max_files_raw.present) {
@@ -865,6 +890,10 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
         static_cast<std::uint64_t>(flush_every_chunks_param) > kMaxIndexControlValue) {
         return "Error: flush_every_chunks must be within [1, 1000000]";
     }
+    if (ingest_batch_size_param <= 0 ||
+        static_cast<std::uint64_t>(ingest_batch_size_param) > kMaxIndexControlValue) {
+        return "Error: ingest_batch_size must be within [1, 1000000]";
+    }
     if (max_files_param < 0 || static_cast<std::uint64_t>(max_files_param) > kMaxIndexControlValue) {
         return "Error: max_files must be within [0, 1000000]";
     }
@@ -876,6 +905,7 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
     }
     const IndexRunOptions options{
         .flush_every_chunks = static_cast<std::uint64_t>(flush_every_chunks_param),
+        .ingest_batch_size = static_cast<std::uint64_t>(ingest_batch_size_param),
         .max_files = static_cast<std::uint64_t>(max_files_param),
         .max_chunks = static_cast<std::uint64_t>(max_chunks_param),
         .max_ram_mb = static_cast<std::uint64_t>(max_ram_mb_param),

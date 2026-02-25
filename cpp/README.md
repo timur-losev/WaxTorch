@@ -180,6 +180,7 @@ Indexing JSON-RPC methods (baseline skeleton):
     "repo_root":"g:/Proj/UnrealEngine/Engine/Source",
     "resume":true,
     "flush_every_chunks":128,
+    "ingest_batch_size":1,
     "max_files":0,
     "max_chunks":0,
     "max_ram_mb":0
@@ -188,6 +189,7 @@ Indexing JSON-RPC methods (baseline skeleton):
 ```
 
 - `flush_every_chunks`: commit/checkpoint cadence during ingest (`1..1000000`).
+- `ingest_batch_size`: number of chunks buffered before batched `remember` apply (`1..1000000`).
 - `max_files`: deterministic cap on scanned file count (`0..1000000`, `0` means no cap).
 - `max_chunks`: deterministic cap on ingested chunks per run (`0..1000000`, `0` means no cap).
 - `max_ram_mb`: soft process RSS cap for index run (`0..1000000`, `0` means disabled).

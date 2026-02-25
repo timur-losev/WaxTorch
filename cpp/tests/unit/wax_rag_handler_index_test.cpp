@@ -658,6 +658,53 @@ void ScenarioMaxChunksCapsIngestDeterministically() {
   ec.clear();
 }
 
+void ScenarioIngestBatchSizeControlWorks() {
+  waxcpp::tests::Log("scenario: index.start ingest_batch_size batches deterministic ingest path");
+  const auto temp_root = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_repo_", "");
+  const auto store_path = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_store_", ".mv2s");
+  const auto checkpoint_path = std::filesystem::path(store_path.string() + ".index.checkpoint");
+  const auto scan_manifest = std::filesystem::path(checkpoint_path.string() + ".scan_manifest");
+  const auto chunk_manifest = std::filesystem::path(checkpoint_path.string() + ".chunk_manifest");
+  const auto file_manifest = std::filesystem::path(checkpoint_path.string() + ".file_manifest");
+
+  std::error_code ec;
+  std::filesystem::create_directories(temp_root, ec);
+  if (ec) {
+    throw std::runtime_error("failed to create test repo directory: " + temp_root.string());
+  }
+  WriteTextFile(temp_root / "Batch.cpp", MakeLargeCppBody(2500));
+
+  SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
+  const auto models = MakeRuntimeConfigForTests(temp_root);
+  waxcpp::server::WaxRAGHandler handler(store_path, models);
+
+  Poco::JSON::Object::Ptr start_params = new Poco::JSON::Object();
+  start_params->set("repo_root", temp_root.string());
+  start_params->set("resume", false);
+  start_params->set("ingest_batch_size", 7);
+  start_params->set("max_chunks", 11);
+  start_params->set("flush_every_chunks", 5);
+  const auto start_raw = handler.handle_index_start(start_params);
+  Require(start_raw.rfind("Error:", 0) != 0, "ingest_batch_size index.start must not fail");
+
+  const auto view = WaitForTerminalState(handler, 20000);
+  Require(view.state == "stopped", "ingest_batch_size run must complete");
+  Require(view.indexed_chunks == 11, "ingest_batch_size run must honor max_chunks cap");
+  Require(view.committed_chunks == 11, "ingest_batch_size run must commit all indexed chunks");
+
+  std::filesystem::remove_all(temp_root, ec);
+  ec.clear();
+  waxcpp::tests::CleanupStoreArtifacts(store_path);
+  std::filesystem::remove(checkpoint_path, ec);
+  ec.clear();
+  std::filesystem::remove(scan_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(chunk_manifest, ec);
+  ec.clear();
+  std::filesystem::remove(file_manifest, ec);
+  ec.clear();
+}
+
 void ScenarioMaxRamCapFailsWhenTooLow() {
   waxcpp::tests::Log("scenario: index.start max_ram_mb fails when process RSS exceeds cap");
   const auto temp_root = std::filesystem::temp_directory_path() / TempName("waxcpp_handler_index_repo_", "");
@@ -744,6 +791,22 @@ void ScenarioIndexStartRejectsInvalidControls() {
   {
     Poco::JSON::Object::Ptr params = new Poco::JSON::Object();
     params->set("repo_root", temp_root.string());
+    params->set("ingest_batch_size", std::string("oops"));
+    const auto raw = handler.handle_index_start(params);
+    Require(raw == "Error: ingest_batch_size must be an integer",
+            "string ingest_batch_size must be rejected");
+  }
+  {
+    Poco::JSON::Object::Ptr params = new Poco::JSON::Object();
+    params->set("repo_root", temp_root.string());
+    params->set("ingest_batch_size", 0);
+    const auto raw = handler.handle_index_start(params);
+    Require(raw == "Error: ingest_batch_size must be within [1, 1000000]",
+            "ingest_batch_size=0 must be rejected");
+  }
+  {
+    Poco::JSON::Object::Ptr params = new Poco::JSON::Object();
+    params->set("repo_root", temp_root.string());
     params->set("max_files", std::string("oops"));
     const auto raw = handler.handle_index_start(params);
     Require(raw == "Error: max_files must be an integer", "string max_files must be rejected");
@@ -790,6 +853,7 @@ int main() {
     ScenarioRepeatedRunsProduceIdenticalChunkManifest();
     ScenarioMaxFilesCapsScanDeterministically();
     ScenarioMaxChunksCapsIngestDeterministically();
+    ScenarioIngestBatchSizeControlWorks();
     ScenarioMaxRamCapFailsWhenTooLow();
     ScenarioIndexStartRejectsInvalidControls();
     waxcpp::tests::Log("wax_rag_handler_index_test: finished");

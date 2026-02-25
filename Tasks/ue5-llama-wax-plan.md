@@ -35,11 +35,11 @@ Current runtime source decision:
     - applies deterministic prompt clamp with `max_context_items` + `max_context_tokens`,
     - added handler-level regressions (`wax_rag_handler_answer_test`) with stubbed generation backend for budget/citation behavior and stable citation ordering across repeated calls/reopen.
 - M8 in progress:
-  - `index.start` now accepts operational controls: `flush_every_chunks`, `max_files`, `max_chunks`, and `max_ram_mb`,
+  - `index.start` now accepts operational controls: `flush_every_chunks`, `ingest_batch_size`, `max_files`, `max_chunks`, and `max_ram_mb`,
   - `index.start` control parsing is strict (invalid integer types/negative ranges return explicit errors instead of silent fallback),
   - orchestrator ingest throttles can be tuned via env: `WAXCPP_ORCH_INGEST_CONCURRENCY`, `WAXCPP_ORCH_INGEST_BATCH_SIZE`,
   - UE5 scanner supports cancel callback; `index.stop` can interrupt scan phase before full traversal,
-  - added deterministic regressions for scanner-cancel path, capped-scan indexing path, capped-ingest (`max_chunks`) path, interrupted-resume committed-watermark fallback path, and repeated-run byte-identical chunk-manifest path,
+  - added deterministic regressions for scanner-cancel path, capped-scan indexing path, capped-ingest (`max_chunks`) path, explicit ingest batching control (`ingest_batch_size`) path, interrupted-resume committed-watermark fallback path, and repeated-run byte-identical chunk-manifest path,
   - added phase/progress logs for indexing pipeline (enabled via `WAXCPP_SERVER_LOG`),
   - `index.status` now exposes persisted `phase` for runtime introspection (`starting/scanning/ingesting/persisting_manifests/...`),
   - `index.status` now exposes runtime throughput metrics (`elapsed_ms`, `indexed_chunks_per_sec`, `committed_chunks_per_sec`) and process RSS (`process_rss_mb`).
@@ -124,7 +124,7 @@ Current runtime source decision:
 - Add ingest throttles: max RAM, batch size, worker count.
 - Add server metrics/logging for indexing phases and failures.
 - Add regression tests for deterministic outputs across repeated runs.
-- Status: partially implemented (`max_files` + `max_chunks` + `max_ram_mb` + `flush_every_chunks` controls in `index.start`, orchestrator ingest tuning via `WAXCPP_ORCH_INGEST_CONCURRENCY`/`WAXCPP_ORCH_INGEST_BATCH_SIZE`, cancel-aware scan support, indexed-phase logging, regression coverage for controls, and committed-watermark resume fallback for interrupted runs without file-manifest).
+- Status: partially implemented (`max_files` + `max_chunks` + `max_ram_mb` + `flush_every_chunks` + `ingest_batch_size` controls in `index.start`, orchestrator ingest tuning via `WAXCPP_ORCH_INGEST_CONCURRENCY`/`WAXCPP_ORCH_INGEST_BATCH_SIZE`, cancel-aware scan support, indexed-phase logging, regression coverage for controls, and committed-watermark resume fallback for interrupted runs without file-manifest).
 
 ## Acceptance Gates
 1. Same source tree produces identical chunk manifest and stable top-k ordering.

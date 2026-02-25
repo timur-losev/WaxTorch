@@ -41,6 +41,7 @@ public:
 private:
     struct IndexRunOptions {
         std::uint64_t flush_every_chunks = 128;
+        std::uint64_t ingest_batch_size = 1;
         std::uint64_t max_files = 0;
         std::uint64_t max_chunks = 0;
         std::uint64_t max_ram_mb = 0;
