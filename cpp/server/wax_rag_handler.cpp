@@ -537,7 +537,8 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
             msg << "index job started repo_root=" << repo_root
                 << " resume=" << (resume_requested ? "true" : "false")
                 << " flush_every_chunks=" << options.flush_every_chunks
-                << " max_files=" << options.max_files;
+                << " max_files=" << options.max_files
+                << " max_chunks=" << options.max_chunks;
             ServerLog(msg.str());
         }
         (void)index_job_manager_.SetPhase("scanning");
@@ -586,10 +587,14 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
 
         std::uint64_t indexed_chunks = 0;
         std::uint64_t committed_chunks = 0;
+        bool reached_chunk_limit = false;
         (void)ue5_chunk_builder_.Build(
             repo_root_path,
             entries,
             [&](const Ue5ChunkRecord& chunk, std::string_view chunk_text) {
+                if (reached_chunk_limit) {
+                    return;
+                }
                 if (is_cancelled()) {
                     return;
                 }
@@ -613,6 +618,9 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                     orchestrator_->Remember(std::string(chunk_text), metadata);
                 }
                 ++indexed_chunks;
+                if (options.max_chunks > 0 && indexed_chunks >= options.max_chunks) {
+                    reached_chunk_limit = true;
+                }
 
                 if (indexed_chunks % options.flush_every_chunks == 0) {
                     {
@@ -629,6 +637,9 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                     ServerLog(msg.str());
                 }
             });
+        if (reached_chunk_limit) {
+            ServerLog("index job reached max_chunks cap");
+        }
         if (is_cancelled()) {
             ServerLog("index job cancelled during ingest");
             return;
@@ -713,6 +724,7 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
     const int flush_every_chunks_param =
         ParsePositiveIntParam(params, "flush_every_chunks", static_cast<int>(kIndexFlushEveryChunks));
     const int max_files_param = ParseNonNegativeIntParam(params, "max_files", 0);
+    const int max_chunks_param = ParseNonNegativeIntParam(params, "max_chunks", 0);
     if (flush_every_chunks_param <= 0 ||
         static_cast<std::uint64_t>(flush_every_chunks_param) > kMaxIndexControlValue) {
         return "Error: flush_every_chunks must be within [1, 1000000]";
@@ -720,9 +732,13 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
     if (max_files_param < 0 || static_cast<std::uint64_t>(max_files_param) > kMaxIndexControlValue) {
         return "Error: max_files must be within [0, 1000000]";
     }
+    if (max_chunks_param < 0 || static_cast<std::uint64_t>(max_chunks_param) > kMaxIndexControlValue) {
+        return "Error: max_chunks must be within [0, 1000000]";
+    }
     const IndexRunOptions options{
         .flush_every_chunks = static_cast<std::uint64_t>(flush_every_chunks_param),
         .max_files = static_cast<std::uint64_t>(max_files_param),
+        .max_chunks = static_cast<std::uint64_t>(max_chunks_param),
     };
 
     try {

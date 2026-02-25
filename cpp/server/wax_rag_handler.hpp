@@ -42,6 +42,7 @@ private:
     struct IndexRunOptions {
         std::uint64_t flush_every_chunks = 128;
         std::uint64_t max_files = 0;
+        std::uint64_t max_chunks = 0;
     };
 
     void run_index_job(std::string repo_root,

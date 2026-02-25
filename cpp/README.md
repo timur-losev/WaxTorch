@@ -176,13 +176,15 @@ Indexing JSON-RPC methods (baseline skeleton):
     "repo_root":"g:/Proj/UnrealEngine/Engine/Source",
     "resume":true,
     "flush_every_chunks":128,
-    "max_files":0
+    "max_files":0,
+    "max_chunks":0
   }
 }
 ```
 
 - `flush_every_chunks`: commit/checkpoint cadence during ingest (`1..1000000`).
 - `max_files`: deterministic cap on scanned file count (`0..1000000`, `0` means no cap).
+- `max_chunks`: deterministic cap on ingested chunks per run (`0..1000000`, `0` means no cap).
 
 Optional server log:
 ```bash

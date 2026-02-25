@@ -35,9 +35,9 @@ Current runtime source decision:
     - applies deterministic prompt clamp with `max_context_items` + `max_context_tokens`,
     - added handler-level regression (`wax_rag_handler_answer_test`) with stubbed generation backend for budget/citation behavior.
 - M8 in progress:
-  - `index.start` now accepts operational controls: `flush_every_chunks` and `max_files`,
+  - `index.start` now accepts operational controls: `flush_every_chunks`, `max_files`, and `max_chunks`,
   - UE5 scanner supports cancel callback; `index.stop` can interrupt scan phase before full traversal,
-  - added deterministic regressions for scanner-cancel path and capped-scan indexing path,
+  - added deterministic regressions for scanner-cancel path, capped-scan indexing path, and capped-ingest (`max_chunks`) path,
   - added phase/progress logs for indexing pipeline (enabled via `WAXCPP_SERVER_LOG`),
   - `index.status` now exposes persisted `phase` for runtime introspection (`starting/scanning/ingesting/persisting_manifests/...`),
   - `index.status` now exposes runtime throughput metrics (`elapsed_ms`, `indexed_chunks_per_sec`, `committed_chunks_per_sec`).
