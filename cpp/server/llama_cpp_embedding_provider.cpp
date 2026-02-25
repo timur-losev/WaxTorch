@@ -351,6 +351,9 @@ std::vector<float> LlamaCppEmbeddingProvider::FetchEmbedding(const std::string& 
   request.setContentType("application/json");
   request.setContentLength(static_cast<int>(body.size()));
   request.set("Accept", "application/json");
+  if (!config_.api_key.empty()) {
+    request.set("Authorization", "Bearer " + config_.api_key);
+  }
   std::ostream& request_stream = session.sendRequest(request);
   request_stream.write(body.data(), static_cast<std::streamsize>(body.size()));
 

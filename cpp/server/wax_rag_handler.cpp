@@ -35,8 +35,8 @@ namespace waxcpp::server {
 namespace {
 constexpr std::uint64_t kIndexFlushEveryChunks = 128;
 constexpr std::uint64_t kMaxIndexControlValue = 1'000'000;
-constexpr const char* kDefaultLlamaEmbedEndpoint = "http://127.0.0.1:8081/embedding";
-constexpr const char* kDefaultLlamaGenEndpoint = "http://127.0.0.1:8081/completion";
+constexpr const char* kDefaultLlamaEmbedEndpoint = "http://127.0.0.1:8004/embedding";
+constexpr const char* kDefaultLlamaGenEndpoint = "http://127.0.0.1:8004/completion";
 constexpr const char* kServerLogEnv = "WAXCPP_SERVER_LOG";
 constexpr const char* kOrchIngestConcurrencyEnv = "WAXCPP_ORCH_INGEST_CONCURRENCY";
 constexpr const char* kOrchIngestBatchSizeEnv = "WAXCPP_ORCH_INGEST_BATCH_SIZE";
@@ -403,6 +403,9 @@ WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
     if (runtime_models_.enable_vector_search) {
         LlamaCppEmbeddingProviderConfig embedder_config{};
         embedder_config.endpoint = EnvString("WAXCPP_LLAMA_EMBED_ENDPOINT").value_or(kDefaultLlamaEmbedEndpoint);
+        const auto shared_api_key = EnvString("WAXCPP_LLAMA_API_KEY");
+        embedder_config.api_key =
+            EnvString("WAXCPP_LLAMA_EMBED_API_KEY").value_or(shared_api_key.value_or(std::string{}));
         embedder_config.model_path = runtime_models_.embedding_model.model_path;
         embedder_config.dimensions = ParsePositiveIntEnv("WAXCPP_LLAMA_EMBED_DIMS", 1024);
         embedder_config.timeout_ms = ParsePositiveIntEnv("WAXCPP_LLAMA_EMBED_TIMEOUT_MS", 30000);
@@ -414,6 +417,9 @@ WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
     }
     LlamaCppGenerationConfig generation_config{};
     generation_config.endpoint = EnvString("WAXCPP_LLAMA_GEN_ENDPOINT").value_or(kDefaultLlamaGenEndpoint);
+    const auto shared_api_key = EnvString("WAXCPP_LLAMA_API_KEY");
+    generation_config.api_key =
+        EnvString("WAXCPP_LLAMA_GEN_API_KEY").value_or(shared_api_key.value_or(std::string{}));
     generation_config.model_path = runtime_models_.generation_model.model_path;
     generation_config.timeout_ms = ParsePositiveIntEnv("WAXCPP_LLAMA_GEN_TIMEOUT_MS", 60000);
     generation_config.max_retries = ParseNonNegativeIntEnv("WAXCPP_LLAMA_GEN_MAX_RETRIES", 2);

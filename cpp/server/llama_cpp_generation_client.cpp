@@ -187,6 +187,9 @@ std::string LlamaCppGenerationClient::PerformRequest(const std::string& body) co
   request.setContentType("application/json");
   request.setContentLength(static_cast<int>(body.size()));
   request.set("Accept", "application/json");
+  if (!config_.api_key.empty()) {
+    request.set("Authorization", "Bearer " + config_.api_key);
+  }
 
   std::ostream& req_stream = session.sendRequest(request);
   req_stream.write(body.data(), static_cast<std::streamsize>(body.size()));

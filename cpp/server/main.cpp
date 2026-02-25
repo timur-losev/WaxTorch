@@ -46,6 +46,22 @@ std::string EnvOrDefault(const char* name, const char* fallback) {
 #endif
 }
 
+bool EnvIsSet(const char* name) {
+#if defined(_MSC_VER)
+    char* value = nullptr;
+    std::size_t len = 0;
+    if (_dupenv_s(&value, &len, name) != 0 || value == nullptr) {
+        return false;
+    }
+    const bool is_set = (*value != '\0');
+    std::free(value);
+    return is_set;
+#else
+    const char* value = std::getenv(name);
+    return value != nullptr && *value != '\0';
+#endif
+}
+
 }  // namespace
 
 class RAGRequestHandler : public HTTPRequestHandler {
@@ -140,7 +156,9 @@ protected:
         logger.information("Generation model: " + runtime_config.models.generation_model.model_path);
         logger.information("llama.cpp generation endpoint: " +
                            EnvOrDefault("WAXCPP_LLAMA_GEN_ENDPOINT",
-                                        "http://127.0.0.1:8081/completion (default)"));
+                                        "http://127.0.0.1:8004/completion (default)"));
+        const bool gen_api_key_enabled = EnvIsSet("WAXCPP_LLAMA_GEN_API_KEY") || EnvIsSet("WAXCPP_LLAMA_API_KEY");
+        logger.information("llama.cpp generation api key: " + std::string(gen_api_key_enabled ? "set" : "not set"));
         logger.information("llama.cpp generation timeout ms: " +
                            EnvOrDefault("WAXCPP_LLAMA_GEN_TIMEOUT_MS", "60000 (default)"));
         logger.information("llama.cpp generation max retries: " +
@@ -165,7 +183,11 @@ protected:
         if (runtime_config.models.enable_vector_search) {
             logger.information("llama.cpp embedding endpoint: " +
                                EnvOrDefault("WAXCPP_LLAMA_EMBED_ENDPOINT",
-                                            "http://127.0.0.1:8081/embedding (default)"));
+                                            "http://127.0.0.1:8004/embedding (default)"));
+            const bool embed_api_key_enabled =
+                EnvIsSet("WAXCPP_LLAMA_EMBED_API_KEY") || EnvIsSet("WAXCPP_LLAMA_API_KEY");
+            logger.information("llama.cpp embedding api key: " +
+                               std::string(embed_api_key_enabled ? "set" : "not set"));
             logger.information("llama.cpp embedding dimensions: " +
                                EnvOrDefault("WAXCPP_LLAMA_EMBED_DIMS", "1024 (default)"));
             logger.information("llama.cpp embedding max retries: " +

@@ -7,6 +7,7 @@ namespace waxcpp::server {
 
 struct LlamaCppGenerationConfig {
   std::string endpoint{};
+  std::string api_key{};
   std::string model_path{};
   int timeout_ms = 60000;
   int max_retries = 2;

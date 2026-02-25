@@ -15,6 +15,7 @@ namespace waxcpp::server {
 
 struct LlamaCppEmbeddingProviderConfig {
   std::string endpoint{};
+  std::string api_key{};
   std::string model_path{};
   int dimensions = 1024;
   bool normalize = true;

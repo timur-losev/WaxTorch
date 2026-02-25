@@ -19,6 +19,12 @@ This folder contains real-corpus integration assets for the UE5 indexing and ans
 
 ## Typical Execution
 
+0. Export llama.cpp runtime env (for `start_llama.bat` on port `8004`):
+```powershell
+$env:WAXCPP_LLAMA_GEN_ENDPOINT = "http://127.0.0.1:8004/completion"
+$env:WAXCPP_LLAMA_API_KEY = "1f67a5931a61dfcf7622c7401ff88008"
+```
+
 1. Build server:
 ```powershell
 cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Debug
