@@ -163,7 +163,7 @@ Indexing JSON-RPC methods (baseline skeleton):
 {"jsonrpc":"2.0","id":1,"method":"index.start","params":{"repo_root":"g:/Proj/UnrealEngine/Engine/Source","resume":true}}
 {"jsonrpc":"2.0","id":2,"method":"index.status","params":{}}
 {"jsonrpc":"2.0","id":3,"method":"index.stop","params":{}}
-{"jsonrpc":"2.0","id":4,"method":"answer.generate","params":{"query":"How does FName hashing work in UE5?","max_context_items":10,"max_output_tokens":768}}
+{"jsonrpc":"2.0","id":4,"method":"answer.generate","params":{"query":"How does FName hashing work in UE5?","max_context_items":10,"max_context_tokens":4000,"max_output_tokens":768}}
 ```
 
 `index.start` optional controls:
@@ -195,6 +195,7 @@ Current behavior:
 - `index.stop` requests cancellation and waits worker shutdown (`running -> stopped`).
 - `resume=true` uses `<checkpoint>.file_manifest` to skip unchanged files.
 - `answer.generate` performs Recall + citation map assembly (`relative_path`, `line_start`, `line_end`) and calls llama.cpp generation endpoint.
+- `answer.generate` supports deterministic context clamp via `max_context_items` and `max_context_tokens` and returns `context_items_used/context_tokens_used`.
 
 SQLite backend (optional, currently disabled by default in favor of WAL-focused track):
 ```bash

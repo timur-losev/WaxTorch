@@ -154,6 +154,12 @@ struct CitationInfo {
     waxcpp::RAGItemKind kind = waxcpp::RAGItemKind::kSnippet;
 };
 
+struct PromptBuildResult {
+    std::string prompt{};
+    int context_items_used = 0;
+    int context_tokens_used = 0;
+};
+
 std::optional<int> ParseOptionalInt(const std::unordered_map<std::string, std::string>& metadata,
                                     const char* key) {
     const auto it = metadata.find(key);
@@ -221,22 +227,46 @@ std::vector<CitationInfo> BuildCitations(waxcpp::MemoryOrchestrator& orchestrato
     return citations;
 }
 
-std::string BuildAnswerPrompt(const std::string& query,
-                              const waxcpp::RAGContext& context,
-                              const std::vector<CitationInfo>& citations,
-                              int max_context_items) {
+int CountApproxTokens(std::string_view text) {
+    int tokens = 0;
+    bool in_token = false;
+    for (const char ch : text) {
+        const bool ws = (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' || ch == '\f' || ch == '\v');
+        if (ws) {
+            in_token = false;
+            continue;
+        }
+        if (!in_token) {
+            ++tokens;
+            in_token = true;
+        }
+    }
+    return tokens > 0 ? tokens : (text.empty() ? 0 : 1);
+}
+
+PromptBuildResult BuildAnswerPrompt(const std::string& query,
+                                    const waxcpp::RAGContext& context,
+                                    const std::vector<CitationInfo>& citations,
+                                    int max_context_items,
+                                    int max_context_tokens) {
+    PromptBuildResult result{};
     std::ostringstream prompt;
     prompt << "You are a code assistant. Answer the query using only the provided context.\n"
            << "When you cite facts, include citation tags like [frame:<id>].\n\n"
            << "Query:\n" << query << "\n\n"
            << "Context:\n";
 
-    int count = 0;
+    const int safe_max_tokens = std::max(1, max_context_tokens);
     for (const auto& item : context.items) {
-        if (count >= max_context_items) {
+        if (result.context_items_used >= max_context_items) {
             break;
         }
-        ++count;
+        const int item_tokens = std::max(1, CountApproxTokens(item.text));
+        if (result.context_items_used > 0 && (result.context_tokens_used + item_tokens) > safe_max_tokens) {
+            break;
+        }
+        ++result.context_items_used;
+        result.context_tokens_used += item_tokens;
         prompt << "- [frame:" << item.frame_id << "] " << item.text << "\n";
     }
 
@@ -260,7 +290,8 @@ std::string BuildAnswerPrompt(const std::string& query,
         prompt << "\n";
     }
     prompt << "\nProvide concise technical answer with citations.";
-    return prompt.str();
+    result.prompt = prompt.str();
+    return result;
 }
 
 std::string ReadFileText(const std::filesystem::path& path) {
@@ -423,6 +454,7 @@ std::string WaxRAGHandler::handle_answer_generate(const Poco::JSON::Object::Ptr&
         return "Missing required parameter 'query'";
     }
     const int max_context_items = ParsePositiveIntParam(params, "max_context_items", 10);
+    const int max_context_tokens = ParsePositiveIntParam(params, "max_context_tokens", 4000);
     const int max_output_tokens = ParsePositiveIntParam(params, "max_output_tokens", 768);
     const float temperature = ParseFloatParam(params, "temperature", 0.1F);
     const float top_p = ParseFloatParam(params, "top_p", 0.95F);
@@ -430,10 +462,10 @@ std::string WaxRAGHandler::handle_answer_generate(const Poco::JSON::Object::Ptr&
     try {
         const auto context = orchestrator_->Recall(query);
         const auto citations = BuildCitations(*orchestrator_, context, max_context_items);
-        const auto prompt = BuildAnswerPrompt(query, context, citations, max_context_items);
+        const auto prompt = BuildAnswerPrompt(query, context, citations, max_context_items, max_context_tokens);
         const auto answer = generation_client_->Generate(
             LlamaCppGenerationRequest{
-                .prompt = prompt,
+                .prompt = prompt.prompt,
                 .max_tokens = max_output_tokens,
                 .temperature = temperature,
                 .top_p = top_p,
@@ -444,7 +476,8 @@ std::string WaxRAGHandler::handle_answer_generate(const Poco::JSON::Object::Ptr&
         response.set("answer", answer);
         response.set("model", runtime_models_.generation_model.model_path);
         response.set("total_context_tokens", context.total_tokens);
-        response.set("context_items_used", max_context_items);
+        response.set("context_items_used", prompt.context_items_used);
+        response.set("context_tokens_used", prompt.context_tokens_used);
 
         Poco::JSON::Array citations_json{};
         for (const auto& citation : citations) {
