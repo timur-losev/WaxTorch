@@ -69,6 +69,8 @@ public:
                 result = handler_.handle_remember(json_request.params);
             } else if (json_request.method == "recall") {
                 result = handler_.handle_recall(json_request.params);
+            } else if (json_request.method == "answer.generate") {
+                result = handler_.handle_answer_generate(json_request.params);
             } else if (json_request.method == "flush") {
                 result = handler_.handle_flush(json_request.params);
             } else if (json_request.method == "index.start") {
@@ -136,6 +138,15 @@ protected:
         auto runtime_config = waxcpp::server::LoadServerRuntimeConfig(runtime_config_path);
         logger.information("Generation runtime: " + runtime_config.models.generation_model.runtime);
         logger.information("Generation model: " + runtime_config.models.generation_model.model_path);
+        logger.information("llama.cpp generation endpoint: " +
+                           EnvOrDefault("WAXCPP_LLAMA_GEN_ENDPOINT",
+                                        "http://127.0.0.1:8081/completion (default)"));
+        logger.information("llama.cpp generation timeout ms: " +
+                           EnvOrDefault("WAXCPP_LLAMA_GEN_TIMEOUT_MS", "60000 (default)"));
+        logger.information("llama.cpp generation max retries: " +
+                           EnvOrDefault("WAXCPP_LLAMA_GEN_MAX_RETRIES", "2 (default)"));
+        logger.information("llama.cpp generation retry backoff ms: " +
+                           EnvOrDefault("WAXCPP_LLAMA_GEN_RETRY_BACKOFF_MS", "100 (default)"));
         logger.information("Embedding runtime: " + runtime_config.models.embedding_model.runtime);
         logger.information("Embedding model: " +
                            (runtime_config.models.embedding_model.model_path.empty()

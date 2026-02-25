@@ -1,7 +1,7 @@
 # Context: UE5 Indexing with Wax + llama.cpp (No Torch)
 
 **Created**: 2026-02-25  
-**Current Phase**: M4 complete (core path), M5 in progress  
+**Current Phase**: M4 complete (core path), M5+M7 in progress  
 **Owner**: wax-rag-specialist
 
 ## Decisions Locked
@@ -74,6 +74,27 @@
    - retry/backoff in single-request path (`max_retries`, `retry_backoff_ms`)
    - bounded-concurrency batch execution (`max_batch_concurrency`)
    - batch dedup by text key to avoid duplicate HTTP calls
+14. Added llama.cpp generation client + answer endpoint:
+   - `cpp/server/llama_cpp_generation_client.hpp`
+   - `cpp/server/llama_cpp_generation_client.cpp`
+   - supports response schemas:
+     - `{"content":"..."}`
+     - `{"response":"..."}`
+     - `{"choices":[{"text":"..."}]}`
+     - `{"choices":[{"message":{"content":"..."}}]}`
+   - `answer.generate` RPC implemented in `WaxRAGHandler`
+   - answer flow:
+     - Recall context
+     - build citation map from frame metadata (`relative_path`, `line_start`, `line_end`, `symbol`)
+     - build prompt with frame tags
+     - call llama generation endpoint
+   - generation env controls:
+     - `WAXCPP_LLAMA_GEN_ENDPOINT` (default `http://127.0.0.1:8081/completion`)
+     - `WAXCPP_LLAMA_GEN_TIMEOUT_MS` (default `60000`)
+     - `WAXCPP_LLAMA_GEN_MAX_RETRIES` (default `2`)
+     - `WAXCPP_LLAMA_GEN_RETRY_BACKOFF_MS` (default `100`)
+15. Added generation client unit coverage:
+   - `cpp/tests/unit/llama_cpp_generation_client_test.cpp`
 
 ## Validation Rules Now Enforced
 1. `generation_model.runtime` must be `llama_cpp`.
@@ -84,10 +105,10 @@
 6. Vector-search enablement requires embedding runtime to be `llama_cpp` with `.gguf` path.
 
 ## Pending Next Steps
-1. Add end-to-end retrieval + answer path with citation metadata.
-2. Move long-running index execution off request thread (background worker + cancellation-safe stop).
-3. Add crash-window regression tests for interrupted index job across manifests/checkpoints.
-4. Add rate-limit aware retry policy (e.g., `Retry-After`) and structured transport errors.
+1. Move long-running index execution off request thread (background worker + cancellation-safe stop).
+2. Add crash-window regression tests for interrupted index job across manifests/checkpoints.
+3. Add rate-limit aware retry policy (e.g., `Retry-After`) and structured transport errors.
+4. Add dedicated integration test for `answer.generate` with deterministic mock generation backend.
 
 ## Operational Notes
 1. Server now expects llama runtime root via:

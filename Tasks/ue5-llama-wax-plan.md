@@ -24,6 +24,13 @@ Current runtime source decision:
   - server now wires provider when `enable_vector_search=true`,
   - added parser/provider unit tests with deterministic request-function stubs,
   - added retry/backoff and bounded-concurrency `EmbedBatch` execution with key-dedup.
+- M7 in progress:
+  - added `LlamaCppGenerationClient` (HTTP llama.cpp completion adapter),
+  - added `answer.generate` RPC method:
+    - performs Recall,
+    - assembles citation map from frame metadata (`relative_path`, `line_start`, `line_end`, `symbol`),
+    - builds generation prompt with frame tags (`[frame:<id>]`),
+    - calls generation endpoint and returns answer + citation array.
 
 ## Scope
 - Build an ingest/search/generation server path for very large C++ codebases (UE5 scale).
@@ -99,6 +106,7 @@ Current runtime source decision:
 - Query embedding + retrieval + deterministic rerank.
 - Build context budget pipeline for Qwen3-Coder-Next 256K runtime.
 - Add response path with source citations (`path + lines`).
+- Status: partially implemented (answer generation endpoint + citation map; budget policy tuning and deeper integration tests pending).
 
 ### M8. Performance and Operational Controls
 - Add ingest throttles: max RAM, batch size, worker count.

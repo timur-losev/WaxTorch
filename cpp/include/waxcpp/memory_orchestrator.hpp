@@ -39,6 +39,9 @@ class MemoryOrchestrator {
   RAGContext Recall(const std::string& query, const std::vector<float>& embedding);
   RAGContext Recall(const std::string& query, const FrameFilter& frame_filter);
   RAGContext Recall(const std::string& query, QueryEmbeddingPolicy policy);
+  std::optional<WaxFrameMeta> FrameMeta(std::uint64_t frame_id, bool include_pending = false) const;
+  std::vector<WaxFrameMeta> FrameMetas(const std::vector<std::uint64_t>& frame_ids,
+                                       bool include_pending = false) const;
 
   // ── Structured memory (v1 entity/attribute/value) ──────────
   void RememberFact(const std::string& entity,

@@ -366,6 +366,24 @@ if (WAXCPP_BUILD_TESTS)
       TARGET Poco::Foundation AND
       TARGET Poco::Net AND
       TARGET Poco::JSON)
+    add_executable(waxcpp_llama_cpp_generation_client_test
+      tests/unit/llama_cpp_generation_client_test.cpp
+      server/llama_cpp_generation_client.cpp
+    )
+    target_link_libraries(waxcpp_llama_cpp_generation_client_test PRIVATE
+      waxcpp
+      Poco::Net
+      Poco::JSON
+      Poco::Foundation
+    )
+    target_include_directories(waxcpp_llama_cpp_generation_client_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server)
+    if (MSVC)
+      target_compile_options(waxcpp_llama_cpp_generation_client_test PRIVATE /W4 /permissive-)
+    else()
+      target_compile_options(waxcpp_llama_cpp_generation_client_test PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME waxcpp_llama_cpp_generation_client_test COMMAND waxcpp_llama_cpp_generation_client_test)
+
     add_executable(waxcpp_llama_cpp_embedding_provider_test
       tests/unit/llama_cpp_embedding_provider_test.cpp
       server/llama_cpp_embedding_provider.cpp

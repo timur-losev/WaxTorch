@@ -11,18 +11,22 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <algorithm>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace waxcpp::server {
 
 namespace {
 constexpr std::uint64_t kIndexFlushEveryChunks = 128;
 constexpr const char* kDefaultLlamaEmbedEndpoint = "http://127.0.0.1:8081/embedding";
+constexpr const char* kDefaultLlamaGenEndpoint = "http://127.0.0.1:8081/completion";
 
 std::optional<std::string> EnvString(const char* name) {
 #if defined(_MSC_VER)
@@ -80,6 +84,152 @@ int ParseNonNegativeIntEnv(const char* name, int fallback) {
     }
 }
 
+float ParseFloatParam(const Poco::JSON::Object::Ptr& params,
+                      const std::string& key,
+                      float fallback) {
+    if (params.isNull() || !params->has(key)) {
+        return fallback;
+    }
+    try {
+        return params->getValue<float>(key);
+    } catch (const Poco::Exception&) {
+        return fallback;
+    }
+}
+
+int ParsePositiveIntParam(const Poco::JSON::Object::Ptr& params,
+                          const std::string& key,
+                          int fallback) {
+    if (params.isNull() || !params->has(key)) {
+        return fallback;
+    }
+    try {
+        const auto value = params->getValue<int>(key);
+        return value > 0 ? value : fallback;
+    } catch (const Poco::Exception&) {
+        return fallback;
+    }
+}
+
+struct CitationInfo {
+    std::uint64_t frame_id = 0;
+    std::string relative_path{};
+    std::optional<int> line_start{};
+    std::optional<int> line_end{};
+    std::string symbol{};
+    float score = 0.0f;
+    waxcpp::RAGItemKind kind = waxcpp::RAGItemKind::kSnippet;
+};
+
+std::optional<int> ParseOptionalInt(const std::unordered_map<std::string, std::string>& metadata,
+                                    const char* key) {
+    const auto it = metadata.find(key);
+    if (it == metadata.end() || it->second.empty()) {
+        return std::nullopt;
+    }
+    try {
+        std::size_t consumed = 0;
+        const int value = std::stoi(it->second, &consumed, 10);
+        if (consumed != it->second.size()) {
+            return std::nullopt;
+        }
+        return value;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::vector<CitationInfo> BuildCitations(waxcpp::MemoryOrchestrator& orchestrator,
+                                         const waxcpp::RAGContext& context,
+                                         int max_context_items) {
+    std::unordered_map<std::uint64_t, CitationInfo> by_frame{};
+    int seen_items = 0;
+    for (const auto& item : context.items) {
+        if (seen_items >= max_context_items) {
+            break;
+        }
+        ++seen_items;
+        auto [it, inserted] = by_frame.emplace(item.frame_id,
+                                               CitationInfo{
+                                                   .frame_id = item.frame_id,
+                                                   .score = item.score,
+                                                   .kind = item.kind,
+                                               });
+        if (!inserted) {
+            continue;
+        }
+        const auto meta = orchestrator.FrameMeta(item.frame_id);
+        if (!meta.has_value()) {
+            continue;
+        }
+        const auto path_it = meta->metadata.find("relative_path");
+        if (path_it != meta->metadata.end()) {
+            it->second.relative_path = path_it->second;
+        }
+        it->second.line_start = ParseOptionalInt(meta->metadata, "line_start");
+        it->second.line_end = ParseOptionalInt(meta->metadata, "line_end");
+        const auto symbol_it = meta->metadata.find("symbol");
+        if (symbol_it != meta->metadata.end()) {
+            it->second.symbol = symbol_it->second;
+        }
+    }
+
+    std::vector<CitationInfo> citations{};
+    citations.reserve(by_frame.size());
+    for (const auto& [_, citation] : by_frame) {
+        citations.push_back(citation);
+    }
+    std::sort(citations.begin(), citations.end(), [](const CitationInfo& lhs, const CitationInfo& rhs) {
+        if (lhs.score != rhs.score) {
+            return lhs.score > rhs.score;
+        }
+        return lhs.frame_id < rhs.frame_id;
+    });
+    return citations;
+}
+
+std::string BuildAnswerPrompt(const std::string& query,
+                              const waxcpp::RAGContext& context,
+                              const std::vector<CitationInfo>& citations,
+                              int max_context_items) {
+    std::ostringstream prompt;
+    prompt << "You are a code assistant. Answer the query using only the provided context.\n"
+           << "When you cite facts, include citation tags like [frame:<id>].\n\n"
+           << "Query:\n" << query << "\n\n"
+           << "Context:\n";
+
+    int count = 0;
+    for (const auto& item : context.items) {
+        if (count >= max_context_items) {
+            break;
+        }
+        ++count;
+        prompt << "- [frame:" << item.frame_id << "] " << item.text << "\n";
+    }
+
+    prompt << "\nCitation Map:\n";
+    for (const auto& citation : citations) {
+        prompt << "- [frame:" << citation.frame_id << "] ";
+        if (!citation.relative_path.empty()) {
+            prompt << citation.relative_path;
+        } else {
+            prompt << "(path unavailable)";
+        }
+        if (citation.line_start.has_value()) {
+            prompt << ":" << *citation.line_start;
+            if (citation.line_end.has_value()) {
+                prompt << "-" << *citation.line_end;
+            }
+        }
+        if (!citation.symbol.empty()) {
+            prompt << " symbol=" << citation.symbol;
+        }
+        prompt << "\n";
+    }
+    prompt << "\nProvide concise technical answer with citations.";
+    return prompt.str();
+}
+
 std::string ReadFileText(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
@@ -123,6 +273,13 @@ WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
             ParsePositiveIntEnv("WAXCPP_LLAMA_EMBED_MAX_BATCH_CONCURRENCY", 4);
         embedder = std::make_shared<LlamaCppEmbeddingProvider>(std::move(embedder_config));
     }
+    LlamaCppGenerationConfig generation_config{};
+    generation_config.endpoint = EnvString("WAXCPP_LLAMA_GEN_ENDPOINT").value_or(kDefaultLlamaGenEndpoint);
+    generation_config.model_path = runtime_models_.generation_model.model_path;
+    generation_config.timeout_ms = ParsePositiveIntEnv("WAXCPP_LLAMA_GEN_TIMEOUT_MS", 60000);
+    generation_config.max_retries = ParseNonNegativeIntEnv("WAXCPP_LLAMA_GEN_MAX_RETRIES", 2);
+    generation_config.retry_backoff_ms = ParseNonNegativeIntEnv("WAXCPP_LLAMA_GEN_RETRY_BACKOFF_MS", 100);
+    generation_client_ = std::make_unique<LlamaCppGenerationClient>(std::move(generation_config));
 
     orchestrator_ = std::make_unique<waxcpp::MemoryOrchestrator>(store_path, config, std::move(embedder));
 }
@@ -182,6 +339,58 @@ std::string WaxRAGHandler::handle_recall(const Poco::JSON::Object::Ptr& params) 
             row->set("score", item.score);
             response.add(row);
         }
+
+        std::ostringstream out;
+        response.stringify(out);
+        return out.str();
+    } catch (const std::exception& e) {
+        return std::string("Error: ") + e.what();
+    }
+}
+
+std::string WaxRAGHandler::handle_answer_generate(const Poco::JSON::Object::Ptr& params) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const std::string query = (params.isNull() ? "" : params->optValue<std::string>("query", ""));
+    if (query.empty()) {
+        return "Missing required parameter 'query'";
+    }
+    const int max_context_items = ParsePositiveIntParam(params, "max_context_items", 10);
+    const int max_output_tokens = ParsePositiveIntParam(params, "max_output_tokens", 768);
+    const float temperature = ParseFloatParam(params, "temperature", 0.1F);
+    const float top_p = ParseFloatParam(params, "top_p", 0.95F);
+
+    try {
+        const auto context = orchestrator_->Recall(query);
+        const auto citations = BuildCitations(*orchestrator_, context, max_context_items);
+        const auto prompt = BuildAnswerPrompt(query, context, citations, max_context_items);
+        const auto answer = generation_client_->Generate(
+            LlamaCppGenerationRequest{
+                .prompt = prompt,
+                .max_tokens = max_output_tokens,
+                .temperature = temperature,
+                .top_p = top_p,
+            });
+
+        Poco::JSON::Object response{};
+        response.set("query", query);
+        response.set("answer", answer);
+        response.set("model", runtime_models_.generation_model.model_path);
+        response.set("total_context_tokens", context.total_tokens);
+        response.set("context_items_used", max_context_items);
+
+        Poco::JSON::Array citations_json{};
+        for (const auto& citation : citations) {
+            Poco::JSON::Object citation_json{};
+            citation_json.set("frame_id", citation.frame_id);
+            citation_json.set("relative_path", citation.relative_path);
+            citation_json.set("line_start", citation.line_start.value_or(0));
+            citation_json.set("line_end", citation.line_end.value_or(0));
+            citation_json.set("symbol", citation.symbol);
+            citation_json.set("score", citation.score);
+            citations_json.add(citation_json);
+        }
+        response.set("citations", citations_json);
 
         std::ostringstream out;
         response.stringify(out);

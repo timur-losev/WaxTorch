@@ -1468,6 +1468,24 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, QueryEmbeddingPo
   return RecallImpl(query, std::nullopt, std::nullopt, policy);
 }
 
+std::optional<WaxFrameMeta> MemoryOrchestrator::FrameMeta(std::uint64_t frame_id, bool include_pending) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return store_.FrameMeta(frame_id, include_pending);
+}
+
+std::vector<WaxFrameMeta> MemoryOrchestrator::FrameMetas(const std::vector<std::uint64_t>& frame_ids,
+                                                         bool include_pending) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<WaxFrameMeta> out{};
+  out.reserve(frame_ids.size());
+  for (const auto frame_id : frame_ids) {
+    if (const auto meta = store_.FrameMeta(frame_id, include_pending); meta.has_value()) {
+      out.push_back(*meta);
+    }
+  }
+  return out;
+}
+
 void MemoryOrchestrator::RememberFact(const std::string& entity,
                                       const std::string& attribute,
                                       const std::string& value,

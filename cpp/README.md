@@ -129,6 +129,12 @@ export WAXCPP_LLAMA_EMBED_MAX_RETRIES=2
 export WAXCPP_LLAMA_EMBED_RETRY_BACKOFF_MS=100
 # max parallel workers for unique texts in EmbedBatch
 export WAXCPP_LLAMA_EMBED_MAX_BATCH_CONCURRENCY=4
+
+# Optional generation endpoint tuning
+export WAXCPP_LLAMA_GEN_ENDPOINT=http://127.0.0.1:8081/completion
+export WAXCPP_LLAMA_GEN_TIMEOUT_MS=60000
+export WAXCPP_LLAMA_GEN_MAX_RETRIES=2
+export WAXCPP_LLAMA_GEN_RETRY_BACKOFF_MS=100
 ```
 
 Example `server-runtime.json`:
@@ -157,6 +163,7 @@ Indexing JSON-RPC methods (baseline skeleton):
 {"jsonrpc":"2.0","id":1,"method":"index.start","params":{"repo_root":"g:/Proj/UnrealEngine/Engine/Source","resume":true}}
 {"jsonrpc":"2.0","id":2,"method":"index.status","params":{}}
 {"jsonrpc":"2.0","id":3,"method":"index.stop","params":{}}
+{"jsonrpc":"2.0","id":4,"method":"answer.generate","params":{"query":"How does FName hashing work in UE5?","max_context_items":10,"max_output_tokens":768}}
 ```
 
 Current behavior:
@@ -164,6 +171,7 @@ Current behavior:
 - `index.status` returns persisted state snapshot (`idle|running|stopped|failed`).
 - `index.stop` transitions `running -> stopped`.
 - `resume=true` uses `<checkpoint>.file_manifest` to skip unchanged files.
+- `answer.generate` performs Recall + citation map assembly (`relative_path`, `line_start`, `line_end`) and calls llama.cpp generation endpoint.
 
 SQLite backend (optional, currently disabled by default in favor of WAL-focused track):
 ```bash
