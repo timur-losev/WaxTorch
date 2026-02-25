@@ -41,7 +41,7 @@ Current runtime source decision:
   - added deterministic regressions for scanner-cancel path, capped-scan indexing path, capped-ingest (`max_chunks`) path, interrupted-resume committed-watermark fallback path, and repeated-run byte-identical chunk-manifest path,
   - added phase/progress logs for indexing pipeline (enabled via `WAXCPP_SERVER_LOG`),
   - `index.status` now exposes persisted `phase` for runtime introspection (`starting/scanning/ingesting/persisting_manifests/...`),
-  - `index.status` now exposes runtime throughput metrics (`elapsed_ms`, `indexed_chunks_per_sec`, `committed_chunks_per_sec`).
+  - `index.status` now exposes runtime throughput metrics (`elapsed_ms`, `indexed_chunks_per_sec`, `committed_chunks_per_sec`) and process RSS (`process_rss_mb`).
 
 ## Scope
 - Build an ingest/search/generation server path for very large C++ codebases (UE5 scale).

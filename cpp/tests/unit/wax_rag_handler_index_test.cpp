@@ -251,10 +251,13 @@ void ScenarioIndexCompleteWritesManifests() {
   Require(status_json->has("elapsed_ms"), "index.status must expose elapsed_ms");
   Require(status_json->has("indexed_chunks_per_sec"), "index.status must expose indexed_chunks_per_sec");
   Require(status_json->has("committed_chunks_per_sec"), "index.status must expose committed_chunks_per_sec");
+  Require(status_json->has("process_rss_mb"), "index.status must expose process_rss_mb");
   Require(status_json->optValue<double>("indexed_chunks_per_sec", -1.0) >= 0.0,
           "indexed_chunks_per_sec must be non-negative");
   Require(status_json->optValue<double>("committed_chunks_per_sec", -1.0) >= 0.0,
           "committed_chunks_per_sec must be non-negative");
+  Require(status_json->optValue<double>("process_rss_mb", -2.0) >= -1.0,
+          "process_rss_mb must be either non-negative or -1 when probe unavailable");
   Require(std::filesystem::exists(scan_manifest), "scan manifest must exist");
   Require(std::filesystem::exists(chunk_manifest), "chunk manifest must exist");
   Require(std::filesystem::exists(file_manifest), "file manifest must exist");

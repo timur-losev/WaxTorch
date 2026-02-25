@@ -201,7 +201,7 @@ Current behavior:
 - `index.start` is asynchronous (starts background worker), scans/chunks source files, ingests changed chunks into Wax, and persists checkpoint metadata.
 - `index.status` returns persisted state snapshot (`idle|running|stopped|failed`).
 - `index.status` includes `phase` (`starting|scanning|ingesting|persisting_manifests|completed|stopped|failed`) for live job progress introspection.
-- `index.status` includes runtime metrics: `elapsed_ms`, `indexed_chunks_per_sec`, `committed_chunks_per_sec`.
+- `index.status` includes runtime metrics: `elapsed_ms`, `indexed_chunks_per_sec`, `committed_chunks_per_sec`, `process_rss_mb`.
 - `index.stop` requests cancellation and waits worker shutdown (`running -> stopped`).
 - `resume=true` uses `<checkpoint>.file_manifest` to skip unchanged files.
 - If `<checkpoint>.file_manifest` is absent (interrupted run before manifest persist), `resume=true` falls back to

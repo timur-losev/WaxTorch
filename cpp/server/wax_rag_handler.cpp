@@ -922,6 +922,11 @@ std::string WaxRAGHandler::make_index_status_json(const IndexJobStatus& status) 
         response.set("indexed_chunks_per_sec", 0.0);
         response.set("committed_chunks_per_sec", 0.0);
     }
+    if (const auto rss_bytes = CurrentProcessRSSBytes(); rss_bytes.has_value()) {
+        response.set("process_rss_mb", static_cast<double>(*rss_bytes) / (1024.0 * 1024.0));
+    } else {
+        response.set("process_rss_mb", -1.0);
+    }
 
     std::ostringstream out;
     response.stringify(out);
