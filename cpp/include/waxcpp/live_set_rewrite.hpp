@@ -78,4 +78,48 @@ struct LiveSetRewriteReport {
   double duration_ms = 0.0;
 };
 
+/// Outcome of a scheduled live-set maintenance check.
+enum class MaintenanceOutcome {
+  kDisabled,                   // Schedule is disabled.
+  kCadenceSkipped,             // Not yet time (cadence gate).
+  kCooldownSkipped,            // Too soon since last run.
+  kIdleSkipped,                // Recent write activity.
+  kBelowThreshold,             // Dead payload below thresholds.
+  kRewriteSucceeded,           // Rewrite completed successfully.
+  kRewriteFailed,              // Rewrite attempted but failed.
+  kValidationFailedRolledBack, // Rewrite succeeded but validation failed; rolled back.
+};
+
+/// Report from a scheduled live-set maintenance check.
+struct ScheduledLiveSetMaintenanceReport {
+  MaintenanceOutcome outcome = MaintenanceOutcome::kDisabled;
+  bool triggered_by_flush = false;
+  std::uint64_t flush_count = 0;
+  std::uint64_t dead_payload_bytes = 0;
+  std::uint64_t total_payload_bytes = 0;
+  double dead_payload_fraction = 0.0;
+  std::string candidate_path;
+  std::optional<LiveSetRewriteReport> rewrite_report;
+  bool rollback_performed = false;
+  std::string notes;
+};
+
+/// Input state for the scheduled maintenance eligibility check.
+struct MaintenanceGateInput {
+  const LiveSetRewriteSchedule* schedule = nullptr;
+  std::uint64_t flush_count = 0;
+  bool force = false;
+  std::int64_t now_ms = 0;                // Current wall-clock time.
+  std::int64_t last_completed_ms = 0;     // Last completed maintenance time (0 = never).
+  std::int64_t last_write_activity_ms = 0; // Last user write timestamp.
+  std::uint64_t dead_payload_bytes = 0;
+  std::uint64_t total_payload_bytes = 0;
+};
+
+/// Evaluate the maintenance gate: returns the outcome and fills the report.
+/// Does NOT perform the actual rewrite — only determines eligibility.
+/// Returns true if the rewrite should proceed.
+bool EvaluateMaintenanceGate(const MaintenanceGateInput& input,
+                             ScheduledLiveSetMaintenanceReport& report);
+
 }  // namespace waxcpp

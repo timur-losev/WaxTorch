@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <fstream>
 #include <iterator>
 #include <limits>
 #include <mutex>
@@ -1189,6 +1190,44 @@ void MemoryOrchestrator::Remember(const std::string& content, const Metadata& me
   }
 }
 
+void MemoryOrchestrator::RememberFile(const std::filesystem::path& file_path,
+                                       const Metadata& metadata) {
+  if (!std::filesystem::exists(file_path)) {
+    throw std::runtime_error("RememberFile: file not found: " + file_path.string());
+  }
+  // Read file content.
+  const auto file_size = std::filesystem::file_size(file_path);
+  if (file_size == 0) {
+    throw std::runtime_error("RememberFile: empty file: " + file_path.string());
+  }
+  std::ifstream ifs(file_path, std::ios::binary);
+  if (!ifs) {
+    throw std::runtime_error("RememberFile: failed to open file: " + file_path.string());
+  }
+  std::string content(static_cast<std::size_t>(file_size), '\0');
+  ifs.read(content.data(), static_cast<std::streamsize>(file_size));
+  if (!ifs) {
+    throw std::runtime_error("RememberFile: failed to read file: " + file_path.string());
+  }
+
+  // Merge file metadata.
+  Metadata merged = metadata;
+  merged["source_kind"] = "file";
+  merged["source_uri"] = file_path.string();
+  merged["source_filename"] = file_path.filename().string();
+  if (file_path.has_extension()) {
+    auto ext = file_path.extension().string();
+    if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
+    // ASCII lowercase.
+    for (auto& ch : ext) {
+      if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+    }
+    merged["source_extension"] = ext;
+  }
+
+  Remember(content, merged);
+}
+
 RAGContext MemoryOrchestrator::Recall(const std::string& query) {
   std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
@@ -1213,7 +1252,15 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query) {
       config_.enable_text_search,
       config_.enable_vector_search,
       req);
-  auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
+  // Use adaptive fusion: classifies query type, selects BM25/vector weights.
+  auto response = UnifiedSearchAdaptive(req, channels.text_results, channels.vector_results);
+
+  // Intent-aware reranking: boost/penalize based on query intents.
+  if (config_.rag.enable_answer_focused_ranking && !response.results.empty()) {
+    const int rerank_window = std::min(
+        std::max(clamped_search_top_k * 2, 10), config_.rag.answer_rerank_window);
+    response.results = IntentAwareRerank(response.results, query, rerank_window);
+  }
 
   // Record frame accesses for importance-based tier selection.
   if (!response.results.empty()) {
@@ -1273,7 +1320,15 @@ RAGContext MemoryOrchestrator::Recall(const std::string& query, const std::vecto
       config_.enable_text_search,
       config_.enable_vector_search,
       req);
-  auto response = UnifiedSearchWithCandidates(req, channels.text_results, channels.vector_results);
+  // Use adaptive fusion: classifies query type, selects BM25/vector weights.
+  auto response = UnifiedSearchAdaptive(req, channels.text_results, channels.vector_results);
+
+  // Intent-aware reranking: boost/penalize based on query intents.
+  if (config_.rag.enable_answer_focused_ranking && !response.results.empty()) {
+    const int rerank_window = std::min(
+        std::max(clamped_search_top_k * 2, 10), config_.rag.answer_rerank_window);
+    response.results = IntentAwareRerank(response.results, query, rerank_window);
+  }
 
   // Record frame accesses for importance-based tier selection.
   if (!response.results.empty()) {

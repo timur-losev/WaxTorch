@@ -30,6 +30,7 @@ class MemoryOrchestrator {
                      const TokenCounter* token_counter = nullptr);
 
   void Remember(const std::string& content, const Metadata& metadata = {});
+  void RememberFile(const std::filesystem::path& file_path, const Metadata& metadata = {});
   RAGContext Recall(const std::string& query);
   RAGContext Recall(const std::string& query, const std::vector<float>& embedding);
   void RememberFact(const std::string& entity,

@@ -67,6 +67,7 @@ add_library(waxcpp STATIC
   src/rag/tier_selector.cpp
   src/rag/token_counter.cpp
   src/rag/vector_math.cpp
+  src/rag/live_set_rewrite.cpp
   src/rag/embeddings.cpp
   src/orchestrator/memory_orchestrator.cpp
 )
@@ -455,6 +456,16 @@ if (WAXCPP_BUILD_TESTS)
   endif()
   target_precompile_headers(waxcpp_vector_math_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_vector_math_test COMMAND waxcpp_vector_math_test)
+
+  add_executable(waxcpp_live_set_rewrite_test tests/unit/live_set_rewrite_test.cpp)
+  target_link_libraries(waxcpp_live_set_rewrite_test PRIVATE waxcpp)
+  if (MSVC)
+    target_compile_options(waxcpp_live_set_rewrite_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_live_set_rewrite_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_live_set_rewrite_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_live_set_rewrite_test COMMAND waxcpp_live_set_rewrite_test)
 
   add_executable(waxcpp_mv2s_parity_test tests/parity/mv2s_fixture_parity_test.cpp)
   target_link_libraries(waxcpp_mv2s_parity_test PRIVATE waxcpp)
