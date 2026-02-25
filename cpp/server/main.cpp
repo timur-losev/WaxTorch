@@ -158,6 +158,10 @@ protected:
                                 : runtime_config.models.llama_cpp_root));
         logger.information("Vector search enabled: " +
                            std::string(runtime_config.models.enable_vector_search ? "true" : "false"));
+        logger.information("Orchestrator ingest concurrency: " +
+                           EnvOrDefault("WAXCPP_ORCH_INGEST_CONCURRENCY", "1 (default)"));
+        logger.information("Orchestrator ingest batch size: " +
+                           EnvOrDefault("WAXCPP_ORCH_INGEST_BATCH_SIZE", "32 (default)"));
         if (runtime_config.models.enable_vector_search) {
             logger.information("llama.cpp embedding endpoint: " +
                                EnvOrDefault("WAXCPP_LLAMA_EMBED_ENDPOINT",

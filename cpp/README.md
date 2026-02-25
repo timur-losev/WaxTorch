@@ -135,6 +135,10 @@ export WAXCPP_LLAMA_GEN_ENDPOINT=http://127.0.0.1:8081/completion
 export WAXCPP_LLAMA_GEN_TIMEOUT_MS=60000
 export WAXCPP_LLAMA_GEN_MAX_RETRIES=2
 export WAXCPP_LLAMA_GEN_RETRY_BACKOFF_MS=100
+
+# Optional orchestrator ingest tuning
+export WAXCPP_ORCH_INGEST_CONCURRENCY=1
+export WAXCPP_ORCH_INGEST_BATCH_SIZE=32
 ```
 
 Example `server-runtime.json`:

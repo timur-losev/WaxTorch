@@ -14,6 +14,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <optional>
 
 namespace {
 
@@ -41,6 +42,59 @@ void SetEnvVar(const char* key, const std::string& value) {
   }
 #endif
 }
+
+std::optional<std::string> GetEnvVar(const char* key) {
+#if defined(_MSC_VER)
+  char* value = nullptr;
+  std::size_t len = 0;
+  if (_dupenv_s(&value, &len, key) != 0 || value == nullptr) {
+    return std::nullopt;
+  }
+  std::string out(value);
+  std::free(value);
+  if (out.empty()) {
+    return std::nullopt;
+  }
+  return out;
+#else
+  const char* value = std::getenv(key);
+  if (value == nullptr || *value == '\0') {
+    return std::nullopt;
+  }
+  return std::string(value);
+#endif
+}
+
+void UnsetEnvVar(const char* key) {
+#if defined(_MSC_VER)
+  if (_putenv_s(key, "") != 0) {
+    throw std::runtime_error(std::string("failed to unset env var: ") + key);
+  }
+#else
+  if (unsetenv(key) != 0) {
+    throw std::runtime_error(std::string("failed to unset env var: ") + key);
+  }
+#endif
+}
+
+class EnvVarGuard {
+ public:
+  explicit EnvVarGuard(const char* key) : key_(key), previous_(GetEnvVar(key)) {}
+  ~EnvVarGuard() noexcept {
+    try {
+      if (previous_.has_value()) {
+        SetEnvVar(key_.c_str(), *previous_);
+      } else {
+        UnsetEnvVar(key_.c_str());
+      }
+    } catch (...) {
+    }
+  }
+
+ private:
+  std::string key_{};
+  std::optional<std::string> previous_{};
+};
 
 Poco::JSON::Object::Ptr ParseObject(const std::string& json) {
   Poco::JSON::Parser parser;
@@ -159,12 +213,57 @@ void ScenarioAnswerGenerateUsesContextBudgetAndCitations() {
   waxcpp::tests::CleanupStoreArtifacts(store_path);
 }
 
+void ScenarioRejectsInvalidOrchestratorIngestEnvValues() {
+  waxcpp::tests::Log("scenario: constructor rejects invalid orchestrator ingest env values");
+  const auto temp_root = std::filesystem::temp_directory_path() / TempName("waxcpp_answer_repo_", "");
+  const auto store_path = std::filesystem::temp_directory_path() / TempName("waxcpp_answer_store_", ".mv2s");
+
+  std::error_code ec;
+  std::filesystem::create_directories(temp_root, ec);
+  if (ec) {
+    throw std::runtime_error("failed to create temp runtime root");
+  }
+
+  EnvVarGuard guard_cpp_root("WAXCPP_LLAMA_CPP_ROOT");
+  EnvVarGuard guard_ingest_concurrency("WAXCPP_ORCH_INGEST_CONCURRENCY");
+  EnvVarGuard guard_ingest_batch_size("WAXCPP_ORCH_INGEST_BATCH_SIZE");
+  SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
+  SetEnvVar("WAXCPP_ORCH_INGEST_CONCURRENCY", "0");
+  SetEnvVar("WAXCPP_ORCH_INGEST_BATCH_SIZE", "not-a-number");
+
+  waxcpp::RuntimeModelsConfig models{};
+  models.generation_model.runtime = "llama_cpp";
+  models.generation_model.model_path = "test-generation.gguf";
+  models.embedding_model.runtime = "disabled";
+  models.embedding_model.model_path.clear();
+  models.llama_cpp_root = temp_root.string();
+  models.enable_vector_search = false;
+  models.require_distinct_models = true;
+
+  bool threw = false;
+  try {
+    waxcpp::server::WaxRAGHandler handler(store_path, models);
+    (void)handler;
+  } catch (const std::exception& ex) {
+    threw = true;
+    const std::string message = ex.what();
+    Require(message.find("WAXCPP_ORCH_INGEST_CONCURRENCY") != std::string::npos,
+            "invalid ingest env error must mention variable name");
+  }
+  Require(threw, "constructor must reject invalid ingest env values");
+
+  std::filesystem::remove_all(temp_root, ec);
+  ec.clear();
+  waxcpp::tests::CleanupStoreArtifacts(store_path);
+}
+
 }  // namespace
 
 int main() {
   try {
     waxcpp::tests::Log("wax_rag_handler_answer_test: start");
     ScenarioAnswerGenerateUsesContextBudgetAndCitations();
+    ScenarioRejectsInvalidOrchestratorIngestEnvValues();
     waxcpp::tests::Log("wax_rag_handler_answer_test: finished");
     return EXIT_SUCCESS;
   } catch (const std::exception& ex) {

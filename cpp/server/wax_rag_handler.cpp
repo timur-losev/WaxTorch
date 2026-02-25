@@ -31,6 +31,8 @@ constexpr std::uint64_t kMaxIndexControlValue = 1'000'000;
 constexpr const char* kDefaultLlamaEmbedEndpoint = "http://127.0.0.1:8081/embedding";
 constexpr const char* kDefaultLlamaGenEndpoint = "http://127.0.0.1:8081/completion";
 constexpr const char* kServerLogEnv = "WAXCPP_SERVER_LOG";
+constexpr const char* kOrchIngestConcurrencyEnv = "WAXCPP_ORCH_INGEST_CONCURRENCY";
+constexpr const char* kOrchIngestBatchSizeEnv = "WAXCPP_ORCH_INGEST_BATCH_SIZE";
 
 std::optional<std::string> EnvString(const char* name) {
 #if defined(_MSC_VER)
@@ -345,6 +347,8 @@ WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
     waxcpp::OrchestratorConfig config{};
     config.enable_vector_search = runtime_models_.enable_vector_search;
     config.require_on_device_providers = false;
+    config.ingest_concurrency = ParsePositiveIntEnv(kOrchIngestConcurrencyEnv, config.ingest_concurrency);
+    config.ingest_batch_size = ParsePositiveIntEnv(kOrchIngestBatchSizeEnv, config.ingest_batch_size);
     std::shared_ptr<waxcpp::EmbeddingProvider> embedder{};
     if (runtime_models_.enable_vector_search) {
         LlamaCppEmbeddingProviderConfig embedder_config{};

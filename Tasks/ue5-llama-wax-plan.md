@@ -36,6 +36,7 @@ Current runtime source decision:
     - added handler-level regression (`wax_rag_handler_answer_test`) with stubbed generation backend for budget/citation behavior.
 - M8 in progress:
   - `index.start` now accepts operational controls: `flush_every_chunks`, `max_files`, and `max_chunks`,
+  - orchestrator ingest throttles can be tuned via env: `WAXCPP_ORCH_INGEST_CONCURRENCY`, `WAXCPP_ORCH_INGEST_BATCH_SIZE`,
   - UE5 scanner supports cancel callback; `index.stop` can interrupt scan phase before full traversal,
   - added deterministic regressions for scanner-cancel path, capped-scan indexing path, capped-ingest (`max_chunks`) path, and interrupted-resume committed-watermark fallback path,
   - added phase/progress logs for indexing pipeline (enabled via `WAXCPP_SERVER_LOG`),
@@ -122,7 +123,7 @@ Current runtime source decision:
 - Add ingest throttles: max RAM, batch size, worker count.
 - Add server metrics/logging for indexing phases and failures.
 - Add regression tests for deterministic outputs across repeated runs.
-- Status: partially implemented (`max_files` + `max_chunks` + `flush_every_chunks` controls in `index.start`, cancel-aware scan support, indexed-phase logging, regression coverage for controls, and committed-watermark resume fallback for interrupted runs without file-manifest).
+- Status: partially implemented (`max_files` + `max_chunks` + `flush_every_chunks` controls in `index.start`, orchestrator ingest tuning via `WAXCPP_ORCH_INGEST_CONCURRENCY`/`WAXCPP_ORCH_INGEST_BATCH_SIZE`, cancel-aware scan support, indexed-phase logging, regression coverage for controls, and committed-watermark resume fallback for interrupted runs without file-manifest).
 
 ## Acceptance Gates
 1. Same source tree produces identical chunk manifest and stable top-k ordering.
