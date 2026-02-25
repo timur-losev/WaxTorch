@@ -1,7 +1,7 @@
 # Context: C++ Core RAG Port (LibTorch)
 
 **Created**: 2026-02-18
-**Last Updated**: 2026-02-25 (session 2)
+**Last Updated**: 2026-02-25 (session 3)
 **Current Phase**: M7-M9 baseline complete, M11 hardening + RAG module porting in progress
 **Next Agent**: wax-rag-specialist
 
@@ -258,6 +258,8 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 - [x] Expand C++ CI with torch runtime matrix (`cpu_only`, `cuda_preferred` + simulated CUDA availability) to continuously validate runtime-policy diagnostics paths
 - [x] Add manual workflow dispatch release gate job that runs strict dependency verification (`verify_submodules.py --enforce-pin-required`) and can be triggered independently from normal PR/push CI
 - [x] Extend runtime diagnostics with selected artifact class (`cpu|cuda|any`) and add regressions to lock deterministic class assignment + runtime-info stability across embed calls
+- [x] Reconciled uncommitted header/runtime state for frame metadata model (`mv2s_format.hpp`, `wal_ring.hpp`, `types.hpp`) with committed C++ implementation changes
+- [x] Closed parity gap in `MetadataFilter`: C++ now supports `required_tags` in addition to `required_entries` and `required_labels`, using persisted per-frame metadata/tag/label state
 - [x] Add deterministic MV2V decode fuzz regression (`512` seeded mutations over valid USearch/Metal segments) with decode-invariant checks for successful paths
 - [x] Extend WAL recovery/apply parity regressions for recovered non-put mutations: recovered `delete`/`supersede` + local `put` must auto-commit together on `Close()` and persist expected TOC lifecycle state
 - [x] Add deterministic WAL payload fuzz regression with valid per-record checksums (`256` seeded payloads) to harden mutation-decoder paths while preserving scan-state invariants
@@ -745,7 +747,7 @@ Initialize a side-by-side C++20 workspace for Wax Core RAG and start M2 with rea
 
 - **Actor boundaries crossed**: Planned parity for `MemoryOrchestrator` actor semantics via serialized C++ orchestrator runtime. `AccessStatsManager` ported from Swift actor to C++ mutex-guarded class (same serialized access semantics, different concurrency primitive).
 - **Frame kinds involved**: Core frame model + surrogate frames (identified by `WAXSURR1` content prefix; no new binary-format frame kind field, detection via payload magic header). `SurrogateTierSelector::ExtractTier()` and `maintenance.cpp` both parse/produce hierarchical WAXSURR1 format.
-- **Metadata keys introduced/changed**: Forward-compatible surrogate metadata keys populated in `OptimizeSurrogates()` call to `Put()` (`source_frame_id`, `surrogate_algo`, `surrogate_version`, `surrogate_max_tokens`, `surrogate_format`); not yet persisted by C++ binary format but establish the API contract for when per-frame metadata persistence is implemented.
+- **Metadata keys introduced/changed**: Surrogate metadata keys are populated in `OptimizeSurrogates()` via `Put()` (`source_frame_id`, `surrogate_algo`, `surrogate_version`, `surrogate_max_tokens`, `surrogate_format`) and persisted through MV2S/WAL frame metadata fields. `MetadataFilter` parity now evaluates entries/tags/labels against persisted frame metadata.
 - **Index implications**: Text and vector indexes now have deterministic in-memory two-phase staging in C++; orchestrator commits them on `flush` and rebuilds committed snapshots on reopen. Intent-aware reranking now runs as a post-fusion pass in `UnifiedSearchWithCandidates()`.
 - **Token budget impact**: BPE `TokenCounter` (cl100k_base) ported with dual-mode (exact BPE via greedy merge / byte-level `~4 bytes/token` estimation); `ChunkText()` utility and `ChunkContentTokenAware()` orchestrator path provide token-aware chunking when vocab is loaded (whitespace fallback when no vocab). `ChunkContentTokenAware()` is now actively wired into `MemoryOrchestrator::Remember()` via constructor-injected `TokenCounter*`. `ExtractiveSurrogateGenerator` accepts optional `TokenCounter*` for accurate tier budget enforcement. `OptimizeSurrogates()` passes tier config through to generator.
 - **Scoring/ranking parity**: `ImportanceScorer` implements exponential-decay scoring matching Swift's `ImportanceScorer` (age/frequency/recency components). `IntentAwareRerank()` implements composite scoring matching Swift's `intentAwareRerank()` with identical weight constants for term recall/precision, entity/year/date coverage, and intent-specific boosts/penalties. `DeterministicAnswerExtractor` is now wired into `MemoryOrchestrator::Recall()` as optional post-processing, populating `RAGContext::extracted_answer`.
@@ -759,7 +761,7 @@ M1-M9 baseline and M11 hardening are well advanced. RAG module porting is substa
 1. Final remote for `cpp/third_party/libtorch-dist` should be replaced with dedicated artifact mirror before release.
 2. `usearch/sqlite/googletest/libtorch-dist` pins are concrete in `cpp/submodules.lock`; release decision still needed on whether to keep current interim `libtorch-dist` source or cut over to a dedicated project-owned artifact mirror.
 3. Expand crash/fault-injection matrix for mixed recovered+local pending mutation sets under repeated reopen/commit cycles (all WAL mutation kinds).
-4. Per-frame metadata persistence in C++ binary format not yet implemented; `OptimizeSurrogates()` populates metadata via `Put()` API (forward-compatible) but values are not retrievable on reopen. Once metadata persistence is added, `isUpToDate` surrogate detection (matching Swift `sourceContentHash + algorithm + version + maxTokens`) can be fully implemented.
+4. `OptimizeSurrogates` still does not emit frame-level `tags`; `MetadataFilter.required_tags` parity is implemented, but production coverage for tag-authored frames remains limited until a public tag-writing path is added in orchestrator-facing APIs.
 5. ~~`ChunkContentTokenAware()` is wired but not yet called from `Remember()`~~ — **RESOLVED**: `TokenCounter*` is now constructor-injected into `MemoryOrchestrator` and `ChunkContentTokenAware()` is actively called in `Remember()`. Vocab path resolution still needed for production deployment (currently requires explicit vocab loading before orchestrator construction).
 6. Remaining unported Swift RAG modules: `Ingest` pipeline (file/PDF ingestion), `PhotoRAG`, `VideoRAG`, `DateParser`. `DeterministicAnswerExtractor`, `LiveSetRewriteSchedule`, `SurrogateTierSelector`, and `TextChunker` are now ported. Platform-specific modules (`PhotoRAG`, `VideoRAG`, `PDFTextExtractor`) may be excluded from C++ port.
 7. ~~`IntentAwareRerank()` is wired into `UnifiedSearchWithCandidates()` but does not yet have dedicated C++ tests.~~ — **RESOLVED**: 20 dedicated `IntentAwareRerank` tests added (location/date/ownership intents, entity/year disambiguation, distractor penalty, window capping, vector source influence, RerankingHelpers unit tests).
