@@ -1,5 +1,6 @@
 #include "waxcpp/memory_orchestrator.hpp"
 #include "waxcpp/fts5_search_engine.hpp"
+#include "waxcpp/live_set_rewrite.hpp"
 #include "waxcpp/query_analyzer.hpp"
 #include "waxcpp/search.hpp"
 #include "waxcpp/text_chunker.hpp"
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1132,6 +1134,7 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
 void MemoryOrchestrator::Remember(const std::string& content, const Metadata& metadata) {
   std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
+  last_write_activity_ms_ = NowMs();
   EnsureEmbedderRequiredForRemember(config_, embedder_);
   // Use TextChunker for BPE-aware chunking (falls back to whitespace when
   // token counter is unavailable).
@@ -1360,6 +1363,7 @@ void MemoryOrchestrator::RememberFact(const std::string& entity,
                                       const Metadata& metadata) {
   std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
+  last_write_activity_ms_ = NowMs();
   if (entity.empty()) {
     throw std::runtime_error("RememberFact entity must be non-empty");
   }
@@ -1437,6 +1441,30 @@ void MemoryOrchestrator::Flush() {
     if (vector_index_ != nullptr && vector_index_->PendingMutationCount() > 0) {
       vector_index_->CommitStaged();
     }
+    ++flush_count_;
+
+    // Trigger scheduled live-set maintenance if configured.
+    if (config_.live_set_rewrite_schedule.enabled) {
+      try {
+        auto maint_report = RunScheduledLiveSetMaintenance(
+            store_,
+            config_.live_set_rewrite_schedule,
+            flush_count_,
+            /*force=*/false,
+            NowMs(),
+            last_maintenance_completed_ms_,
+            last_write_activity_ms_);
+        last_maintenance_report_ = maint_report;
+        if (maint_report.outcome == MaintenanceOutcome::kRewriteSucceeded ||
+            maint_report.outcome == MaintenanceOutcome::kRewriteFailed ||
+            maint_report.outcome == MaintenanceOutcome::kValidationFailedRolledBack) {
+          last_maintenance_completed_ms_ = NowMs();
+        }
+      } catch (...) {
+        // Swallow maintenance errors — store is already committed successfully.
+        last_maintenance_completed_ms_ = NowMs();
+      }
+    }
   } catch (const std::exception& ex) {
     (void)ex;
     bool refreshed_visible_state = false;
@@ -1486,6 +1514,12 @@ void MemoryOrchestrator::Close() {
   }
   store_.Close();
   closed_ = true;
+}
+
+std::optional<ScheduledLiveSetMaintenanceReport>
+MemoryOrchestrator::LastMaintenanceReport() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return last_maintenance_report_;
 }
 
 }  // namespace waxcpp

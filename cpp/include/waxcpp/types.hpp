@@ -1,5 +1,7 @@
 #pragma once
 
+#include "waxcpp/live_set_rewrite.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -134,6 +136,11 @@ struct OrchestratorConfig {
   int embedding_cache_capacity = 2048;
   bool use_metal_vector_search = true;
   bool require_on_device_providers = true;
+
+  /// Scheduled live-set file compaction configuration.
+  /// By default, disabled. Set `live_set_rewrite_schedule.enabled = true`
+  /// and configure cadence/threshold/cooldown to enable automatic compaction.
+  LiveSetRewriteSchedule live_set_rewrite_schedule{};
 };
 
 }  // namespace waxcpp

@@ -48,6 +48,9 @@ class MemoryOrchestrator {
   AccessStatsManager& GetAccessStats() { return access_stats_; }
   const AccessStatsManager& GetAccessStats() const { return access_stats_; }
 
+  /// Returns the last scheduled live-set maintenance report (if any).
+  std::optional<ScheduledLiveSetMaintenanceReport> LastMaintenanceReport() const;
+
  private:
   OrchestratorConfig config_;
   WaxStore store_;
@@ -63,6 +66,13 @@ class MemoryOrchestrator {
   DeterministicAnswerExtractor answer_extractor_;
   /// Maps source frame ID → active surrogate frame ID.
   std::unordered_map<std::uint64_t, std::uint64_t> surrogate_map_;
+
+  /// Maintenance bookkeeping.
+  std::uint64_t flush_count_ = 0;
+  std::int64_t last_write_activity_ms_ = 0;
+  std::int64_t last_maintenance_completed_ms_ = 0;
+  std::optional<ScheduledLiveSetMaintenanceReport> last_maintenance_report_;
+
   bool closed_ = false;
   mutable std::mutex mutex_{};
 };

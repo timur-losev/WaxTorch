@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 
@@ -121,5 +122,39 @@ struct MaintenanceGateInput {
 /// Returns true if the rewrite should proceed.
 bool EvaluateMaintenanceGate(const MaintenanceGateInput& input,
                              ScheduledLiveSetMaintenanceReport& report);
+
+// Forward-declare WaxStore to avoid pulling in the full header.
+class WaxStore;
+
+/// Rewrite the committed store into a new .mv2s file, dropping non-live payloads.
+/// The source store MUST be committed (flushed) before calling this.
+/// The destination must not equal the source path.
+/// Returns a report describing the outcome (byte savings, frame counts, duration).
+LiveSetRewriteReport RewriteLiveSet(WaxStore& source,
+                                     const std::filesystem::path& destination,
+                                     const LiveSetRewriteOptions& options = {});
+
+/// Run the full scheduled live-set maintenance flow:
+/// 1. Evaluate the gate (cadence / cooldown / idle / threshold).
+/// 2. If eligible, perform the rewrite into a candidate file.
+/// 3. Validate the candidate (compaction gain, frame count, optional deep verify).
+/// 4. Prune old candidates.
+/// Returns a report describing what happened.
+///
+/// @param source        The store to compact.
+/// @param schedule      Schedule configuration (cadence, thresholds, etc.).
+/// @param flush_count   Monotonic flush counter for cadence checks.
+/// @param force         When true, bypass cadence/cooldown/idle gates.
+/// @param now_ms        Current wall-clock time (ms since epoch).
+/// @param last_completed_ms  Wall-clock time of last completed maintenance (0 = never).
+/// @param last_write_activity_ms  Wall-clock time of last user write (0 = never).
+ScheduledLiveSetMaintenanceReport RunScheduledLiveSetMaintenance(
+    WaxStore& source,
+    const LiveSetRewriteSchedule& schedule,
+    std::uint64_t flush_count,
+    bool force,
+    std::int64_t now_ms,
+    std::int64_t last_completed_ms,
+    std::int64_t last_write_activity_ms);
 
 }  // namespace waxcpp

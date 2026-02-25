@@ -92,6 +92,7 @@ class WaxStore {
  [[nodiscard]] std::vector<std::byte> FrameContent(std::uint64_t frame_id) const;
  [[nodiscard]] std::unordered_map<std::uint64_t, std::vector<std::byte>> FrameContents(const std::vector<std::uint64_t>& frame_ids) const;
  [[nodiscard]] WaxPendingEmbeddingSnapshot PendingEmbeddingMutations(std::optional<std::uint64_t> since_sequence = std::nullopt) const;
+ [[nodiscard]] const std::filesystem::path& Path() const noexcept { return path_; }
 
  private:
   void LoadState(bool deep_verify, bool repair_trailing_bytes);
