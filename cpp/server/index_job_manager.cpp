@@ -146,6 +146,21 @@ bool IndexJobManager::Complete(std::uint64_t scanned_files,
   return true;
 }
 
+bool IndexJobManager::UpdateProgress(std::uint64_t scanned_files,
+                                     std::uint64_t indexed_chunks,
+                                     std::uint64_t committed_chunks) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (status_.state != IndexJobState::kRunning) {
+    return false;
+  }
+  status_.scanned_files = scanned_files;
+  status_.indexed_chunks = indexed_chunks;
+  status_.committed_chunks = committed_chunks;
+  status_.updated_at_ms = NowMs();
+  PersistLocked();
+  return true;
+}
+
 bool IndexJobManager::Stop() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (status_.state != IndexJobState::kRunning) {

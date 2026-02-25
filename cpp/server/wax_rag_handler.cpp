@@ -6,12 +6,18 @@
 #include <Poco/JSON/Array.h>
 #include <Poco/JSON/Object.h>
 
+#include <cstdint>
 #include <fstream>
 #include <sstream>
+#include <string_view>
 #include <stdexcept>
 #include <utility>
 
 namespace waxcpp::server {
+
+namespace {
+constexpr std::uint64_t kIndexFlushEveryChunks = 128;
+}
 
 WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
                              waxcpp::RuntimeModelsConfig runtime_models)
@@ -128,8 +134,44 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
         if (!started) {
             return "Error: index job is already running";
         }
-        const auto entries = ue5_scanner_.Scan(std::filesystem::path(repo_root));
-        const auto chunk_records = ue5_chunk_builder_.Build(std::filesystem::path(repo_root), entries);
+        const auto repo_root_path = std::filesystem::path(repo_root);
+        const auto entries = ue5_scanner_.Scan(repo_root_path);
+        std::uint64_t indexed_chunks = 0;
+        std::uint64_t committed_chunks = 0;
+        const auto chunk_records = ue5_chunk_builder_.Build(
+            repo_root_path,
+            entries,
+            [&](const Ue5ChunkRecord& chunk, std::string_view chunk_text) {
+                waxcpp::Metadata metadata{};
+                metadata["source_kind"] = "ue5_chunk";
+                metadata["repo_root"] = repo_root;
+                metadata["relative_path"] = chunk.relative_path;
+                metadata["language"] = chunk.language;
+                metadata["symbol"] = chunk.symbol;
+                metadata["line_start"] = std::to_string(chunk.line_start);
+                metadata["line_end"] = std::to_string(chunk.line_end);
+                metadata["chunk_id"] = chunk.chunk_id;
+                metadata["chunk_hash"] = chunk.content_hash;
+                metadata["token_estimate"] = std::to_string(chunk.token_estimate);
+                orchestrator_->Remember(std::string(chunk_text), metadata);
+                ++indexed_chunks;
+                if (indexed_chunks % kIndexFlushEveryChunks == 0) {
+                    orchestrator_->Flush();
+                    committed_chunks = indexed_chunks;
+                    const bool progress_updated = index_job_manager_.UpdateProgress(
+                        static_cast<std::uint64_t>(entries.size()),
+                        indexed_chunks,
+                        committed_chunks);
+                    (void)progress_updated;
+                }
+            });
+        orchestrator_->Flush();
+        committed_chunks = indexed_chunks;
+        const bool progress_updated = index_job_manager_.UpdateProgress(
+            static_cast<std::uint64_t>(entries.size()),
+            indexed_chunks,
+            committed_chunks);
+        (void)progress_updated;
         const auto running_status = index_job_manager_.status();
         auto manifest_path = running_status.checkpoint_path;
         manifest_path += ".scan_manifest";
@@ -165,7 +207,7 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
         }
         if (!index_job_manager_.Complete(static_cast<std::uint64_t>(entries.size()),
                                          static_cast<std::uint64_t>(chunk_records.size()),
-                                         0)) {
+                                         committed_chunks)) {
             return "Error: failed to complete index job state transition";
         }
         return make_index_status_json(index_job_manager_.status());

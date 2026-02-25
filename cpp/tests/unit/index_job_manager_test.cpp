@@ -119,6 +119,34 @@ void ScenarioCompletePersistsCounters(const std::filesystem::path& checkpoint_pa
   }
 }
 
+void ScenarioUpdateProgressPersistsWhileRunning(const std::filesystem::path& checkpoint_path) {
+  {
+    waxcpp::server::IndexJobManager manager(checkpoint_path);
+    Require(manager.Start("g:/Proj/UE5/Engine/Source", false), "start must succeed");
+    Require(manager.UpdateProgress(100, 80, 64), "update progress must succeed while running");
+    const auto status = manager.status();
+    Require(status.state == waxcpp::server::IndexJobState::kRunning, "update progress must keep running state");
+    Require(status.scanned_files == 100, "update progress scanned_files mismatch");
+    Require(status.indexed_chunks == 80, "update progress indexed_chunks mismatch");
+    Require(status.committed_chunks == 64, "update progress committed_chunks mismatch");
+  }
+
+  {
+    waxcpp::server::IndexJobManager reloaded(checkpoint_path);
+    const auto status = reloaded.status();
+    Require(status.state == waxcpp::server::IndexJobState::kStopped,
+            "running checkpoint must reload as stopped");
+    Require(status.scanned_files == 100, "reloaded scanned_files mismatch after update progress");
+    Require(status.indexed_chunks == 80, "reloaded indexed_chunks mismatch after update progress");
+    Require(status.committed_chunks == 64, "reloaded committed_chunks mismatch after update progress");
+  }
+
+  {
+    waxcpp::server::IndexJobManager manager(checkpoint_path);
+    Require(!manager.UpdateProgress(1, 1, 1), "update progress must fail when not running");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -129,6 +157,7 @@ int main() {
     ScenarioResumeKeepsCountersForSameRepo(checkpoint_path);
     ScenarioFailTransitionsToFailed(checkpoint_path);
     ScenarioCompletePersistsCounters(checkpoint_path);
+    ScenarioUpdateProgressPersistsWhileRunning(checkpoint_path);
     waxcpp::tests::CleanupStoreArtifacts(checkpoint_path);
     waxcpp::tests::CleanupTempArtifactsByPrefix("waxcpp_index_job_manager_test_");
     return EXIT_SUCCESS;

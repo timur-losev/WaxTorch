@@ -262,7 +262,8 @@ Ue5ChunkManifestBuilder::Ue5ChunkManifestBuilder(Ue5ChunkingConfig config) : con
 
 std::vector<Ue5ChunkRecord> Ue5ChunkManifestBuilder::Build(
     const std::filesystem::path& repo_root,
-    const std::vector<Ue5ScanEntry>& entries) const {
+    const std::vector<Ue5ScanEntry>& entries,
+    const ChunkVisitor& on_chunk) const {
   waxcpp::TokenCounter token_counter{};
   std::vector<Ue5ChunkRecord> records{};
   records.reserve(entries.size() * 2);
@@ -296,7 +297,7 @@ std::vector<Ue5ChunkRecord> Ue5ChunkManifestBuilder::Build(
       id_material << entry.relative_path << '\n' << symbol << '\n' << (window.start_line + 1) << ':'
                   << (window.end_line + 1) << '\n' << content_hash;
 
-      records.push_back(Ue5ChunkRecord{
+      Ue5ChunkRecord record{
           .chunk_id = Hex64(Fnv1a64(id_material.str())),
           .relative_path = entry.relative_path,
           .language = language,
@@ -306,7 +307,11 @@ std::vector<Ue5ChunkRecord> Ue5ChunkManifestBuilder::Build(
           .token_estimate = static_cast<std::uint32_t>(std::max(1, window.token_estimate)),
           .content_hash = content_hash,
           .size_bytes = static_cast<std::uint64_t>(chunk_text.size()),
-      });
+      };
+      if (on_chunk) {
+        on_chunk(record, chunk_text);
+      }
+      records.push_back(std::move(record));
     }
   }
 

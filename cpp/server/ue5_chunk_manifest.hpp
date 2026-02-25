@@ -5,7 +5,9 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace waxcpp::server {
@@ -29,11 +31,14 @@ struct Ue5ChunkingConfig {
 
 class Ue5ChunkManifestBuilder {
  public:
+  using ChunkVisitor = std::function<void(const Ue5ChunkRecord&, std::string_view chunk_text)>;
+
   explicit Ue5ChunkManifestBuilder(Ue5ChunkingConfig config = {});
 
   [[nodiscard]] std::vector<Ue5ChunkRecord> Build(
       const std::filesystem::path& repo_root,
-      const std::vector<Ue5ScanEntry>& entries) const;
+      const std::vector<Ue5ScanEntry>& entries,
+      const ChunkVisitor& on_chunk = {}) const;
 
   [[nodiscard]] static std::string SerializeManifest(const std::vector<Ue5ChunkRecord>& records);
 

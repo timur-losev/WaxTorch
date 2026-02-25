@@ -43,6 +43,9 @@ class IndexJobManager {
   [[nodiscard]] bool Complete(std::uint64_t scanned_files,
                               std::uint64_t indexed_chunks,
                               std::uint64_t committed_chunks);
+  [[nodiscard]] bool UpdateProgress(std::uint64_t scanned_files,
+                                    std::uint64_t indexed_chunks,
+                                    std::uint64_t committed_chunks);
   [[nodiscard]] bool Stop();
   [[nodiscard]] bool Fail(std::string error);
 

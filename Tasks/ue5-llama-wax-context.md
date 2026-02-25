@@ -45,6 +45,11 @@
    - `cpp/tests/unit/ue5_chunk_manifest_test.cpp`
    - `index.start` now writes `<checkpoint>.chunk_manifest`
    - `index_job_manager.Complete(scanned,indexed,committed)` now records scanned files and indexed chunk count
+9. Added baseline ingest execution in `index.start`:
+   - chunk stream callback runs `MemoryOrchestrator::Remember(...)` per chunk with deterministic metadata
+   - periodic WAL commits via `Flush()` every 128 chunks
+   - live checkpoint updates via `IndexJobManager::UpdateProgress(...)`
+   - final `committed_chunks` persisted on completion
 
 ## Validation Rules Now Enforced
 1. `generation_model.runtime` must be `llama_cpp`.
@@ -55,10 +60,10 @@
 6. Vector-search enablement requires embedding runtime to be `llama_cpp` with `.gguf` path.
 
 ## Pending Next Steps
-1. Implement real ingest path from chunk manifest into Wax WAL (currently manifests are produced, but ingest/commit is not executed).
-2. Add resume-from-manifest hash logic (incremental indexing over changed files only).
-3. Implement `LlamaCppEmbeddingProvider` and wire vector ingest/search path.
-4. Add end-to-end retrieval + answer path with citation metadata.
+1. Add resume-from-manifest hash logic (incremental indexing over changed files only).
+2. Implement `LlamaCppEmbeddingProvider` and wire vector ingest/search path.
+3. Add end-to-end retrieval + answer path with citation metadata.
+4. Move long-running index execution off request thread (background worker + cancellation-safe stop).
 
 ## Operational Notes
 1. Server now expects llama runtime root via:

@@ -17,7 +17,7 @@ Current runtime source decision:
 - M4 in progress:
   - implemented deterministic chunk-manifest builder (line/token-aware windows, metadata, deterministic chunk ids),
   - `index.start` now writes both `.scan_manifest` and `.chunk_manifest`,
-  - `index.status.indexed_chunks` now reflects chunk-manifest count.
+  - `index.start` now performs text ingest into Wax (`remember` + periodic `flush`) and updates job progress counters.
 
 ## Scope
 - Build an ingest/search/generation server path for very large C++ codebases (UE5 scale).
