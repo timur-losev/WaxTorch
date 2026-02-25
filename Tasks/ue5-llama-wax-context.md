@@ -1,7 +1,7 @@
 # Context: UE5 Indexing with Wax + llama.cpp (No Torch)
 
 **Created**: 2026-02-25  
-**Current Phase**: M0-M1 bootstrap  
+**Current Phase**: M0-M2 baseline bootstrap  
 **Owner**: wax-rag-specialist
 
 ## Decisions Locked
@@ -29,6 +29,11 @@
    - `cpp/CMakeLists.txt`
 5. Added runtime config docs for llama.cpp env/config usage:
    - `cpp/README.md`
+6. Added indexing skeleton in server:
+   - `cpp/server/index_job_manager.hpp`
+   - `cpp/server/index_job_manager.cpp`
+   - `cpp/tests/unit/index_job_manager_test.cpp`
+   - RPC methods: `index.start`, `index.status`, `index.stop`
 
 ## Validation Rules Now Enforced
 1. `generation_model.runtime` must be `llama_cpp`.
@@ -40,8 +45,8 @@
 
 ## Pending Next Steps
 1. Implement `LlamaCppEmbeddingProvider` and runtime call path (HTTP or native binding).
-2. Add indexing endpoints and UE5 filesystem scanner.
-3. Add resume/checkpoint logic for long-running ingest jobs.
+2. Extend `index.start` from state-machine skeleton to real UE5 scanner + chunking + ingest.
+3. Add progress accounting integration (`scanned_files/indexed_chunks/committed_chunks`) from live pipeline.
 4. Add end-to-end retrieval + answer path with citation metadata.
 
 ## Operational Notes
@@ -50,3 +55,5 @@
    - or `llama_cpp_root` in `WAXCPP_SERVER_CONFIG`.
 2. Default generation model path remains:
    - `g:/Proj/Agents1/Models/Qwen/Qwen3-Coder-Next-Q4_K_M.gguf`
+3. Index checkpoint state persists to:
+   - `<store_path>.index.checkpoint` (line-based deterministic state file).

@@ -47,6 +47,10 @@ Current runtime source decision:
   - `index.status`
   - `index.stop`
 - Add persistent job checkpoint state for resume after restart.
+- Status:
+  - Implemented baseline endpoint wiring in server dispatch and handler.
+  - Implemented persistent checkpoint-backed `IndexJobManager` state machine (`idle/running/stopped/failed`).
+  - Added dedicated unit coverage for start/stop/fail/reload/resume behavior.
 
 ### M3. UE5 Filesystem Scanner
 - Deterministic scanner for UE5 tree:

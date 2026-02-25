@@ -138,6 +138,19 @@ Example `server-runtime.json`:
 }
 ```
 
+Indexing JSON-RPC methods (baseline skeleton):
+```json
+{"jsonrpc":"2.0","id":1,"method":"index.start","params":{"repo_root":"g:/Proj/UnrealEngine/Engine/Source","resume":true}}
+{"jsonrpc":"2.0","id":2,"method":"index.status","params":{}}
+{"jsonrpc":"2.0","id":3,"method":"index.stop","params":{}}
+```
+
+Current behavior:
+- `index.start` enters `running` state and persists checkpoint metadata.
+- `index.status` returns persisted state snapshot (`idle|running|stopped|failed`).
+- `index.stop` transitions `running -> stopped`.
+- Full UE5 scanning/chunk/embedding pipeline is not wired yet (next milestones).
+
 SQLite backend (optional, currently disabled by default in favor of WAL-focused track):
 ```bash
 cmake -S cpp -B cpp/build -DWAXCPP_ENABLE_SQLITE_BACKEND=ON
