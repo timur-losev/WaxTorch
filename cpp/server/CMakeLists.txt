@@ -28,6 +28,7 @@ if (NOT TARGET Poco::Foundation OR
 endif()
 
 add_executable(waxcpp_rag_server
+  index_job_manager.cpp
   main.cpp
   json_rpc.cpp
   runtime_config.cpp

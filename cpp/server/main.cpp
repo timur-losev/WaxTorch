@@ -40,10 +40,16 @@ public:
             std::string result;
             if (json_request.method == "remember") {
                 result = handler_.handle_remember(json_request.params);
-                            } else if (json_request.method == "recall") {
+            } else if (json_request.method == "recall") {
                 result = handler_.handle_recall(json_request.params);
             } else if (json_request.method == "flush") {
                 result = handler_.handle_flush(json_request.params);
+            } else if (json_request.method == "index.start") {
+                result = handler_.handle_index_start(json_request.params);
+            } else if (json_request.method == "index.status") {
+                result = handler_.handle_index_status(json_request.params);
+            } else if (json_request.method == "index.stop") {
+                result = handler_.handle_index_stop(json_request.params);
             } else {
                 result = "Unknown method: " + json_request.method;
             }

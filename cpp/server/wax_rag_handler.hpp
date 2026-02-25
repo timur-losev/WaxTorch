@@ -3,6 +3,7 @@
 
 #include "../include/waxcpp/memory_orchestrator.hpp"
 #include "../include/waxcpp/runtime_model_config.hpp"
+#include "index_job_manager.hpp"
 #include "json_rpc.hpp"
 
 #include <Poco/JSON/Object.h>
@@ -23,9 +24,15 @@ public:
     std::string handle_remember(const Poco::JSON::Object::Ptr& params);
     std::string handle_recall(const Poco::JSON::Object::Ptr& params);
     std::string handle_flush(const Poco::JSON::Object::Ptr& params);
+    std::string handle_index_start(const Poco::JSON::Object::Ptr& params);
+    std::string handle_index_status(const Poco::JSON::Object::Ptr& params);
+    std::string handle_index_stop(const Poco::JSON::Object::Ptr& params);
 
 private:
+    std::string make_index_status_json(const IndexJobStatus& status) const;
+
     std::unique_ptr<waxcpp::MemoryOrchestrator> orchestrator_;
+    IndexJobManager index_job_manager_;
     waxcpp::RuntimeModelsConfig runtime_models_{};
     std::mutex mutex_;
 };

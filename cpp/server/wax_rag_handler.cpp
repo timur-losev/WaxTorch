@@ -14,7 +14,8 @@ namespace waxcpp::server {
 
 WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
                              waxcpp::RuntimeModelsConfig runtime_models)
-    : runtime_models_(std::move(runtime_models)) {
+    : index_job_manager_(store_path.string() + ".index.checkpoint"),
+      runtime_models_(std::move(runtime_models)) {
     if (runtime_models_.generation_model.runtime.empty() &&
         runtime_models_.generation_model.model_path.empty() &&
         runtime_models_.embedding_model.runtime.empty() &&
@@ -110,6 +111,70 @@ std::string WaxRAGHandler::handle_flush(const Poco::JSON::Object::Ptr& params) {
     } catch (const std::exception& e) {
         return std::string("Error: ") + e.what();
     }
+}
+
+std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& params) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const std::string repo_root = (params.isNull() ? "" : params->optValue<std::string>("repo_root", ""));
+    if (repo_root.empty()) {
+        return "Missing required parameter 'repo_root'";
+    }
+    const bool resume_requested = (params.isNull() ? false : params->optValue<bool>("resume", false));
+
+    try {
+        const bool started = index_job_manager_.Start(std::filesystem::path(repo_root), resume_requested);
+        if (!started) {
+            return "Error: index job is already running";
+        }
+        return make_index_status_json(index_job_manager_.status());
+    } catch (const std::exception& e) {
+        return std::string("Error: ") + e.what();
+    }
+}
+
+std::string WaxRAGHandler::handle_index_status(const Poco::JSON::Object::Ptr& params) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    (void)params;
+    try {
+        return make_index_status_json(index_job_manager_.status());
+    } catch (const std::exception& e) {
+        return std::string("Error: ") + e.what();
+    }
+}
+
+std::string WaxRAGHandler::handle_index_stop(const Poco::JSON::Object::Ptr& params) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    (void)params;
+    try {
+        const bool stopped = index_job_manager_.Stop();
+        if (!stopped) {
+            return "Error: index job is not running";
+        }
+        return make_index_status_json(index_job_manager_.status());
+    } catch (const std::exception& e) {
+        return std::string("Error: ") + e.what();
+    }
+}
+
+std::string WaxRAGHandler::make_index_status_json(const IndexJobStatus& status) const {
+    Poco::JSON::Object response{};
+    response.set("state", ToString(status.state));
+    response.set("generation", status.generation);
+    response.set("job_id", status.job_id.value_or(""));
+    response.set("repo_root", status.repo_root.value_or(""));
+    response.set("checkpoint_path", status.checkpoint_path.string());
+    response.set("started_at_ms", status.started_at_ms);
+    response.set("updated_at_ms", status.updated_at_ms);
+    response.set("scanned_files", status.scanned_files);
+    response.set("indexed_chunks", status.indexed_chunks);
+    response.set("committed_chunks", status.committed_chunks);
+    response.set("resume_requested", status.resume_requested);
+    response.set("last_error", status.last_error.value_or(""));
+
+    std::ostringstream out;
+    response.stringify(out);
+    return out.str();
 }
 
 } // namespace waxcpp::server

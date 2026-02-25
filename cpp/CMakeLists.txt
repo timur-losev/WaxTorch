@@ -319,6 +319,20 @@ if (WAXCPP_BUILD_TESTS)
   target_precompile_headers(waxcpp_runtime_model_config_test REUSE_FROM waxcpp)
   add_test(NAME waxcpp_runtime_model_config_test COMMAND waxcpp_runtime_model_config_test)
 
+  add_executable(waxcpp_index_job_manager_test
+    tests/unit/index_job_manager_test.cpp
+    server/index_job_manager.cpp
+  )
+  target_link_libraries(waxcpp_index_job_manager_test PRIVATE waxcpp)
+  target_include_directories(waxcpp_index_job_manager_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server)
+  if (MSVC)
+    target_compile_options(waxcpp_index_job_manager_test PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(waxcpp_index_job_manager_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_precompile_headers(waxcpp_index_job_manager_test REUSE_FROM waxcpp)
+  add_test(NAME waxcpp_index_job_manager_test COMMAND waxcpp_index_job_manager_test)
+
   add_executable(waxcpp_structured_memory_store_test tests/unit/structured_memory_store_test.cpp)
   target_link_libraries(waxcpp_structured_memory_store_test PRIVATE waxcpp)
   if (MSVC)
