@@ -701,9 +701,6 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                     return;
                 }
                 enforce_memory_cap();
-                if (resume_requested && unchanged_paths.contains(chunk.relative_path)) {
-                    return;
-                }
                 if (remaining_resume_skip_chunks > 0) {
                     --remaining_resume_skip_chunks;
                     return;
@@ -743,7 +740,9 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                         << " committed_chunks=" << committed_chunks;
                     ServerLog(msg.str());
                 }
-            });
+            },
+            nullptr,
+            (resume_requested && !unchanged_paths.empty()) ? &unchanged_paths : nullptr);
         if (reached_chunk_limit) {
             ServerLog("index job reached max_chunks cap");
         }

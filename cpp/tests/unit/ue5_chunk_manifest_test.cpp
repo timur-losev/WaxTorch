@@ -11,6 +11,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -158,6 +159,34 @@ void ScenarioFileManifestRoundTripAndUnchangedDetection(const std::filesystem::p
           "exactly one file should be detected as changed after single-file mutation");
 }
 
+void ScenarioBuildSkipsProvidedPaths(const std::filesystem::path& root) {
+  waxcpp::server::Ue5FilesystemScanner scanner{};
+  waxcpp::server::Ue5ChunkManifestBuilder builder{};
+
+  const auto entries = scanner.Scan(root);
+  Require(entries.size() >= 2, "fixture must contain at least two files for skip-path scenario");
+
+  const auto full = builder.Build(root, entries);
+  Require(!full.empty(), "full build must produce chunk records");
+
+  std::unordered_set<std::string> skip_paths{};
+  skip_paths.insert(entries.front().relative_path);
+
+  std::size_t callback_count = 0;
+  const auto skipped = builder.Build(
+      root,
+      entries,
+      [&](const waxcpp::server::Ue5ChunkRecord&, std::string_view) { ++callback_count; },
+      nullptr,
+      &skip_paths);
+
+  Require(callback_count == skipped.size(), "callback count must match produced records");
+  Require(skipped.size() < full.size(), "skip-path build must produce fewer records than full build");
+  for (const auto& record : skipped) {
+    Require(!skip_paths.contains(record.relative_path), "skip-path record must not appear in result set");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -167,6 +196,7 @@ int main() {
     ScenarioManifestStableAcrossEntryOrder(root);
     ScenarioManifestChangesAfterSourceMutation(root);
     ScenarioFileManifestRoundTripAndUnchangedDetection(root);
+    ScenarioBuildSkipsProvidedPaths(root);
     waxcpp::tests::CleanupStoreArtifacts(root);
     waxcpp::tests::CleanupTempArtifactsByPrefix("waxcpp_ue5_chunk_manifest_test_");
     return EXIT_SUCCESS;

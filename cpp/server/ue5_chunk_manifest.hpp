@@ -46,7 +46,8 @@ class Ue5ChunkManifestBuilder {
       const std::filesystem::path& repo_root,
       const std::vector<Ue5ScanEntry>& entries,
       const ChunkVisitor& on_chunk = {},
-      std::vector<Ue5FileDigest>* file_digests_out = nullptr) const;
+      std::vector<Ue5FileDigest>* file_digests_out = nullptr,
+      const std::unordered_set<std::string>* skip_paths = nullptr) const;
 
   [[nodiscard]] static std::string SerializeManifest(const std::vector<Ue5ChunkRecord>& records);
   [[nodiscard]] static std::string SerializeFileManifest(const std::vector<Ue5FileDigest>& digests);

@@ -112,7 +112,7 @@ Current runtime source decision:
 - Batch ingest with periodic commit/checkpoint.
 - Resume-from-manifest-hash logic to skip unchanged files.
 - Crash-recovery regression tests for mid-index interruption.
-- Status: partially implemented (periodic flush/checkpoint + unchanged file skip via file digest manifest + async index stop/resume regression coverage, including interrupted-run + handler-recreate + resume path in `wax_rag_handler_index_test`; when `file_manifest` is absent on resume, checkpoint `committed_chunks` watermark now skips already committed deterministic prefix to avoid duplicate ingest).
+- Status: partially implemented (periodic flush/checkpoint + unchanged file skip via file digest manifest + async index stop/resume regression coverage, including interrupted-run + handler-recreate + resume path in `wax_rag_handler_index_test`; when `file_manifest` is absent on resume, checkpoint `committed_chunks` watermark now skips already committed deterministic prefix to avoid duplicate ingest; resume ingest pass now skips unchanged files at chunk-build stage to avoid redundant chunk parsing work).
 
 ### M7. Query Pipeline + RAG
 - Query embedding + retrieval + deterministic rerank.

@@ -283,7 +283,8 @@ std::vector<Ue5ChunkRecord> Ue5ChunkManifestBuilder::Build(
     const std::filesystem::path& repo_root,
     const std::vector<Ue5ScanEntry>& entries,
     const ChunkVisitor& on_chunk,
-    std::vector<Ue5FileDigest>* file_digests_out) const {
+    std::vector<Ue5FileDigest>* file_digests_out,
+    const std::unordered_set<std::string>* skip_paths) const {
   waxcpp::TokenCounter token_counter{};
   std::vector<Ue5ChunkRecord> records{};
   records.reserve(entries.size() * 2);
@@ -293,6 +294,9 @@ std::vector<Ue5ChunkRecord> Ue5ChunkManifestBuilder::Build(
   }
 
   for (const auto& entry : entries) {
+    if (skip_paths != nullptr && skip_paths->contains(entry.relative_path)) {
+      continue;
+    }
     const auto full_path = repo_root / entry.relative_path;
     const auto content = ReadFileText(full_path);
     const auto file_hash = Hex64(Fnv1a64(content));
