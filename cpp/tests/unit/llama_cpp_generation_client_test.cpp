@@ -86,6 +86,73 @@ void ScenarioGenerateUsesRequestFnAndRetry() {
           "request body must contain max token value");
 }
 
+void ScenarioStripThinkingBlocks() {
+  waxcpp::tests::Log("scenario: strip <think> blocks from model output");
+  // Simulate Qwen3 chat completions response with <think>...</think> block.
+  std::string captured_body{};
+  waxcpp::server::LlamaCppGenerationClient client(
+      waxcpp::server::LlamaCppGenerationConfig{
+          .endpoint = "",
+          .model_path = "model.gguf",
+          .timeout_ms = 1000,
+          .max_retries = 0,
+          .retry_backoff_ms = 0,
+          .request_fn =
+              [&](const std::string& body) -> std::string {
+            captured_body = body;
+            return R"({"choices":[{"message":{"content":"<think>\nLet me reason about this.\n</think>\nThe answer is 42."}}]})";
+          },
+      });
+
+  const auto result = client.Generate(
+      waxcpp::server::LlamaCppGenerationRequest{
+          .prompt = "What is the meaning?",
+          .system_prompt = "You are helpful.",
+          .max_tokens = 256,
+          .temperature = 0.1f,
+          .top_p = 0.95f,
+      });
+  Require(result == "The answer is 42.", "thinking block must be stripped, got: " + result);
+  // Verify chat format was used (system_prompt is non-empty).
+  Require(captured_body.find("\"messages\"") != std::string::npos,
+          "chat format must use messages array");
+  Require(captured_body.find("\"max_tokens\"") != std::string::npos,
+          "chat format must use max_tokens (not n_predict)");
+}
+
+void ScenarioLegacyCompletionFormat() {
+  waxcpp::tests::Log("scenario: legacy completion format when system_prompt is empty");
+  std::string captured_body{};
+  waxcpp::server::LlamaCppGenerationClient client(
+      waxcpp::server::LlamaCppGenerationConfig{
+          .endpoint = "",
+          .model_path = "model.gguf",
+          .timeout_ms = 1000,
+          .max_retries = 0,
+          .retry_backoff_ms = 0,
+          .request_fn =
+              [&](const std::string& body) -> std::string {
+            captured_body = body;
+            return R"({"content":"legacy result"})";
+          },
+      });
+
+  const auto result = client.Generate(
+      waxcpp::server::LlamaCppGenerationRequest{
+          .prompt = "test prompt",
+          .max_tokens = 100,
+          .temperature = 0.2f,
+          .top_p = 0.9f,
+      });
+  Require(result == "legacy result", "legacy format result mismatch");
+  Require(captured_body.find("\"prompt\"") != std::string::npos,
+          "legacy format must use prompt field");
+  Require(captured_body.find("\"n_predict\"") != std::string::npos,
+          "legacy format must use n_predict");
+  Require(captured_body.find("\"messages\"") == std::string::npos,
+          "legacy format must not contain messages");
+}
+
 void ScenarioGenerateValidation() {
   waxcpp::tests::Log("scenario: generate request validation");
   waxcpp::server::LlamaCppGenerationClient client(
@@ -120,6 +187,8 @@ int main() {
     ScenarioParseSupportedSchemas();
     ScenarioParseRejectsMalformed();
     ScenarioGenerateUsesRequestFnAndRetry();
+    ScenarioStripThinkingBlocks();
+    ScenarioLegacyCompletionFormat();
     ScenarioGenerateValidation();
     waxcpp::tests::Log("llama_cpp_generation_client_test: finished");
     return EXIT_SUCCESS;

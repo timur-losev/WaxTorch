@@ -195,7 +195,8 @@ struct CitationInfo {
 };
 
 struct PromptBuildResult {
-    std::string prompt{};
+    std::string system_prompt{};   // System role message (instructions).
+    std::string prompt{};          // User role message (query + context).
     int context_items_used = 0;
     int context_tokens_used = 0;
 };
@@ -309,10 +310,17 @@ PromptBuildResult BuildAnswerPrompt(const std::string& query,
                                     int max_context_items,
                                     int max_context_tokens) {
     PromptBuildResult result{};
+
+    // System prompt — role instructions (separate from user content).
+    result.system_prompt =
+        "You are a code assistant for Unreal Engine 5 C++ source code.\n"
+        "Answer the query using only the provided context.\n"
+        "Cite sources with [frame:<id>] tags.\n"
+        "Be concise and technical.";
+
+    // User prompt — query + context + citation map.
     std::ostringstream prompt;
-    prompt << "You are a code assistant. Answer the query using only the provided context.\n"
-           << "When you cite facts, include citation tags like [frame:<id>].\n\n"
-           << "Query:\n" << query << "\n\n"
+    prompt << query << "\n\n"
            << "Context:\n";
 
     const int safe_max_tokens = std::max(1, max_context_tokens);
@@ -348,7 +356,8 @@ PromptBuildResult BuildAnswerPrompt(const std::string& query,
         }
         prompt << "\n";
     }
-    prompt << "\nProvide concise technical answer with citations.";
+    // Qwen3 /no_think suppresses chain-of-thought in output.
+    prompt << "\n/no_think";
     result.prompt = prompt.str();
     return result;
 }
@@ -529,6 +538,7 @@ std::string WaxRAGHandler::handle_answer_generate(const Poco::JSON::Object::Ptr&
         const auto answer = generation_client_->Generate(
             LlamaCppGenerationRequest{
                 .prompt = prompt.prompt,
+                .system_prompt = prompt.system_prompt,
                 .max_tokens = max_output_tokens,
                 .temperature = temperature,
                 .top_p = top_p,

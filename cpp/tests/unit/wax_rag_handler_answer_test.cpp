@@ -181,7 +181,9 @@ void ScenarioAnswerGenerateUsesContextBudgetAndCitations() {
           .request_fn =
               [&](const std::string& body) {
             captured_generation_request = body;
-            return std::string(R"({"content":"stubbed-answer"})");
+            // Return OpenAI-compatible chat completions format
+            // (matches /v1/chat/completions response schema).
+            return std::string(R"({"choices":[{"message":{"content":"stubbed-answer"}}]})");
           },
       });
 
@@ -311,7 +313,7 @@ void ScenarioAnswerGenerateIsDeterministicAcrossCallsAndReopen() {
             .max_retries = 0,
             .retry_backoff_ms = 0,
             .request_fn = [&](const std::string&) {
-              return std::string(R"({"content":"stubbed-answer"})");
+              return std::string(R"({"choices":[{"message":{"content":"stubbed-answer"}}]})");
             },
         });
   };

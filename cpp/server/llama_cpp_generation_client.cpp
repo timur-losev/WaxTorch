@@ -12,14 +12,43 @@
 #include <Poco/URI.h>
 
 #include <chrono>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <utility>
 
 namespace waxcpp::server {
 
 namespace {
+
+/// Strip <think>...</think> blocks from Qwen3-style thinking output.
+/// Preserves the actual answer that follows after the closing tag.
+/// If no think tags found, returns the original text unchanged.
+std::string StripThinkingBlocks(const std::string& text) {
+  std::string result = text;
+  while (true) {
+    const auto open_pos = result.find("<think>");
+    if (open_pos == std::string::npos) break;
+    const auto close_pos = result.find("</think>", open_pos);
+    if (close_pos == std::string::npos) {
+      // Unclosed <think> — strip everything from <think> to end
+      result.erase(open_pos);
+      break;
+    }
+    // Erase <think>...</think> including the tags
+    result.erase(open_pos, close_pos + 8 - open_pos);
+  }
+  // Trim leading whitespace left after stripping
+  const auto first_non_ws = result.find_first_not_of(" \t\n\r");
+  if (first_non_ws != std::string::npos && first_non_ws > 0) {
+    result.erase(0, first_non_ws);
+  } else if (first_non_ws == std::string::npos) {
+    result.clear();
+  }
+  return result;
+}
 
 std::string ExtractGenerationText(const Poco::JSON::Object::Ptr& root) {
   if (root.isNull()) {
@@ -102,9 +131,20 @@ std::string LlamaCppGenerationClient::Generate(const LlamaCppGenerationRequest& 
     throw std::runtime_error("generation request top_p must be in (0, 1]");
   }
   const auto response = PerformRequestWithRetry(BuildRequestBody(request));
-  const auto text = ParseGenerationResponse(response);
-  if (text.empty()) {
+  const auto raw_text = ParseGenerationResponse(response);
+  if (raw_text.empty()) {
     throw std::runtime_error("generation response did not include text");
+  }
+  // Strip <think>...</think> blocks from Qwen3-style reasoning output,
+  // keeping only the final answer for the client.
+  const auto text = StripThinkingBlocks(raw_text);
+  if (text.empty()) {
+    // Model produced only thinking with no actual answer — return raw
+    std::cerr << "[GEN] warning: model output was entirely <think> block, returning raw" << std::endl;
+    return raw_text;
+  }
+  if (text.size() < raw_text.size()) {
+    std::cerr << "[GEN] stripped thinking: " << raw_text.size() << " -> " << text.size() << " chars" << std::endl;
   }
   return text;
 }
@@ -133,12 +173,27 @@ std::string LlamaCppGenerationClient::ParseGenerationResponse(const std::string&
 }
 
 std::string LlamaCppGenerationClient::BuildRequestBody(const LlamaCppGenerationRequest& request) {
+  const bool use_chat = !request.system_prompt.empty();
   std::ostringstream out;
-  out << "{\"prompt\":\"" << JsonEscape(request.prompt) << "\""
-      << ",\"n_predict\":" << request.max_tokens
-      << ",\"temperature\":" << request.temperature
-      << ",\"top_p\":" << request.top_p
-      << "}";
+  if (use_chat) {
+    // OpenAI-compatible /v1/chat/completions format.
+    // llama-server applies the model's chat template (Qwen3: <think> separation).
+    out << "{\"messages\":["
+        << "{\"role\":\"system\",\"content\":\"" << JsonEscape(request.system_prompt) << "\"},"
+        << "{\"role\":\"user\",\"content\":\"" << JsonEscape(request.prompt) << "\"}"
+        << "]"
+        << ",\"max_tokens\":" << request.max_tokens
+        << ",\"temperature\":" << request.temperature
+        << ",\"top_p\":" << request.top_p
+        << "}";
+  } else {
+    // Legacy /completion format (raw prompt, no chat template).
+    out << "{\"prompt\":\"" << JsonEscape(request.prompt) << "\""
+        << ",\"n_predict\":" << request.max_tokens
+        << ",\"temperature\":" << request.temperature
+        << ",\"top_p\":" << request.top_p
+        << "}";
+  }
   return out.str();
 }
 
@@ -147,10 +202,19 @@ std::string LlamaCppGenerationClient::PerformRequest(const std::string& body) co
     return config_.request_fn(body);
   }
 
+  // Detect chat vs completion format from request body.
+  const bool is_chat = body.find("\"messages\"") != std::string::npos;
+
   Poco::URI uri(config_.endpoint);
-  auto path = uri.getPathEtc();
-  if (path.empty()) {
-    path = "/";
+  std::string path;
+  if (is_chat) {
+    // Override path to /v1/chat/completions regardless of configured endpoint.
+    path = "/v1/chat/completions";
+  } else {
+    path = uri.getPathEtc();
+    if (path.empty()) {
+      path = "/";
+    }
   }
 
   Poco::Net::HTTPClientSession session(uri.getHost(), uri.getPort());

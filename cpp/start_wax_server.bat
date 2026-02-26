@@ -22,7 +22,7 @@ REM --- Server logging ---
 set WAXCPP_SERVER_LOG=1
 
 REM --- Generation tuning ---
-REM set WAXCPP_LLAMA_GEN_TIMEOUT_MS=120000
+set WAXCPP_LLAMA_GEN_TIMEOUT_MS=600000
 REM set WAXCPP_LLAMA_GEN_MAX_RETRIES=3
 
 REM --- Orchestrator tuning for large repos ---
@@ -39,8 +39,8 @@ echo ============================================================
 echo.
 
 cd /d "G:\Proj\Wax\cpp\build\bin"
-if exist waxcpp_rag_server_d.exe (
-  waxcpp_rag_server_d.exe
-) else (
+if exist waxcpp_rag_server.exe (
   waxcpp_rag_server.exe
+) else (
+  waxcpp_rag_server_d.exe
 )

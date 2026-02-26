@@ -17,6 +17,7 @@ struct LlamaCppGenerationConfig {
 
 struct LlamaCppGenerationRequest {
   std::string prompt{};
+  std::string system_prompt{};  // Optional; when set, uses chat completions format.
   int max_tokens = 512;
   float temperature = 0.1f;
   float top_p = 0.95f;
