@@ -100,6 +100,9 @@ class MemoryOrchestrator {
   /// Returns the last scheduled live-set maintenance report (if any).
   std::optional<ScheduledLiveSetMaintenanceReport> LastMaintenanceReport() const;
 
+  /// Returns true if the FTS5 SQLite full-text search backend is active.
+  [[nodiscard]] bool IsFts5Active() const { return store_text_index_.IsFts5Active(); }
+
  private:
   OrchestratorConfig config_;
   WaxStore store_;

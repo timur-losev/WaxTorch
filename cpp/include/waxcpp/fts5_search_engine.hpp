@@ -31,6 +31,9 @@ class FTS5SearchEngine {
   void Remove(std::uint64_t frame_id);
   std::vector<SearchResult> Search(const std::string& query, int top_k) const;
 
+  /// Returns true if the FTS5 SQLite backend is active (compiled in and initialized).
+  [[nodiscard]] bool IsFts5Active() const;
+
  private:
   struct SQLiteState;
 

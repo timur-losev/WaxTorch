@@ -371,6 +371,14 @@ FTS5SearchEngine::FTS5SearchEngine(FTS5SearchEngine&&) noexcept = default;
 
 FTS5SearchEngine& FTS5SearchEngine::operator=(FTS5SearchEngine&&) noexcept = default;
 
+bool FTS5SearchEngine::IsFts5Active() const {
+#ifdef WAXCPP_HAS_SQLITE
+  return sqlite_ != nullptr && sqlite_->db != nullptr;
+#else
+  return false;
+#endif
+}
+
 void FTS5SearchEngine::StageIndex(std::uint64_t frame_id, const std::string& text) {
   pending_mutations_.push_back(PendingMutation{PendingMutationType::kIndex, frame_id, text});
 }

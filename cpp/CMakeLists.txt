@@ -16,7 +16,7 @@ option(WAXCPP_BUILD_TESTS "Build waxcpp tests" ON)
 option(WAXCPP_BUILD_SERVER "Build waxcpp server targets" ON)
 option(WAXCPP_REQUIRE_PARITY_FIXTURES "Fail parity test if no .mv2s fixtures are found" OFF)
 option(WAXCPP_REQUIRE_SWIFT_FIXTURES "Fail parity test if no non-synthetic fixtures are found" OFF)
-option(WAXCPP_ENABLE_SQLITE_BACKEND "Enable SQLite/FTS5 backend when bundled sqlite amalgamation exists (experimental; OFF by default)" OFF)
+option(WAXCPP_ENABLE_SQLITE_BACKEND "Enable SQLite/FTS5 backend when bundled sqlite amalgamation exists" ON)
 option(WAXCPP_ENABLE_LIBTORCH_RUNTIME "Enable real LibTorch runtime backend for MiniLMEmbedderTorch (experimental; OFF by default)" OFF)
 set(WAXCPP_LIBTORCH_ROOT "" CACHE PATH "Optional path to an unpacked LibTorch distribution root")
 set(WAXCPP_TORCH_RUNTIME_DEFINE 0)
@@ -74,10 +74,24 @@ add_library(waxcpp STATIC
   src/orchestrator/memory_orchestrator.cpp
 )
 
+# --- Locate SQLite amalgamation ---
+# Primary: third_party/sqlite/ (if someone drops the amalgamation there)
+# Fallback: Poco's bundled amalgamation at third_party/poco/dependencies/sqlite3/src/
 set(WAXCPP_SQLITE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite")
 set(WAXCPP_SQLITE_C "${WAXCPP_SQLITE_DIR}/sqlite3.c")
 set(WAXCPP_SQLITE_H "${WAXCPP_SQLITE_DIR}/sqlite3.h")
+
+if (NOT EXISTS "${WAXCPP_SQLITE_C}" OR NOT EXISTS "${WAXCPP_SQLITE_H}")
+  set(WAXCPP_SQLITE_POCO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/poco/dependencies/sqlite3/src")
+  if (EXISTS "${WAXCPP_SQLITE_POCO_DIR}/sqlite3.c" AND EXISTS "${WAXCPP_SQLITE_POCO_DIR}/sqlite3.h")
+    set(WAXCPP_SQLITE_DIR "${WAXCPP_SQLITE_POCO_DIR}")
+    set(WAXCPP_SQLITE_C "${WAXCPP_SQLITE_DIR}/sqlite3.c")
+    set(WAXCPP_SQLITE_H "${WAXCPP_SQLITE_DIR}/sqlite3.h")
+  endif()
+endif()
+
 if (WAXCPP_ENABLE_SQLITE_BACKEND AND EXISTS "${WAXCPP_SQLITE_C}" AND EXISTS "${WAXCPP_SQLITE_H}")
+  message(STATUS "waxcpp: SQLite/FTS5 amalgamation found at ${WAXCPP_SQLITE_DIR}")
   add_library(waxcpp_sqlite3 STATIC "${WAXCPP_SQLITE_C}")
   target_include_directories(waxcpp_sqlite3 PUBLIC "${WAXCPP_SQLITE_DIR}")
   target_compile_definitions(waxcpp_sqlite3
@@ -86,6 +100,8 @@ if (WAXCPP_ENABLE_SQLITE_BACKEND AND EXISTS "${WAXCPP_SQLITE_C}" AND EXISTS "${W
       SQLITE_ENABLE_FTS5
       SQLITE_OMIT_LOAD_EXTENSION
   )
+elseif (WAXCPP_ENABLE_SQLITE_BACKEND)
+  message(WARNING "waxcpp: WAXCPP_ENABLE_SQLITE_BACKEND=ON but sqlite3.c not found; FTS5 disabled")
 endif()
 
 target_sources(waxcpp PRIVATE ${WAXCPP_PUBLIC_HEADERS})

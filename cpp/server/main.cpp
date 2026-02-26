@@ -179,6 +179,8 @@ protected:
         logger.information("Initializing WAX orchestrator...");
         waxcpp::server::WaxRAGHandler handler(store_path, runtime_config.models);
         logger.information("WAX orchestrator initialized");
+        logger.information("FTS5 full-text search: %s",
+                           std::string(handler.IsFts5Active() ? "enabled (SQLite)" : "disabled (brute-force TF-IDF)"));
 
         // Запуск сервера
         HTTPServer server(new RAGRequestHandlerFactory(handler), socket, params);

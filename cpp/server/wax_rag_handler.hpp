@@ -38,6 +38,9 @@ public:
     std::string handle_index_status(const Poco::JSON::Object::Ptr& params);
     std::string handle_index_stop(const Poco::JSON::Object::Ptr& params);
 
+    /// Returns true if the FTS5 SQLite full-text search backend is active.
+    [[nodiscard]] bool IsFts5Active() const { return orchestrator_ && orchestrator_->IsFts5Active(); }
+
 private:
     struct IndexRunOptions {
         std::uint64_t flush_every_chunks = 128;
