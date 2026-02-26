@@ -1439,6 +1439,12 @@ void WaxStore::Commit() {
   frames = pending_apply.frames_after_apply;
 
   const auto toc_bytes = core::mv2s::EncodeTocV1(frames);
+  if (toc_bytes.size() > core::mv2s::kMaxTocBytes) {
+    throw StoreError("TOC size (" + std::to_string(toc_bytes.size() / (1024ULL * 1024ULL)) +
+                     " MB) exceeds kMaxTocBytes (" +
+                     std::to_string(core::mv2s::kMaxTocBytes / (1024ULL * 1024ULL)) +
+                     " MB) with " + std::to_string(frames.size()) + " frames");
+  }
   std::uint64_t data_end = wal_offset_ + wal_size_;
   for (const auto& frame : frames) {
     if (frame.payload_length == 0) {

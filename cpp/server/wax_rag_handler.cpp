@@ -32,7 +32,7 @@
 namespace waxcpp::server {
 
 namespace {
-constexpr std::uint64_t kIndexFlushEveryChunks = 128;
+constexpr std::uint64_t kIndexFlushEveryChunks = 4096;
 constexpr std::uint64_t kMaxIndexControlValue = 1'000'000;
 constexpr const char* kDefaultLlamaEmbedEndpoint = "http://127.0.0.1:8004/embedding";
 constexpr const char* kDefaultLlamaGenEndpoint = "http://127.0.0.1:8004/completion";
