@@ -151,13 +151,17 @@ std::uint64_t NowMs() {
 
 std::optional<std::uint64_t> CurrentProcessRSSBytes() {
 #if defined(_WIN32)
+    // Use PrivateUsage (committed private bytes) instead of WorkingSetSize,
+    // because WorkingSetSize on Windows includes OS file-cache pages mapped
+    // into the process address space — inflating the reported value by the
+    // size of any memory-mapped files (e.g. the 15+ GB mv2s store).
     PROCESS_MEMORY_COUNTERS_EX counters{};
     if (!GetProcessMemoryInfo(GetCurrentProcess(),
                               reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
                               sizeof(counters))) {
         return std::nullopt;
     }
-    return static_cast<std::uint64_t>(counters.WorkingSetSize);
+    return static_cast<std::uint64_t>(counters.PrivateUsage);
 #elif defined(__linux__)
     std::ifstream statm("/proc/self/statm", std::ios::in);
     if (!statm) {
@@ -401,7 +405,9 @@ WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
         generation_client_ = std::make_unique<LlamaCppGenerationClient>(std::move(generation_config));
     }
 
+    std::cerr << "[INIT-TRACE] >> MemoryOrchestrator ctor (store=" << store_path << ")..." << std::endl;
     orchestrator_ = std::make_unique<waxcpp::MemoryOrchestrator>(store_path, config, std::move(embedder));
+    std::cerr << "[INIT-TRACE] << MemoryOrchestrator ctor done" << std::endl;
 }
 
 WaxRAGHandler::~WaxRAGHandler() {
@@ -461,7 +467,9 @@ std::string WaxRAGHandler::handle_remember(const Poco::JSON::Object::Ptr& params
 }
 
 std::string WaxRAGHandler::handle_recall(const Poco::JSON::Object::Ptr& params) {
+    std::cerr << "[RECALL] waiting for mutex..." << std::endl;
     std::lock_guard<std::mutex> lock(mutex_);
+    std::cerr << "[RECALL] mutex acquired" << std::endl;
 
     const std::string query = (params.isNull() ? "" : params->optValue<std::string>("query", ""));
     if (query.empty()) {
@@ -469,21 +477,34 @@ std::string WaxRAGHandler::handle_recall(const Poco::JSON::Object::Ptr& params) 
     }
 
     try {
+        std::cerr << "[RECALL] query=\"" << query << "\"" << std::endl;
+        const auto t0 = std::chrono::steady_clock::now();
         const auto context = orchestrator_->Recall(query);
+        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+        std::cerr << "[RECALL] Recall() returned " << context.items.size()
+                  << " items, " << context.total_tokens << " tokens in "
+                  << elapsed_ms << " ms" << std::endl;
 
-        Poco::JSON::Array response;
+        Poco::JSON::Array items_array;
         for (const auto& item : context.items) {
             Poco::JSON::Object::Ptr row = new Poco::JSON::Object();
             row->set("kind", static_cast<int>(item.kind));
             row->set("text", item.text);
             row->set("score", item.score);
-            response.add(row);
+            items_array.add(row);
         }
+
+        Poco::JSON::Object response;
+        response.set("items", items_array);
+        response.set("count", static_cast<int>(context.items.size()));
+        response.set("total_tokens", context.total_tokens);
 
         std::ostringstream out;
         response.stringify(out);
         return out.str();
     } catch (const std::exception& e) {
+        std::cerr << "[RECALL] exception: " << e.what() << std::endl;
         return std::string("Error: ") + e.what();
     }
 }

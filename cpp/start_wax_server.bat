@@ -39,4 +39,8 @@ echo ============================================================
 echo.
 
 cd /d "G:\Proj\Wax\cpp\build\bin"
-waxcpp_rag_server.exe
+if exist waxcpp_rag_server_d.exe (
+  waxcpp_rag_server_d.exe
+) else (
+  waxcpp_rag_server.exe
+)

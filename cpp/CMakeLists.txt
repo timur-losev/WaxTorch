@@ -5,6 +5,20 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+function(waxcpp_apply_debug_suffix target_name)
+  if (NOT TARGET "${target_name}")
+    return()
+  endif()
+  get_target_property(_type "${target_name}" TYPE)
+  if (_type STREQUAL "EXECUTABLE")
+    set_property(TARGET "${target_name}" PROPERTY OUTPUT_NAME_DEBUG "${target_name}_d")
+  elseif (_type STREQUAL "STATIC_LIBRARY" OR
+          _type STREQUAL "SHARED_LIBRARY" OR
+          _type STREQUAL "MODULE_LIBRARY")
+    set_property(TARGET "${target_name}" PROPERTY DEBUG_POSTFIX "_d")
+  endif()
+endfunction()
+
 if (MSVC)
   # Avoid parallel compiler writes to shared PDBs when reusing PCH across targets.
   # /MP enables multi-process compilation per target.
@@ -679,4 +693,22 @@ if (WAXCPP_BUILD_TESTS)
     target_compile_options(waxcpp_mv2s_analyzer PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   target_precompile_headers(waxcpp_mv2s_analyzer REUSE_FROM waxcpp)
+endif()
+
+if (MSVC)
+  get_property(_waxcpp_root_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY BUILDSYSTEM_TARGETS)
+  foreach(_target IN LISTS _waxcpp_root_targets)
+    if (_target MATCHES "^waxcpp")
+      waxcpp_apply_debug_suffix("${_target}")
+    endif()
+  endforeach()
+
+  if (WAXCPP_BUILD_SERVER)
+    get_property(_waxcpp_server_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/server" PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_target IN LISTS _waxcpp_server_targets)
+      if (_target MATCHES "^waxcpp")
+        waxcpp_apply_debug_suffix("${_target}")
+      endif()
+    endforeach()
+  endif()
 endif()

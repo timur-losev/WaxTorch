@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <iostream>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -58,6 +60,54 @@ std::vector<std::string> Tokenize(std::string_view text) {
   return tokens;
 }
 
+/// Stop words common in English that carry almost no semantic signal in
+/// code-search queries.  Keep sorted for readability; the runtime set is
+/// built once (function-local static) and lookups are O(1).
+bool IsStopWord(const std::string& token) {
+  static const std::unordered_set<std::string> kStopWords = {
+      // Articles & determiners
+      "a", "an", "the",
+      // Pronouns
+      "i", "me", "my", "we", "our", "you", "your", "he", "she", "it", "they",
+      "its", "his", "her", "them", "their",
+      // Be-verbs
+      "is", "am", "are", "was", "were", "be", "been", "being",
+      // Auxiliary / modal verbs
+      "do", "does", "did", "has", "have", "had", "having",
+      "will", "would", "shall", "should", "can", "could", "may", "might", "must",
+      // Common prepositions
+      "in", "on", "at", "to", "for", "of", "with", "by", "from", "up",
+      "about", "into", "through", "during", "before", "after", "above", "below",
+      "between", "under", "over",
+      // Conjunctions
+      "and", "but", "or", "nor", "not", "so", "yet",
+      // Question words (very common in natural-language queries)
+      "what", "which", "who", "whom", "when", "where", "why", "how",
+      // Demonstratives / misc
+      "this", "that", "these", "those", "there", "here",
+      "all", "each", "every", "both", "few", "more", "most", "other", "some",
+      "such", "no", "only", "own", "same", "than", "too", "very",
+      "just", "also", "then",
+  };
+  return kStopWords.count(token) != 0;
+}
+
+/// Filter stop words from query tokens.  If ALL tokens are stop words,
+/// returns the original list so the query still finds *something*.
+std::vector<std::string> FilterStopWords(const std::vector<std::string>& tokens) {
+  std::vector<std::string> filtered;
+  filtered.reserve(tokens.size());
+  for (const auto& t : tokens) {
+    if (!IsStopWord(t)) {
+      filtered.push_back(t);
+    }
+  }
+  if (filtered.empty()) {
+    return tokens;  // all stop words — keep originals as fallback
+  }
+  return filtered;
+}
+
 std::unordered_map<std::string, std::uint32_t> TokenFreq(std::string_view text) {
   std::unordered_map<std::string, std::uint32_t> freq{};
   for (auto token : Tokenize(text)) {
@@ -88,20 +138,36 @@ std::vector<SearchResult> ScoreResults(const std::unordered_map<std::uint64_t, s
   std::unordered_map<std::string, std::uint32_t> doc_freq{};
   doc_freq.reserve(unique_query_tokens.size());
   std::vector<std::pair<std::uint64_t, std::unordered_map<std::string, std::uint32_t>>> doc_freq_maps{};
-  doc_freq_maps.reserve(docs.size());
 
-  for (const auto& [frame_id, text] : docs) {
-    if (candidate_filter != nullptr && candidate_filter->find(frame_id) == candidate_filter->end()) {
-      continue;
-    }
-
-    auto freq = TokenFreq(text);
-    for (const auto& token : unique_query_tokens) {
-      if (freq.find(token) != freq.end()) {
-        doc_freq[token] += 1U;
+  // When a candidate filter is provided (FTS5 pre-filtered set), iterate only
+  // the candidates and look them up in docs — O(candidates) instead of O(docs).
+  // Without a filter, fall back to scanning all docs.
+  if (candidate_filter != nullptr) {
+    doc_freq_maps.reserve(candidate_filter->size());
+    for (const auto candidate_id : *candidate_filter) {
+      const auto doc_it = docs.find(candidate_id);
+      if (doc_it == docs.end()) {
+        continue;
       }
+      auto freq = TokenFreq(doc_it->second);
+      for (const auto& token : unique_query_tokens) {
+        if (freq.find(token) != freq.end()) {
+          doc_freq[token] += 1U;
+        }
+      }
+      doc_freq_maps.emplace_back(candidate_id, std::move(freq));
     }
-    doc_freq_maps.emplace_back(frame_id, std::move(freq));
+  } else {
+    doc_freq_maps.reserve(docs.size());
+    for (const auto& [frame_id, text] : docs) {
+      auto freq = TokenFreq(text);
+      for (const auto& token : unique_query_tokens) {
+        if (freq.find(token) != freq.end()) {
+          doc_freq[token] += 1U;
+        }
+      }
+      doc_freq_maps.emplace_back(frame_id, std::move(freq));
+    }
   }
 
   const double doc_count = static_cast<double>(doc_freq_maps.size());
@@ -211,18 +277,29 @@ std::string BuildFtsMatchQuery(const std::vector<std::string>& query_tokens_raw)
   return query;
 }
 
-std::unordered_set<std::uint64_t> QueryCandidateFrameIds(sqlite3* db, const std::vector<std::string>& query_tokens_raw) {
+std::unordered_set<std::uint64_t> QueryCandidateFrameIds(sqlite3* db,
+                                                        const std::vector<std::string>& query_tokens_raw,
+                                                        int candidate_limit) {
   const auto fts_query = BuildFtsMatchQuery(query_tokens_raw);
   if (fts_query.empty()) {
     return {};
   }
 
-  Statement select_stmt(db, "SELECT rowid FROM frame_docs_fts WHERE frame_docs_fts MATCH ?1;");
+  // Use ORDER BY rank LIMIT to cap candidate set — without a limit, common
+  // query terms ("how", "does", "work") can match hundreds of thousands of
+  // documents, making the subsequent TF-IDF scoring loop O(N_candidates)
+  // take minutes on large corpora (500K+ docs).
+  Statement select_stmt(db,
+      "SELECT rowid FROM frame_docs_fts WHERE frame_docs_fts MATCH ?1 ORDER BY rank LIMIT ?2;");
   if (sqlite3_bind_text(select_stmt.get(), 1, fts_query.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+    throw std::runtime_error(std::string("sqlite bind failed: ") + sqlite3_errmsg(db));
+  }
+  if (sqlite3_bind_int(select_stmt.get(), 2, candidate_limit) != SQLITE_OK) {
     throw std::runtime_error(std::string("sqlite bind failed: ") + sqlite3_errmsg(db));
   }
 
   std::unordered_set<std::uint64_t> ids{};
+  ids.reserve(static_cast<std::size_t>(candidate_limit));
   while (true) {
     const int rc = sqlite3_step(select_stmt.get());
     if (rc == SQLITE_DONE) {
@@ -467,27 +544,128 @@ void FTS5SearchEngine::Remove(std::uint64_t frame_id) {
   CommitStaged();
 }
 
-std::vector<SearchResult> FTS5SearchEngine::Search(const std::string& query, int top_k) const {
-  if (top_k <= 0 || docs_.empty()) {
-    return {};
+/// Sanitize a raw natural-language query for FTS5 MATCH.
+/// Tokenizes, filters stop words, deduplicates, and joins with OR.
+/// OR ensures broad recall (like the original C++ approach); BM25 then
+/// naturally ranks documents that match more terms higher.
+std::string BuildSanitizedFtsQuery(const std::string& raw_query) {
+  const auto all_tokens = Tokenize(raw_query);
+  if (all_tokens.empty()) return {};
+  const auto filtered = FilterStopWords(all_tokens);
+
+  // Deduplicate tokens (preserving order of first occurrence).
+  std::unordered_set<std::string> seen;
+  std::vector<std::string> unique;
+  unique.reserve(filtered.size());
+  for (const auto& t : filtered) {
+    if (seen.insert(t).second) {
+      unique.push_back(t);
+    }
   }
-  const auto query_tokens_raw = Tokenize(query);
-  if (query_tokens_raw.empty()) {
+
+  std::string fts_query;
+  for (std::size_t i = 0; i < unique.size(); ++i) {
+    if (i > 0) fts_query.append(" OR ");
+    fts_query.push_back('"');
+    fts_query.append(unique[i]);
+    fts_query.push_back('"');
+  }
+  return fts_query;
+}
+
+std::vector<SearchResult> FTS5SearchEngine::Search(const std::string& query, int top_k) const {
+  const auto search_t0 = std::chrono::steady_clock::now();
+  std::cerr << "[FTS5-TRACE] Search start, docs=" << docs_.size()
+            << " top_k=" << top_k << std::endl;
+
+  if (top_k <= 0 || docs_.empty()) {
+    std::cerr << "[FTS5-TRACE] early return (empty)" << std::endl;
     return {};
   }
 
 #ifdef WAXCPP_HAS_SQLITE
   if (sqlite_ != nullptr && sqlite_->db != nullptr) {
-    try {
-      const auto candidate_ids = QueryCandidateFrameIds(sqlite_->db, query_tokens_raw);
-      return ScoreResults(docs_, query_tokens_raw, top_k, &candidate_ids);
-    } catch (...) {
-      // Keep deterministic fallback behavior even when optional SQLite backend fails.
+    // ── Swift-style BM25 search: one SQL query, let FTS5 rank ──
+    const auto fts_query = BuildSanitizedFtsQuery(query);
+    if (fts_query.empty()) {
+      std::cerr << "[FTS5-TRACE] early return (no tokens after sanitize)" << std::endl;
+      return {};
     }
+    std::cerr << "[FTS5-TRACE] fts_query=\"" << fts_query << "\"" << std::endl;
+
+    try {
+      const auto fts_t0 = std::chrono::steady_clock::now();
+      // Use FTS5 BM25 for ranking (like the Swift reference implementation).
+      // ORDER BY rank ASC because BM25 rank is "lower is better" in SQLite.
+      Statement stmt(sqlite_->db,
+          "SELECT rowid,"
+          "       bm25(frame_docs_fts) AS rank"
+          " FROM frame_docs_fts"
+          " WHERE frame_docs_fts MATCH ?1"
+          " ORDER BY rank ASC, rowid ASC"
+          " LIMIT ?2;");
+      if (sqlite3_bind_text(stmt.get(), 1, fts_query.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+        throw std::runtime_error(std::string("sqlite bind failed: ") + sqlite3_errmsg(sqlite_->db));
+      }
+      if (sqlite3_bind_int(stmt.get(), 2, std::max(1, top_k)) != SQLITE_OK) {
+        throw std::runtime_error(std::string("sqlite bind failed: ") + sqlite3_errmsg(sqlite_->db));
+      }
+
+      std::vector<SearchResult> results;
+      results.reserve(static_cast<std::size_t>(top_k));
+      while (true) {
+        const int rc = sqlite3_step(stmt.get());
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) {
+          throw std::runtime_error(std::string("sqlite step failed: ") + sqlite3_errmsg(sqlite_->db));
+        }
+        const auto frame_id = static_cast<std::uint64_t>(sqlite3_column_int64(stmt.get(), 0));
+        const double bm25_rank = sqlite3_column_double(stmt.get(), 1);
+
+        SearchResult result{};
+        result.frame_id = frame_id;
+        // Score: negate BM25 rank (lower rank = better, so higher -rank = better).
+        result.score = static_cast<float>(-bm25_rank);
+        // Get full text from in-memory docs for preview (matches test expectations).
+        const auto doc_it = docs_.find(frame_id);
+        if (doc_it != docs_.end()) {
+          result.preview_text = doc_it->second;
+        }
+        result.sources = {SearchSource::kText};
+        results.push_back(std::move(result));
+      }
+
+      const auto fts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - fts_t0).count();
+      std::cerr << "[FTS5-TRACE] << BM25 search returned " << results.size()
+                << " results in " << fts_ms << " ms" << std::endl;
+      return results;
+    } catch (const std::exception& ex) {
+      std::cerr << "[FTS5-TRACE] !! FTS5 exception: " << ex.what()
+                << " — falling back to brute-force" << std::endl;
+    } catch (...) {
+      std::cerr << "[FTS5-TRACE] !! FTS5 unknown exception — falling back to brute-force" << std::endl;
+    }
+  } else {
+    std::cerr << "[FTS5-TRACE] SQLite not available, using brute-force" << std::endl;
   }
+#else
+  std::cerr << "[FTS5-TRACE] WAXCPP_HAS_SQLITE not defined, using brute-force" << std::endl;
 #endif
 
-  return ScoreResults(docs_, query_tokens_raw, top_k, nullptr);
+  // Brute-force fallback (no SQLite): tokenize + TF-IDF
+  const auto all_tokens = Tokenize(query);
+  if (all_tokens.empty()) return {};
+  const auto query_tokens_raw = FilterStopWords(all_tokens);
+
+  std::cerr << "[FTS5-TRACE] >> ScoreResults (brute-force, ALL " << docs_.size() << " docs)..." << std::endl;
+  const auto bf_t0 = std::chrono::steady_clock::now();
+  auto results = ScoreResults(docs_, query_tokens_raw, top_k, nullptr);
+  const auto bf_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - bf_t0).count();
+  std::cerr << "[FTS5-TRACE] << brute-force ScoreResults done in " << bf_ms << " ms"
+            << " results=" << results.size() << std::endl;
+  return results;
 }
 
 namespace text::testing {

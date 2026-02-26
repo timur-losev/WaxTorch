@@ -1,4 +1,5 @@
 {
+    "version": "0.2.0",
     "configurations": [
         {
             "type": "swift",
@@ -79,6 +80,39 @@
             "target": "WaxCLI",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release WaxCLI"
+        },
+        {
+            "name": "Debug waxcpp_rag_server (C++)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}\\cpp\\build\\bin\\waxcpp_rag_server_d.exe",
+            "preLaunchTask": "C++: Build waxcpp_rag_server (Debug)",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}\\cpp\\build\\bin",
+            "environment": [
+                {
+                    "name": "WAXCPP_GENERATION_MODEL",
+                    "value": "g:\\Proj\\Agents1\\Models\\Qwen\\Qwen3-Coder-Next-Q4_K_M.gguf"
+                },
+                {
+                    "name": "WAXCPP_LLAMA_CPP_ROOT",
+                    "value": "g:\\Proj\\Agents1\\llama-cpp"
+                },
+                {
+                    "name": "WAXCPP_LLAMA_API_KEY",
+                    "value": "1f67a5931a61dfcf7622c7401ff88008"
+                },
+                {
+                    "name": "WAXCPP_LLAMA_GEN_ENDPOINT",
+                    "value": "http://127.0.0.1:8004/completion"
+                },
+                {
+                    "name": "WAXCPP_SERVER_LOG",
+                    "value": "1"
+                }
+            ],
+            "console": "integratedTerminal"
         }
     ]
 }

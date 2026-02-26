@@ -174,26 +174,29 @@ function Invoke-Recall {
     }
 
     Write-Host ""
-    if ($result -is [Array]) {
-        Write-Host "  Found $($result.Count) results:" -ForegroundColor Green
+    # Response is now a JSON object: { items: [...], count: N, total_tokens: N }
+    $items = $result.items
+    $count = $result.count
+    $tokens = $result.total_tokens
+
+    if ($items -and $items.Count -gt 0) {
+        Write-Host "  Found $count results ($tokens tokens):" -ForegroundColor Green
         Write-Host ""
         $i = 1
-        foreach ($item in $result) {
+        foreach ($item in $items) {
             $text = if ($item.text.Length -gt 200) { $item.text.Substring(0, 200) + "..." } else { $item.text }
-            $meta = ""
-            if ($item.metadata) {
-                if ($item.metadata.file_path) { $meta = $item.metadata.file_path }
-                elseif ($item.metadata.source) { $meta = $item.metadata.source }
-            }
-            Write-Host "  [$i] " -ForegroundColor Cyan -NoNewline
-            if ($meta) { Write-Host "$meta" -ForegroundColor Yellow } else { Write-Host "" }
+            $score = if ($item.score) { " (score: $([Math]::Round($item.score, 3)))" } else { "" }
+            Write-Host "  [$i]$score" -ForegroundColor Cyan
             Write-Host "      $text" -ForegroundColor Gray
             Write-Host ""
             $i++
         }
     }
+    elseif ($count -eq 0) {
+        Write-Host "  No results found." -ForegroundColor Yellow
+    }
     else {
-        Write-Host "  $result" -ForegroundColor Gray
+        Write-Host "  $($result | ConvertTo-Json -Depth 3)" -ForegroundColor Gray
     }
 }
 

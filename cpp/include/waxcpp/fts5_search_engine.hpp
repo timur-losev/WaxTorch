@@ -34,6 +34,9 @@ class FTS5SearchEngine {
   /// Returns true if the FTS5 SQLite backend is active (compiled in and initialized).
   [[nodiscard]] bool IsFts5Active() const;
 
+  /// Number of indexed documents.
+  [[nodiscard]] std::size_t DocCount() const { return docs_.size(); }
+
  private:
   struct SQLiteState;
 

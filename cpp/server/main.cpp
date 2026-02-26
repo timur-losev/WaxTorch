@@ -15,12 +15,20 @@
 #include <Poco/ConsoleChannel.h>
 #include <Poco/FormattingChannel.h>
 #include <Poco/PatternFormatter.h>
+#include <chrono>
 #include <iterator>
 #include <iostream>
 #include <string>
 
 using namespace Poco::Net;
 using namespace Poco::Util;
+
+namespace {
+double SteadyNowMs() {
+    return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+}  // namespace
 
 class RAGRequestHandler : public HTTPRequestHandler {
 public:
@@ -37,6 +45,9 @@ public:
 
             // Парсим JSON-RPC
             auto json_request = waxcpp::server::parse_json_rpc(body);
+
+            const auto t0 = SteadyNowMs();
+            std::cerr << "[HTTP] >> " << json_request.method << std::endl;
 
             std::string result;
             if (json_request.method == "remember") {
@@ -57,12 +68,18 @@ public:
                 result = "Unknown method: " + json_request.method;
             }
 
+            const auto elapsed = SteadyNowMs() - t0;
+            std::cerr << "[HTTP] << " << json_request.method
+                      << " done in " << static_cast<int>(elapsed) << " ms"
+                      << " (response " << result.size() << " bytes)" << std::endl;
+
             // Отправляем JSON-RPC ответ
             response.setContentType("application/json");
             response.setStatus(HTTPResponse::HTTP_OK);
             response.send() << result;
 
         } catch (const std::exception& e) {
+            std::cerr << "[HTTP] !! exception: " << e.what() << std::endl;
             response.setStatus(HTTPResponse::HTTP_INTERNAL_SERVER_ERROR);
             response.send() << "{\"error\":\"" << waxcpp::server::JsonEscape(e.what()) << "\"}";
         }

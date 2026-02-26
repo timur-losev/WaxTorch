@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -1613,11 +1614,22 @@ std::optional<WaxFrameMeta> WaxStore::FrameMeta(std::uint64_t frame_id, bool inc
   if (!is_open_) {
     throw StoreError("store is closed");
   }
-  const auto metas = include_pending ? FrameMetas(true) : committed_frame_metas_;
-  if (frame_id >= metas.size()) {
+  if (include_pending && !pending_mutation_order_cache_.empty()) {
+    const auto metas = FrameMetas(true);
+    if (frame_id >= metas.size()) return std::nullopt;
+    return metas[static_cast<std::size_t>(frame_id)];
+  }
+  if (frame_id >= committed_frame_metas_.size()) {
     return std::nullopt;
   }
-  return metas[static_cast<std::size_t>(frame_id)];
+  return committed_frame_metas_[static_cast<std::size_t>(frame_id)];
+}
+
+const std::vector<WaxFrameMeta>& WaxStore::CommittedFrameMetasRef() const {
+  if (!is_open_) {
+    throw StoreError("store is closed");
+  }
+  return committed_frame_metas_;
 }
 
 std::vector<WaxFrameMeta> WaxStore::FrameMetas(bool include_pending) const {
@@ -1690,7 +1702,14 @@ std::vector<std::byte> WaxStore::FrameContent(std::uint64_t frame_id, bool inclu
   if (!is_open_) {
     throw StoreError("store is closed");
   }
-  const auto metas = include_pending ? FrameMetas(true) : committed_frame_metas_;
+  // Avoid copying entire vector when no pending mutations exist.
+  const std::vector<WaxFrameMeta>* metas_ptr = &committed_frame_metas_;
+  std::vector<WaxFrameMeta> pending_metas_storage;
+  if (include_pending && !pending_mutation_order_cache_.empty()) {
+    pending_metas_storage = FrameMetas(true);
+    metas_ptr = &pending_metas_storage;
+  }
+  const auto& metas = *metas_ptr;
   if (frame_id >= metas.size()) {
     throw StoreError("frame_id out of range");
   }
@@ -1748,12 +1767,23 @@ void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
     throw StoreError("store file does not exist: " + path_.string());
   }
   auto file_size = FileSize(path_);
+  std::cerr << "[STORE-TRACE] LoadState: file_size=" << (file_size / (1024ULL * 1024ULL)) << " MB"
+            << " deep_verify=" << deep_verify << " repair=" << repair_trailing_bytes << std::endl;
   if (file_size < core::mv2s::kHeaderRegionSize + core::mv2s::kFooterSize) {
     throw StoreError("file is too small to be a valid mv2s store");
   }
 
+  auto phase_start = std::chrono::steady_clock::now();
+  auto PhaseMs = [&]() {
+    auto now = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - phase_start).count();
+    phase_start = now;
+    return ms;
+  };
+
   const auto page_a = TryDecodeHeader(path_, 0);
   const auto page_b = TryDecodeHeader(path_, core::mv2s::kHeaderPageSize);
+  std::cerr << "[STORE-TRACE] headers decoded (" << PhaseMs() << " ms)" << std::endl;
   if (!page_a.has_value() && !page_b.has_value()) {
     throw StoreError("no valid header pages");
   }
@@ -1767,19 +1797,37 @@ void WaxStore::LoadState(bool deep_verify, bool repair_trailing_bytes) {
     selected = *page_b;
   }
 
+  std::cerr << "[STORE-TRACE] >> TryReadFooterAt (header offset="
+            << selected.footer_offset << ")..." << std::endl;
   const auto footer_from_header = TryReadFooterAt(path_, file_size, selected.footer_offset);
+  std::cerr << "[STORE-TRACE] << TryReadFooterAt done (" << PhaseMs() << " ms)"
+            << " found=" << footer_from_header.has_value() << std::endl;
+
   std::optional<FooterSlice> footer_from_snapshot;
   if (selected.replay_snapshot.has_value()) {
+    std::cerr << "[STORE-TRACE] >> TryReadFooterAt (snapshot offset="
+              << selected.replay_snapshot->footer_offset << ")..." << std::endl;
     footer_from_snapshot = TryReadFooterAt(path_, file_size, selected.replay_snapshot->footer_offset);
+    std::cerr << "[STORE-TRACE] << TryReadFooterAt snapshot done (" << PhaseMs() << " ms)" << std::endl;
   }
+
+  std::cerr << "[STORE-TRACE] >> ScanForLatestFooter (file_size=" << (file_size / (1024ULL*1024ULL))
+            << " MB)..." << std::endl;
   const auto footer_from_scan = ScanForLatestFooter(path_, file_size);
+  std::cerr << "[STORE-TRACE] << ScanForLatestFooter done (" << PhaseMs() << " ms)"
+            << " found=" << footer_from_scan.has_value() << std::endl;
+
   auto footer_slice = SelectPreferredFooter(footer_from_header, footer_from_snapshot);
   footer_slice = SelectPreferredFooter(footer_slice, footer_from_scan);
   if (!footer_slice.has_value()) {
     throw StoreError("no valid footer slice found");
   }
 
+  std::cerr << "[STORE-TRACE] >> DecodeToc (toc_bytes=" << (footer_slice->toc_bytes.size() / (1024ULL*1024ULL))
+            << " MB)..." << std::endl;
   const auto toc_summary = core::mv2s::DecodeToc(footer_slice->toc_bytes);
+  std::cerr << "[STORE-TRACE] << DecodeToc done (" << PhaseMs() << " ms)"
+            << " frames=" << toc_summary.frames.size() << std::endl;
   const auto data_start = selected.wal_offset + selected.wal_size;
   const auto data_end = footer_slice->footer_offset;
   ValidateDataRanges(toc_summary.frames, toc_summary.segments, data_start, data_end);

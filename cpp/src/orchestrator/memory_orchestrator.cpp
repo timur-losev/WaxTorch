@@ -17,6 +17,7 @@
 #include <cstring>
 #include <exception>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <mutex>
@@ -558,17 +559,44 @@ struct StoreSearchChannels {
   std::vector<SearchResult> vector_results;
 };
 
+/// Returns true if the frame metadata indicates a user-content frame
+/// (e.g. UE5 chunk, remembered text) which is guaranteed NOT to be
+/// a structured fact payload. This avoids a disk read for the payload.
+bool IsKnownUserContentFrame(const WaxFrameMeta& meta) {
+  // User-content frames have application metadata keys that internal
+  // structured-fact frames never have.
+  const auto& md = meta.metadata;
+  if (md.find("source_kind") != md.end()) return true;
+  if (md.find("chunk_id") != md.end()) return true;
+  if (md.find("language") != md.end()) return true;
+  if (md.find("symbol") != md.end()) return true;
+  return false;
+}
+
 void ReplayStructuredFactsFromStore(WaxStore& store, StructuredMemoryStore& structured_memory) {
-  const auto metas = store.FrameMetas();
+  const auto& metas = store.CommittedFrameMetasRef();
+  std::uint64_t skipped_user = 0;
+  std::uint64_t skipped_status = 0;
+  std::uint64_t payload_reads = 0;
+  std::uint64_t facts_found = 0;
   for (const auto& meta : metas) {
     if (meta.status != 0) {
+      ++skipped_status;
       continue;
     }
+    // Skip frames that are clearly user content — no need to read payload
+    // from disk just to check structured-fact magic bytes.
+    if (IsKnownUserContentFrame(meta)) {
+      ++skipped_user;
+      continue;
+    }
+    ++payload_reads;
     const auto payload = store.FrameContent(meta.id);
     const auto fact = ParseStructuredFactPayload(payload);
     if (!fact.has_value()) {
       continue;
     }
+    ++facts_found;
     if (fact->opcode == StructuredFactOpcode::kUpsert) {
       (void)structured_memory.Upsert(fact->entity, fact->attribute, fact->value, fact->metadata);
       continue;
@@ -577,6 +605,11 @@ void ReplayStructuredFactsFromStore(WaxStore& store, StructuredMemoryStore& stru
       (void)structured_memory.Remove(fact->entity, fact->attribute);
     }
   }
+  std::cerr << "[REBUILD-TRACE] ReplayStructuredFacts: total=" << metas.size()
+            << " skipped_user=" << skipped_user
+            << " skipped_status=" << skipped_status
+            << " payload_reads=" << payload_reads
+            << " facts_found=" << facts_found << std::endl;
 }
 
 StoreSearchChannels BuildStoreChannels(WaxStore& store,
@@ -597,23 +630,42 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
   const bool has_query_text = request.query.has_value() && HasNonWhitespace(*request.query);
   const bool text_channel_enabled = enable_text_search && text_mode_enabled && has_query_text;
 
+  std::cerr << "[CHANNELS-TRACE] text_channel=" << text_channel_enabled
+            << " text_index=" << (store_text_index != nullptr)
+            << " structured_index=" << (structured_text_index != nullptr)
+            << std::endl;
+
   std::optional<std::vector<float>> query_embedding = request.embedding;
   if (!query_embedding.has_value() && enable_vector_search && vector_mode_enabled && embedder != nullptr &&
       has_query_text) {
+    std::cerr << "[CHANNELS-TRACE] >> computing query embedding..." << std::endl;
     query_embedding = embedder->Embed(*request.query);
+    std::cerr << "[CHANNELS-TRACE] << query embedding done" << std::endl;
     if (!AllFinite(*query_embedding)) {
       throw std::runtime_error("recall: query embedding contains non-finite values");
     }
   }
   const bool vector_channel_enabled =
       enable_vector_search && vector_mode_enabled && query_embedding.has_value();
+  std::cerr << "[CHANNELS-TRACE] vector_channel=" << vector_channel_enabled << std::endl;
   if (!text_channel_enabled && !vector_channel_enabled) {
+    std::cerr << "[CHANNELS-TRACE] no channels enabled, returning empty" << std::endl;
     return channels;
   }
 
   if (text_channel_enabled && store_text_index != nullptr) {
+    std::cerr << "[CHANNELS-TRACE] >> store_text_index->Search()..." << std::endl;
+    const auto t0 = std::chrono::steady_clock::now();
     const auto indexed_text_results = store_text_index->Search(*request.query, request.top_k);
+    const auto search_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+    std::cerr << "[CHANNELS-TRACE] << text search returned " << indexed_text_results.size()
+              << " results in " << search_ms << " ms" << std::endl;
+
     channels.text_results.reserve(indexed_text_results.size());
+    std::cerr << "[CHANNELS-TRACE] >> reading " << indexed_text_results.size()
+              << " payloads from store..." << std::endl;
+    const auto pay_t0 = std::chrono::steady_clock::now();
     for (const auto& indexed : indexed_text_results) {
       const auto meta = store.FrameMeta(indexed.frame_id, include_pending_frames);
       if (!meta.has_value() || meta->status != 0) {
@@ -630,10 +682,17 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
       store_text_result.sources = {SearchSource::kText};
       channels.text_results.push_back(std::move(store_text_result));
     }
+    const auto pay_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - pay_t0).count();
+    std::cerr << "[CHANNELS-TRACE] << payload reads done in " << pay_ms << " ms"
+              << " kept=" << channels.text_results.size() << std::endl;
   }
 
   if (vector_channel_enabled && vector_index != nullptr) {
+    std::cerr << "[CHANNELS-TRACE] >> vector_index->Search()..." << std::endl;
     const auto vector_hits = vector_index->Search(*query_embedding, request.top_k);
+    std::cerr << "[CHANNELS-TRACE] << vector search returned " << vector_hits.size()
+              << " results" << std::endl;
     channels.vector_results.reserve(vector_hits.size());
     for (const auto& [frame_id, score] : vector_hits) {
       const auto meta = store.FrameMeta(frame_id, include_pending_frames);
@@ -654,7 +713,10 @@ StoreSearchChannels BuildStoreChannels(WaxStore& store,
   }
 
   if (text_channel_enabled && structured_text_index != nullptr) {
+    std::cerr << "[CHANNELS-TRACE] >> structured_text_index->Search()..." << std::endl;
     auto fact_results = structured_text_index->Search(*request.query, request.top_k);
+    std::cerr << "[CHANNELS-TRACE] << structured search returned " << fact_results.size()
+              << " results" << std::endl;
     for (auto& result : fact_results) {
       result.sources = {SearchSource::kStructuredMemory};
       channels.text_results.push_back(std::move(result));
@@ -672,18 +734,57 @@ std::string StructuredFactPreviewText(const StructuredMemoryEntry& entry) {
 void RebuildTextIndexFromStore(WaxStore& store, FTS5SearchEngine& store_text_index) {
   store_text_index = FTS5SearchEngine{};
 
-  const auto metas = store.FrameMetas();
+  const auto& metas = store.CommittedFrameMetasRef();
+  std::cerr << "[STARTUP-TRACE] RebuildTextIndexFromStore: " << metas.size()
+            << " frame metas loaded" << std::endl;
+  const auto t0 = std::chrono::steady_clock::now();
+  std::uint64_t indexed_count = 0;
+  std::uint64_t skipped_status = 0;
+  std::uint64_t skipped_internal = 0;
   for (const auto& meta : metas) {
     if (meta.status != 0) {
+      ++skipped_status;
       continue;
     }
-    const auto payload = store.FrameContent(meta.id);
-    if (IsInternalOrchestratorPayload(payload)) {
-      continue;
+    // Skip known user-content frames from expensive IsInternalOrchestratorPayload
+    // check — they don't have structured-fact or embedding-record magic prefixes.
+    const bool known_user = IsKnownUserContentFrame(meta);
+    if (!known_user) {
+      // Could be internal (structured fact / embedding record) — check payload magic.
+      const auto payload = store.FrameContent(meta.id);
+      if (IsInternalOrchestratorPayload(payload)) {
+        ++skipped_internal;
+        continue;
+      }
+      // Not internal, index it.
+      store_text_index.StageIndex(meta.id, BytesToString(payload));
+      ++indexed_count;
+    } else {
+      const auto payload = store.FrameContent(meta.id);
+      store_text_index.StageIndex(meta.id, BytesToString(payload));
+      ++indexed_count;
     }
-    store_text_index.StageIndex(meta.id, BytesToString(payload));
+    if (indexed_count % 50000 == 0) {
+      const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - t0).count();
+      std::cerr << "[STARTUP-TRACE]   ... indexed " << indexed_count << "/" << metas.size()
+                << " frames (" << elapsed_ms << " ms)" << std::endl;
+    }
   }
+  std::cerr << "[STARTUP-TRACE] >> CommitStaged (" << indexed_count << " docs)..." << std::endl;
+  const auto commit_t0 = std::chrono::steady_clock::now();
   store_text_index.CommitStaged();
+  const auto commit_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - commit_t0).count();
+  const auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - t0).count();
+  std::cerr << "[STARTUP-TRACE] RebuildTextIndexFromStore complete: indexed=" << indexed_count
+            << " skipped_status=" << skipped_status
+            << " skipped_internal=" << skipped_internal
+            << " commit=" << commit_ms << " ms"
+            << " total=" << total_ms << " ms"
+            << " fts5_active=" << store_text_index.IsFts5Active()
+            << std::endl;
 }
 
 struct PersistedEmbeddingSnapshot {
@@ -698,7 +799,7 @@ struct PersistedEmbeddingSnapshot {
 
 PersistedEmbeddingSnapshot LoadPersistedEmbeddingsFromStore(WaxStore& store) {
   PersistedEmbeddingSnapshot snapshot{};
-  const auto metas = store.FrameMetas();
+  const auto& metas = store.CommittedFrameMetasRef();
   for (const auto& meta : metas) {
     if (meta.status != 0) {
       continue;
@@ -823,7 +924,7 @@ void RebuildVectorIndexFromStore(WaxStore& store,
                                  int ingest_batch_size,
                                  int ingest_concurrency,
                                  USearchVectorEngine& vector_index) {
-  const auto metas = store.FrameMetas();
+  const auto& metas = store.CommittedFrameMetasRef();
   std::vector<std::uint64_t> frame_ids{};
   std::vector<std::string> texts{};
   frame_ids.reserve(metas.size());
@@ -1006,38 +1107,65 @@ void RebuildRuntimeStateFromStore(WaxStore& store,
                                   std::unique_ptr<USearchVectorEngine>& vector_index,
                                   EmbeddingMemoizer& embedding_cache,
                                   std::unordered_map<std::uint64_t, std::uint64_t>& surrogate_map) {
+  auto phase_start = std::chrono::steady_clock::now();
+  auto LogPhase = [&](const char* label) {
+    auto now = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - phase_start).count();
+    phase_start = now;
+    std::cerr << "[REBUILD-TRACE] " << label << " (" << ms << " ms)" << std::endl;
+  };
+
+  std::cerr << "[REBUILD-TRACE] >> ReplayStructuredFactsFromStore..." << std::endl;
   structured_memory = StructuredMemoryStore{};
   ReplayStructuredFactsFromStore(store, structured_memory);
+  LogPhase("<< ReplayStructuredFactsFromStore done");
+
   embedding_cache.Clear();
-  surrogate_map = BuildSurrogateMap(store.FrameMetas());
+
+  std::cerr << "[REBUILD-TRACE] >> BuildSurrogateMap (FrameMetas)..." << std::endl;
+  surrogate_map = BuildSurrogateMap(store.CommittedFrameMetasRef());
+  LogPhase("<< BuildSurrogateMap done");
 
   if (config.enable_text_search) {
+    std::cerr << "[REBUILD-TRACE] >> RebuildTextIndexFromStore..." << std::endl;
     RebuildTextIndexFromStore(store, store_text_index);
+    LogPhase("<< RebuildTextIndexFromStore done");
+
+    std::cerr << "[REBUILD-TRACE] >> RebuildStructuredFactIndex..." << std::endl;
     RebuildStructuredFactIndex(structured_memory, structured_text_index);
+    LogPhase("<< RebuildStructuredFactIndex done");
   } else {
     store_text_index = FTS5SearchEngine{};
     structured_text_index = FTS5SearchEngine{};
+    std::cerr << "[REBUILD-TRACE] text search disabled, skipped" << std::endl;
   }
 
   if (!config.enable_vector_search) {
     vector_index.reset();
+    std::cerr << "[REBUILD-TRACE] vector search disabled, done" << std::endl;
     return;
   }
 
+  std::cerr << "[REBUILD-TRACE] >> LoadPersistedEmbeddingsFromStore..." << std::endl;
   const auto persisted_embeddings = LoadPersistedEmbeddingsFromStore(store);
+  LogPhase("<< LoadPersistedEmbeddingsFromStore done");
+
   const auto vector_dims = ResolveVectorDimensions(embedder, persisted_embeddings);
   if (!vector_dims.has_value() || *vector_dims <= 0) {
     vector_index.reset();
+    std::cerr << "[REBUILD-TRACE] no vector dims, skipping vector index" << std::endl;
     return;
   }
 
   vector_index = std::make_unique<USearchVectorEngine>(*vector_dims);
+  std::cerr << "[REBUILD-TRACE] >> RebuildVectorIndexFromStore..." << std::endl;
   RebuildVectorIndexFromStore(store,
                               persisted_embeddings,
                               embedder,
                               config.ingest_batch_size,
                               config.ingest_concurrency,
                               *vector_index);
+  LogPhase("<< RebuildVectorIndexFromStore done");
 }
 
 /// Enrich search results with tier-appropriate surrogate text.
@@ -1112,7 +1240,21 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
                                        std::shared_ptr<EmbeddingProvider> embedder,
                                        const TokenCounter* token_counter)
     : config_(config),
-      store_(std::filesystem::exists(path) ? WaxStore::Open(path) : WaxStore::Create(path)),
+      store_([&]() -> WaxStore {
+        const bool exists = std::filesystem::exists(path);
+        std::cerr << "[INIT-TRACE] >> WaxStore::" << (exists ? "Open" : "Create")
+                  << "(" << path << ")..." << std::endl;
+        const auto t0 = std::chrono::steady_clock::now();
+        auto s = exists ? WaxStore::Open(path) : WaxStore::Create(path);
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+        const auto stats = s.Stats();
+        std::cerr << "[INIT-TRACE] << WaxStore opened in " << ms << " ms"
+                  << " frames=" << stats.frame_count
+                  << " generation=" << stats.generation
+                  << " pending=" << stats.pending_frames << std::endl;
+        return s;
+      }()),
       embedder_(std::move(embedder)),
       token_counter_(token_counter),
       embedding_cache_(config.embedding_cache_capacity),
@@ -1141,6 +1283,8 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
       embedder_->dimensions() > static_cast<int>(kMaxEmbeddingRecordValues)) {
     throw std::runtime_error("vector-enabled config embedder dimensions exceed replay safety limit");
   }
+  std::cerr << "[INIT-TRACE] >> RebuildRuntimeStateFromStore..." << std::endl;
+  const auto rebuild_t0 = std::chrono::steady_clock::now();
   RebuildRuntimeStateFromStore(store_,
                                config_,
                                embedder_,
@@ -1150,6 +1294,10 @@ MemoryOrchestrator::MemoryOrchestrator(const std::filesystem::path& path,
                                vector_index_,
                                embedding_cache_,
                                surrogate_map_);
+  const auto rebuild_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - rebuild_t0).count();
+  std::cerr << "[INIT-TRACE] << RebuildRuntimeStateFromStore done in " << rebuild_ms << " ms"
+            << std::endl;
   if (config_.enable_vector_search && vector_index_ == nullptr) {
     throw std::runtime_error("vector-enabled config requires initialized vector index");
   }
@@ -1358,6 +1506,21 @@ RAGContext MemoryOrchestrator::RecallImpl(
     std::optional<QueryEmbeddingPolicy> policy_override) {
   // Caller holds mutex_.
   ThrowIfClosed(closed_);
+  auto recall_t0 = std::chrono::steady_clock::now();
+  auto phase_start = recall_t0;
+  auto ElapsedMs = [&]() {
+    auto now = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - phase_start).count();
+    phase_start = now;
+    return ms;
+  };
+
+  std::cerr << "[RECALL-TRACE] RecallImpl start, query=\"" << query << "\""
+            << " text_search=" << config_.enable_text_search
+            << " vector_search=" << config_.enable_vector_search
+            << " store_frames=" << store_.Stats().frame_count
+            << " fts5_docs=" << store_text_index_.DocCount()
+            << std::endl;
 
   // Resolve effective policy.
   const auto policy = policy_override.value_or(config_.query_embedding_policy);
@@ -1398,9 +1561,17 @@ RAGContext MemoryOrchestrator::RecallImpl(
   req.max_context_tokens = config_.rag.max_context_tokens;
   req.snippet_max_tokens = config_.rag.snippet_max_tokens;
 
+  std::cerr << "[RECALL-TRACE] search_mode=" << static_cast<int>(req.mode.kind)
+            << " top_k=" << clamped_search_top_k
+            << " max_snippets=" << clamped_max_snippets
+            << " use_vector=" << use_vector
+            << std::endl;
+
   const bool vectors_for_channels = explicit_embedding.has_value() ? true : use_vector;
   const auto& embedder_for_channels = explicit_embedding.has_value() ? embedder_ : effective_embedder;
 
+  (void)ElapsedMs();
+  std::cerr << "[RECALL-TRACE] >> BuildStoreChannels..." << std::endl;
   const auto channels = BuildStoreChannels(
       store_,
       config_.enable_text_search ? &store_text_index_ : nullptr,
@@ -1411,8 +1582,15 @@ RAGContext MemoryOrchestrator::RecallImpl(
       vectors_for_channels,
       req,
       false);
+  std::cerr << "[RECALL-TRACE] << BuildStoreChannels done in " << ElapsedMs() << " ms"
+            << " text_results=" << channels.text_results.size()
+            << " vector_results=" << channels.vector_results.size()
+            << std::endl;
 
+  std::cerr << "[RECALL-TRACE] >> UnifiedSearchAdaptive..." << std::endl;
   auto response = UnifiedSearchAdaptive(req, channels.text_results, channels.vector_results);
+  std::cerr << "[RECALL-TRACE] << UnifiedSearchAdaptive done in " << ElapsedMs() << " ms"
+            << " results=" << response.results.size() << std::endl;
 
   // Apply frame filter as post-filter on search results.
   if (frame_filter.has_value()) {
@@ -1425,6 +1603,7 @@ RAGContext MemoryOrchestrator::RecallImpl(
         std::max(clamped_search_top_k * 2, 10), config_.rag.answer_rerank_window);
     response.results = IntentAwareRerank(response.results, query, rerank_window);
   }
+  std::cerr << "[RECALL-TRACE] << reranking done in " << ElapsedMs() << " ms" << std::endl;
 
   // Record frame accesses.
   if (!response.results.empty()) {
@@ -1434,17 +1613,29 @@ RAGContext MemoryOrchestrator::RecallImpl(
     access_stats_.RecordAccesses(accessed_ids);
   }
 
+  std::cerr << "[RECALL-TRACE] >> EnrichResultsWithSurrogates..." << std::endl;
   EnrichResultsWithSurrogates(response, query, store_, tier_selector_,
                               access_stats_, surrogate_map_,
                               config_.rag.enable_query_aware_tier_selection,
                               config_.rag.deterministic_now_ms);
+  std::cerr << "[RECALL-TRACE] << EnrichResultsWithSurrogates done in " << ElapsedMs() << " ms"
+            << std::endl;
 
+  std::cerr << "[RECALL-TRACE] >> BuildFastRAGContext..." << std::endl;
   auto context = BuildFastRAGContext(req, response);
+  std::cerr << "[RECALL-TRACE] << BuildFastRAGContext done in " << ElapsedMs() << " ms"
+            << " items=" << context.items.size()
+            << " tokens=" << context.total_tokens << std::endl;
 
   if (config_.rag.enable_answer_extraction && !context.items.empty()) {
+    std::cerr << "[RECALL-TRACE] >> ExtractAnswer..." << std::endl;
     context.extracted_answer = answer_extractor_.ExtractAnswer(query, context.items);
+    std::cerr << "[RECALL-TRACE] << ExtractAnswer done in " << ElapsedMs() << " ms" << std::endl;
   }
 
+  const auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - recall_t0).count();
+  std::cerr << "[RECALL-TRACE] RecallImpl total: " << total_ms << " ms" << std::endl;
   return context;
 }
 
@@ -1832,7 +2023,7 @@ SessionRuntimeStats MemoryOrchestrator::GetSessionRuntimeStats() const {
   // We scan all active frames and count those whose content is associated
   // with the current session. Since C++ binary format does not persist
   // per-frame metadata, this counts frames added since StartSession().
-  const auto metas = store_.FrameMetas();
+  const auto& metas = store_.CommittedFrameMetasRef();
   int frame_count = 0;
   int token_estimate = 0;
   for (const auto& meta : metas) {
@@ -2036,7 +2227,7 @@ std::optional<HandoffRecord> MemoryOrchestrator::LatestHandoff(
     const std::optional<std::string>& project) const {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  const auto metas = store_.FrameMetas();
+  const auto& metas = store_.CommittedFrameMetasRef();
 
   // Find the most recent active handoff frame.
   // Use frame_id as ordering proxy (IDs are monotonically increasing).
@@ -2105,7 +2296,7 @@ MaintenanceReport MemoryOrchestrator::CompactIndexes() {
   ThrowIfClosed(closed_);
 
   MaintenanceReport report;
-  report.scanned_frames = static_cast<int>(store_.FrameMetas().size());
+  report.scanned_frames = static_cast<int>(store_.CommittedFrameMetasRef().size());
 
   // Commit the WAL store (compaction is implicit in the store's commit).
   store_.Commit();

@@ -96,6 +96,9 @@ class WaxStore {
  [[nodiscard]] std::optional<WaxFrameMeta> FrameMeta(std::uint64_t frame_id,
                                                      bool include_pending = false) const;
  [[nodiscard]] std::vector<WaxFrameMeta> FrameMetas(bool include_pending = false) const;
+ /// Returns a const reference to the committed frame metadata — zero-copy.
+ /// Callers must NOT hold this reference across mutations (Put/Delete/Commit).
+ [[nodiscard]] const std::vector<WaxFrameMeta>& CommittedFrameMetasRef() const;
  [[nodiscard]] std::vector<std::byte> FrameContent(std::uint64_t frame_id,
                                                    bool include_pending = false) const;
  [[nodiscard]] std::unordered_map<std::uint64_t, std::vector<std::byte>> FrameContents(const std::vector<std::uint64_t>& frame_ids) const;
