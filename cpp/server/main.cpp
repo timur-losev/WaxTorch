@@ -171,9 +171,13 @@ protected:
             logger.information("Runtime config file: " + runtime_config_path->string());
         }
 
-        // Инициализация WAX
+        // Инициализация WAX — store lives in data/ subdirectory to keep bin/ clean
+        const std::filesystem::path store_dir = "data";
+        std::filesystem::create_directories(store_dir);
+        const auto store_path = store_dir / "wax-server.mv2s";
+        logger.information("Store path: " + store_path.string());
         logger.information("Initializing WAX orchestrator...");
-        waxcpp::server::WaxRAGHandler handler("wax-server.mv2s", runtime_config.models);
+        waxcpp::server::WaxRAGHandler handler(store_path, runtime_config.models);
         logger.information("WAX orchestrator initialized");
 
         // Запуск сервера
