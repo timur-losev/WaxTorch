@@ -34,6 +34,7 @@ add_executable(waxcpp_rag_server
   main.cpp
   json_rpc.cpp
   runtime_config.cpp
+  server_utils.cpp
   ue5_chunk_manifest.cpp
   ue5_filesystem_scanner.cpp
   wax_rag_handler.cpp
@@ -55,6 +56,7 @@ target_link_libraries(waxcpp_rag_server PRIVATE
 
 if (MSVC)
   target_compile_options(waxcpp_rag_server PRIVATE /W4 /permissive-)
+  target_link_libraries(waxcpp_rag_server PRIVATE Psapi.lib)
 else()
   target_compile_options(waxcpp_rag_server PRIVATE -Wall -Wextra -Wpedantic)
 endif()

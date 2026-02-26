@@ -1,4 +1,5 @@
 #include "index_job_manager.hpp"
+#include "server_utils.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -12,14 +13,6 @@
 namespace waxcpp::server {
 
 namespace {
-
-std::string ToAsciiLower(std::string_view text) {
-  std::string out(text);
-  std::transform(out.begin(), out.end(), out.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  return out;
-}
 
 bool ParseBool(std::string_view text, bool fallback) {
   const auto normalized = ToAsciiLower(text);

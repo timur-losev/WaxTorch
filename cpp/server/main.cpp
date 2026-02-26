@@ -1,6 +1,7 @@
 // cpp/server/main.cpp
 #include "wax_rag_handler.hpp"
 #include "runtime_config.hpp"
+#include "server_utils.hpp"
 #include <Poco/Net/HTTPServer.h>
 #include <Poco/Net/HTTPRequestHandlerFactory.h>
 #include <Poco/Net/HTTPRequestHandler.h>
@@ -15,71 +16,28 @@
 #include <Poco/FormattingChannel.h>
 #include <Poco/PatternFormatter.h>
 #include <iterator>
-#include <cstdlib>
 #include <iostream>
 #include <string>
 
 using namespace Poco::Net;
 using namespace Poco::Util;
 
-namespace {
-
-std::string EnvOrDefault(const char* name, const char* fallback) {
-#if defined(_MSC_VER)
-    char* value = nullptr;
-    std::size_t len = 0;
-    if (_dupenv_s(&value, &len, name) != 0 || value == nullptr) {
-        return std::string(fallback);
-    }
-    std::string out(value);
-    std::free(value);
-    if (out.empty()) {
-        return std::string(fallback);
-    }
-    return out;
-#else
-    const char* value = std::getenv(name);
-    if (value == nullptr || *value == '\0') {
-        return std::string(fallback);
-    }
-    return std::string(value);
-#endif
-}
-
-bool EnvIsSet(const char* name) {
-#if defined(_MSC_VER)
-    char* value = nullptr;
-    std::size_t len = 0;
-    if (_dupenv_s(&value, &len, name) != 0 || value == nullptr) {
-        return false;
-    }
-    const bool is_set = (*value != '\0');
-    std::free(value);
-    return is_set;
-#else
-    const char* value = std::getenv(name);
-    return value != nullptr && *value != '\0';
-#endif
-}
-
-}  // namespace
-
 class RAGRequestHandler : public HTTPRequestHandler {
 public:
-    RAGRequestHandler(waxcpp::server::WaxRAGHandler& handler) 
+    RAGRequestHandler(waxcpp::server::WaxRAGHandler& handler)
         : handler_(handler) {}
 
     void handleRequest(HTTPServerRequest& request, HTTPServerResponse& response) override {
         try {
             std::string body;
             std::istream& is = request.stream();
-            std::copy(std::istreambuf_iterator<char>(is), 
-                     std::istreambuf_iterator<char>(), 
+            std::copy(std::istreambuf_iterator<char>(is),
+                     std::istreambuf_iterator<char>(),
                      std::back_inserter(body));
 
             // Парсим JSON-RPC
             auto json_request = waxcpp::server::parse_json_rpc(body);
-            
+
             std::string result;
             if (json_request.method == "remember") {
                 result = handler_.handle_remember(json_request.params);
@@ -106,7 +64,7 @@ public:
 
         } catch (const std::exception& e) {
             response.setStatus(HTTPResponse::HTTP_INTERNAL_SERVER_ERROR);
-            response.send() << "{\"error\": \"" << e.what() << "\"}";
+            response.send() << "{\"error\":\"" << waxcpp::server::JsonEscape(e.what()) << "\"}";
         }
     }
 
@@ -116,7 +74,7 @@ private:
 
 class RAGRequestHandlerFactory : public HTTPRequestHandlerFactory {
 public:
-    RAGRequestHandlerFactory(waxcpp::server::WaxRAGHandler& handler) 
+    RAGRequestHandlerFactory(waxcpp::server::WaxRAGHandler& handler)
         : handler_(handler) {}
 
     HTTPRequestHandler* createRequestHandler(const HTTPServerRequest&) override {
@@ -155,16 +113,21 @@ protected:
         logger.information("Generation runtime: " + runtime_config.models.generation_model.runtime);
         logger.information("Generation model: " + runtime_config.models.generation_model.model_path);
         logger.information("llama.cpp generation endpoint: " +
-                           EnvOrDefault("WAXCPP_LLAMA_GEN_ENDPOINT",
-                                        "http://127.0.0.1:8004/completion (default)"));
-        const bool gen_api_key_enabled = EnvIsSet("WAXCPP_LLAMA_GEN_API_KEY") || EnvIsSet("WAXCPP_LLAMA_API_KEY");
+                           waxcpp::server::EnvString("WAXCPP_LLAMA_GEN_ENDPOINT")
+                               .value_or("http://127.0.0.1:8004/completion (default)"));
+        const bool gen_api_key_enabled =
+            waxcpp::server::EnvString("WAXCPP_LLAMA_GEN_API_KEY").has_value() ||
+            waxcpp::server::EnvString("WAXCPP_LLAMA_API_KEY").has_value();
         logger.information("llama.cpp generation api key: " + std::string(gen_api_key_enabled ? "set" : "not set"));
         logger.information("llama.cpp generation timeout ms: " +
-                           EnvOrDefault("WAXCPP_LLAMA_GEN_TIMEOUT_MS", "60000 (default)"));
+                           waxcpp::server::EnvString("WAXCPP_LLAMA_GEN_TIMEOUT_MS")
+                               .value_or("60000 (default)"));
         logger.information("llama.cpp generation max retries: " +
-                           EnvOrDefault("WAXCPP_LLAMA_GEN_MAX_RETRIES", "2 (default)"));
+                           waxcpp::server::EnvString("WAXCPP_LLAMA_GEN_MAX_RETRIES")
+                               .value_or("2 (default)"));
         logger.information("llama.cpp generation retry backoff ms: " +
-                           EnvOrDefault("WAXCPP_LLAMA_GEN_RETRY_BACKOFF_MS", "100 (default)"));
+                           waxcpp::server::EnvString("WAXCPP_LLAMA_GEN_RETRY_BACKOFF_MS")
+                               .value_or("100 (default)"));
         logger.information("Embedding runtime: " + runtime_config.models.embedding_model.runtime);
         logger.information("Embedding model: " +
                            (runtime_config.models.embedding_model.model_path.empty()
@@ -177,25 +140,32 @@ protected:
         logger.information("Vector search enabled: " +
                            std::string(runtime_config.models.enable_vector_search ? "true" : "false"));
         logger.information("Orchestrator ingest concurrency: " +
-                           EnvOrDefault("WAXCPP_ORCH_INGEST_CONCURRENCY", "1 (default)"));
+                           waxcpp::server::EnvString("WAXCPP_ORCH_INGEST_CONCURRENCY")
+                               .value_or("1 (default)"));
         logger.information("Orchestrator ingest batch size: " +
-                           EnvOrDefault("WAXCPP_ORCH_INGEST_BATCH_SIZE", "32 (default)"));
+                           waxcpp::server::EnvString("WAXCPP_ORCH_INGEST_BATCH_SIZE")
+                               .value_or("32 (default)"));
         if (runtime_config.models.enable_vector_search) {
             logger.information("llama.cpp embedding endpoint: " +
-                               EnvOrDefault("WAXCPP_LLAMA_EMBED_ENDPOINT",
-                                            "http://127.0.0.1:8004/embedding (default)"));
+                               waxcpp::server::EnvString("WAXCPP_LLAMA_EMBED_ENDPOINT")
+                                   .value_or("http://127.0.0.1:8004/embedding (default)"));
             const bool embed_api_key_enabled =
-                EnvIsSet("WAXCPP_LLAMA_EMBED_API_KEY") || EnvIsSet("WAXCPP_LLAMA_API_KEY");
+                waxcpp::server::EnvString("WAXCPP_LLAMA_EMBED_API_KEY").has_value() ||
+                waxcpp::server::EnvString("WAXCPP_LLAMA_API_KEY").has_value();
             logger.information("llama.cpp embedding api key: " +
                                std::string(embed_api_key_enabled ? "set" : "not set"));
             logger.information("llama.cpp embedding dimensions: " +
-                               EnvOrDefault("WAXCPP_LLAMA_EMBED_DIMS", "1024 (default)"));
+                               waxcpp::server::EnvString("WAXCPP_LLAMA_EMBED_DIMS")
+                                   .value_or("1024 (default)"));
             logger.information("llama.cpp embedding max retries: " +
-                               EnvOrDefault("WAXCPP_LLAMA_EMBED_MAX_RETRIES", "2 (default)"));
+                               waxcpp::server::EnvString("WAXCPP_LLAMA_EMBED_MAX_RETRIES")
+                                   .value_or("2 (default)"));
             logger.information("llama.cpp embedding retry backoff ms: " +
-                               EnvOrDefault("WAXCPP_LLAMA_EMBED_RETRY_BACKOFF_MS", "100 (default)"));
+                               waxcpp::server::EnvString("WAXCPP_LLAMA_EMBED_RETRY_BACKOFF_MS")
+                                   .value_or("100 (default)"));
             logger.information("llama.cpp embedding batch concurrency: " +
-                               EnvOrDefault("WAXCPP_LLAMA_EMBED_MAX_BATCH_CONCURRENCY", "4 (default)"));
+                               waxcpp::server::EnvString("WAXCPP_LLAMA_EMBED_MAX_BATCH_CONCURRENCY")
+                                   .value_or("4 (default)"));
         }
         if (runtime_config_path.has_value()) {
             logger.information("Runtime config file: " + runtime_config_path->string());

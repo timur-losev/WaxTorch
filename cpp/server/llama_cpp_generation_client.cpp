@@ -1,4 +1,5 @@
 #include "llama_cpp_generation_client.hpp"
+#include "server_utils.hpp"
 
 #include <Poco/Dynamic/Var.h>
 #include <Poco/Exception.h>
@@ -19,34 +20,6 @@
 namespace waxcpp::server {
 
 namespace {
-
-std::string JsonEscape(const std::string& value) {
-  std::string out{};
-  out.reserve(value.size() + 32);
-  for (const char ch : value) {
-    switch (ch) {
-      case '\\':
-        out += "\\\\";
-        break;
-      case '"':
-        out += "\\\"";
-        break;
-      case '\n':
-        out += "\\n";
-        break;
-      case '\r':
-        out += "\\r";
-        break;
-      case '\t':
-        out += "\\t";
-        break;
-      default:
-        out.push_back(ch);
-        break;
-    }
-  }
-  return out;
-}
 
 std::string ExtractGenerationText(const Poco::JSON::Object::Ptr& root) {
   if (root.isNull()) {

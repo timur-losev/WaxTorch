@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace waxcpp::server {
@@ -45,6 +46,8 @@ class Ue5FilesystemScanner {
   [[nodiscard]] bool ShouldExcludeDirectory(const std::filesystem::path& dir_path) const;
 
   Ue5ScannerConfig config_{};
+  std::unordered_set<std::string> include_extensions_set_{};
+  std::unordered_set<std::string> exclude_directory_names_set_{};
 };
 
 }  // namespace waxcpp::server

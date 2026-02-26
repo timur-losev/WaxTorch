@@ -1,4 +1,5 @@
 #include "llama_cpp_embedding_provider.hpp"
+#include "server_utils.hpp"
 
 #include <Poco/Dynamic/Var.h>
 #include <Poco/Exception.h>
@@ -104,34 +105,6 @@ std::vector<float> ParseEmbeddingObject(const Poco::JSON::Object::Ptr& object) {
     }
   }
   return {};
-}
-
-std::string JsonEscape(const std::string& value) {
-  std::string out{};
-  out.reserve(value.size() + 16);
-  for (const char ch : value) {
-    switch (ch) {
-      case '\\':
-        out += "\\\\";
-        break;
-      case '"':
-        out += "\\\"";
-        break;
-      case '\n':
-        out += "\\n";
-        break;
-      case '\r':
-        out += "\\r";
-        break;
-      case '\t':
-        out += "\\t";
-        break;
-      default:
-        out.push_back(ch);
-        break;
-    }
-  }
-  return out;
 }
 
 }  // namespace
@@ -399,6 +372,11 @@ std::vector<float> LlamaCppEmbeddingProvider::GetCachedEmbedding(const std::stri
   if (it == memoized_embeddings_.end()) {
     return {};
   }
+  // LRU: promote to back on hit.
+  const auto order_it = memoization_iterators_.find(key);
+  if (order_it != memoization_iterators_.end()) {
+    memoization_order_.splice(memoization_order_.end(), memoization_order_, order_it->second);
+  }
   return it->second;
 }
 
@@ -406,14 +384,21 @@ void LlamaCppEmbeddingProvider::MemoizeLocked(const std::string& key, const std:
   const auto existing = memoized_embeddings_.find(key);
   if (existing != memoized_embeddings_.end()) {
     existing->second = embedding;
+    // LRU: promote to back on update.
+    const auto order_it = memoization_iterators_.find(key);
+    if (order_it != memoization_iterators_.end()) {
+      memoization_order_.splice(memoization_order_.end(), memoization_order_, order_it->second);
+    }
     return;
   }
   while (memoized_embeddings_.size() >= config_.memoization_capacity && !memoization_order_.empty()) {
-    const auto evicted_key = memoization_order_.front();
-    memoization_order_.pop_front();
+    const auto& evicted_key = memoization_order_.front();
     memoized_embeddings_.erase(evicted_key);
+    memoization_iterators_.erase(evicted_key);
+    memoization_order_.pop_front();
   }
   memoization_order_.push_back(key);
+  memoization_iterators_[key] = std::prev(memoization_order_.end());
   memoized_embeddings_[key] = embedding;
 }
 

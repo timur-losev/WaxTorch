@@ -1,4 +1,5 @@
 #include "runtime_config.hpp"
+#include "server_utils.hpp"
 
 #include <Poco/Exception.h>
 #include <Poco/JSON/Object.h>
@@ -14,28 +15,6 @@
 namespace waxcpp::server {
 
 namespace {
-
-constexpr const char* kDefaultGenerationModelPath =
-    "g:/Proj/Agents1/Models/Qwen/Qwen3-Coder-Next-Q4_K_M.gguf";
-
-std::optional<std::string> EnvString(const char* name) {
-#if defined(_MSC_VER)
-  char* value = nullptr;
-  std::size_t len = 0;
-  if (_dupenv_s(&value, &len, name) != 0 || value == nullptr) {
-    return std::nullopt;
-  }
-  std::string out(value);
-  std::free(value);
-  return out;
-#else
-  const char* value = std::getenv(name);
-  if (value == nullptr) {
-    return std::nullopt;
-  }
-  return std::string(value);
-#endif
-}
 
 std::optional<Poco::JSON::Object::Ptr> OptObject(const Poco::JSON::Object::Ptr& root,
                                                  const std::string& key) {
@@ -110,11 +89,8 @@ void OverlayFromJson(const Poco::JSON::Object::Ptr& root, waxcpp::RuntimeModelsC
 ServerRuntimeConfig DefaultServerRuntimeConfig() {
   ServerRuntimeConfig config{};
   config.models.generation_model.runtime = "llama_cpp";
-  if (const auto env_path = EnvString("WAXCPP_GENERATION_MODEL"); env_path.has_value() && !env_path->empty()) {
-    config.models.generation_model.model_path = *env_path;
-  } else {
-    config.models.generation_model.model_path = kDefaultGenerationModelPath;
-  }
+  config.models.generation_model.model_path =
+      EnvString("WAXCPP_GENERATION_MODEL").value_or(std::string{});
   config.models.embedding_model.runtime = "disabled";
   config.models.embedding_model.model_path = "";
   if (const auto env_root = EnvString("WAXCPP_LLAMA_CPP_ROOT"); env_root.has_value() && !env_root->empty()) {

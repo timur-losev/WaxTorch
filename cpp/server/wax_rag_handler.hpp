@@ -51,7 +51,7 @@ private:
                        bool resume_requested,
                        IndexRunOptions options,
                        std::shared_ptr<std::atomic<bool>> cancel_flag);
-    void reap_index_worker_if_finished_locked();
+    void TryReapFinishedIndexWorker();
     std::string make_index_status_json(const IndexJobStatus& status) const;
 
     std::unique_ptr<waxcpp::MemoryOrchestrator> orchestrator_;
@@ -65,4 +65,4 @@ private:
     std::mutex mutex_;
 };
 
-} // namespace waxcpp::server
+}  // namespace waxcpp::server

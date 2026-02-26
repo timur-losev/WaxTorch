@@ -1,7 +1,9 @@
 #include "../../server/wax_rag_handler.hpp"
 
 #include "../temp_artifacts.hpp"
+#include "../test_env_guard.hpp"
 #include "../test_logger.hpp"
+#include "../test_temp_dir.hpp"
 
 #include <Poco/Dynamic/Var.h>
 #include <Poco/JSON/Object.h>
@@ -92,17 +94,8 @@ waxcpp::RuntimeModelsConfig MakeRuntimeConfigForTests(const std::filesystem::pat
   return models;
 }
 
-void SetEnvVar(const char* key, const std::string& value) {
-#if defined(_MSC_VER)
-  if (_putenv_s(key, value.c_str()) != 0) {
-    throw std::runtime_error(std::string("failed to set env var: ") + key);
-  }
-#else
-  if (setenv(key, value.c_str(), 1) != 0) {
-    throw std::runtime_error(std::string("failed to set env var: ") + key);
-  }
-#endif
-}
+using waxcpp::tests::EnvVarGuard;
+using waxcpp::tests::SetEnvVar;
 
 struct IndexStatusView {
   std::string state{};
@@ -183,6 +176,7 @@ void ScenarioIndexStartIsAsyncAndStopWorks() {
     WriteTextFile(temp_root / ("File" + std::to_string(i) + ".cpp"), MakeLargeCppBody(1200));
   }
 
+  EnvVarGuard llama_root_guard("WAXCPP_LLAMA_CPP_ROOT");
   SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
   const auto models = MakeRuntimeConfigForTests(temp_root);
   waxcpp::server::WaxRAGHandler handler(store_path, models);
@@ -232,6 +226,7 @@ void ScenarioIndexCompleteWritesManifests() {
   WriteTextFile(temp_root / "A.cpp", MakeLargeCppBody(60));
   WriteTextFile(temp_root / "B.h", "struct B { int v = 7; };");
 
+  EnvVarGuard llama_root_guard("WAXCPP_LLAMA_CPP_ROOT");
   SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
   const auto models = MakeRuntimeConfigForTests(temp_root);
   waxcpp::server::WaxRAGHandler handler(store_path, models);
@@ -292,6 +287,7 @@ void ScenarioResumeSkipsUnchangedFilesThenIndexesChangedFile() {
   WriteTextFile(temp_root / "One.cpp", MakeLargeCppBody(120));
   WriteTextFile(temp_root / "Two.cpp", MakeLargeCppBody(100));
 
+  EnvVarGuard llama_root_guard("WAXCPP_LLAMA_CPP_ROOT");
   SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
   const auto models = MakeRuntimeConfigForTests(temp_root);
   waxcpp::server::WaxRAGHandler handler(store_path, models);
@@ -351,6 +347,7 @@ void ScenarioInterruptedIndexResumesAfterHandlerRecreate() {
     WriteTextFile(temp_root / ("R" + std::to_string(i) + ".cpp"), MakeLargeCppBody(450));
   }
 
+  EnvVarGuard llama_root_guard("WAXCPP_LLAMA_CPP_ROOT");
   SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
   const auto models = MakeRuntimeConfigForTests(temp_root);
 
@@ -423,6 +420,7 @@ void ScenarioResumeWithoutFileManifestSkipsCommittedWatermark() {
     WriteTextFile(temp_root / ("W" + std::to_string(i) + ".cpp"), MakeLargeCppBody(500));
   }
 
+  EnvVarGuard llama_root_guard("WAXCPP_LLAMA_CPP_ROOT");
   SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
   const auto models = MakeRuntimeConfigForTests(temp_root);
 
@@ -517,6 +515,7 @@ void ScenarioRepeatedRunsProduceIdenticalChunkManifest() {
   WriteTextFile(temp_root / "B.cpp", MakeLargeCppBody(120));
   WriteTextFile(temp_root / "C.inl", "inline int CValue(int v) { return v * 2; }\n");
 
+  EnvVarGuard llama_root_guard("WAXCPP_LLAMA_CPP_ROOT");
   SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
   const auto models = MakeRuntimeConfigForTests(temp_root);
 
@@ -582,6 +581,7 @@ void ScenarioMaxFilesCapsScanDeterministically() {
     WriteTextFile(temp_root / ("Cap" + std::to_string(i) + ".cpp"), MakeLargeCppBody(50 + i));
   }
 
+  EnvVarGuard llama_root_guard("WAXCPP_LLAMA_CPP_ROOT");
   SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
   const auto models = MakeRuntimeConfigForTests(temp_root);
   waxcpp::server::WaxRAGHandler handler(store_path, models);
@@ -628,6 +628,7 @@ void ScenarioMaxChunksCapsIngestDeterministically() {
   }
   WriteTextFile(temp_root / "Big.cpp", MakeLargeCppBody(2000));
 
+  EnvVarGuard llama_root_guard("WAXCPP_LLAMA_CPP_ROOT");
   SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
   const auto models = MakeRuntimeConfigForTests(temp_root);
   waxcpp::server::WaxRAGHandler handler(store_path, models);
@@ -674,6 +675,7 @@ void ScenarioIngestBatchSizeControlWorks() {
   }
   WriteTextFile(temp_root / "Batch.cpp", MakeLargeCppBody(2500));
 
+  EnvVarGuard llama_root_guard("WAXCPP_LLAMA_CPP_ROOT");
   SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
   const auto models = MakeRuntimeConfigForTests(temp_root);
   waxcpp::server::WaxRAGHandler handler(store_path, models);
@@ -721,6 +723,7 @@ void ScenarioMaxRamCapFailsWhenTooLow() {
   }
   WriteTextFile(temp_root / "Ram.cpp", MakeLargeCppBody(300));
 
+  EnvVarGuard llama_root_guard("WAXCPP_LLAMA_CPP_ROOT");
   SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
   const auto models = MakeRuntimeConfigForTests(temp_root);
   waxcpp::server::WaxRAGHandler handler(store_path, models);
@@ -776,6 +779,7 @@ void ScenarioIndexStartRejectsInvalidControls() {
   }
   WriteTextFile(temp_root / "Ctl.cpp", "int ctl() { return 42; }\n");
 
+  EnvVarGuard llama_root_guard("WAXCPP_LLAMA_CPP_ROOT");
   SetEnvVar("WAXCPP_LLAMA_CPP_ROOT", temp_root.string());
   const auto models = MakeRuntimeConfigForTests(temp_root);
   waxcpp::server::WaxRAGHandler handler(store_path, models);

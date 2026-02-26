@@ -1,13 +1,13 @@
 // cpp/server/wax_rag_handler.cpp
 #include "wax_rag_handler.hpp"
 #include "runtime_config.hpp"
+#include "server_utils.hpp"
 
 #include <Poco/Exception.h>
 #include <Poco/JSON/Array.h>
 #include <Poco/JSON/Object.h>
 
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -25,7 +25,6 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include <psapi.h>
-#pragma comment(lib, "Psapi.lib")
 #elif defined(__linux__)
 #include <unistd.h>
 #endif
@@ -40,28 +39,6 @@ constexpr const char* kDefaultLlamaGenEndpoint = "http://127.0.0.1:8004/completi
 constexpr const char* kServerLogEnv = "WAXCPP_SERVER_LOG";
 constexpr const char* kOrchIngestConcurrencyEnv = "WAXCPP_ORCH_INGEST_CONCURRENCY";
 constexpr const char* kOrchIngestBatchSizeEnv = "WAXCPP_ORCH_INGEST_BATCH_SIZE";
-
-std::optional<std::string> EnvString(const char* name) {
-#if defined(_MSC_VER)
-    char* value = nullptr;
-    std::size_t len = 0;
-    if (_dupenv_s(&value, &len, name) != 0 || value == nullptr) {
-        return std::nullopt;
-    }
-    std::string out(value);
-    std::free(value);
-    if (out.empty()) {
-        return std::nullopt;
-    }
-    return out;
-#else
-    const char* value = std::getenv(name);
-    if (value == nullptr || *value == '\0') {
-        return std::nullopt;
-    }
-    return std::string(value);
-#endif
-}
 
 int ParsePositiveIntEnv(const char* name, int fallback) {
     const auto raw = EnvString(name);
@@ -151,12 +128,13 @@ IntParamParseResult ParseIntParamStrict(const Poco::JSON::Object::Ptr& params,
 }
 
 bool ServerLogEnabled() {
-    const auto raw = EnvString(kServerLogEnv);
-    if (!raw.has_value()) {
-        return false;
-    }
-    const auto& value = *raw;
-    return value == "1" || value == "true" || value == "TRUE" || value == "on" || value == "ON";
+    static const bool enabled = []() {
+        const auto raw = EnvString(kServerLogEnv);
+        if (!raw.has_value()) return false;
+        const auto& v = *raw;
+        return v == "1" || v == "true" || v == "TRUE" || v == "on" || v == "ON";
+    }();
+    return enabled;
 }
 
 void ServerLog(std::string_view message) {
@@ -276,13 +254,27 @@ std::vector<CitationInfo> BuildCitations(waxcpp::MemoryOrchestrator& orchestrato
     for (const auto& [_, citation] : by_frame) {
         citations.push_back(citation);
     }
+    constexpr float kScoreEpsilon = 1e-6f;
     std::sort(citations.begin(), citations.end(), [](const CitationInfo& lhs, const CitationInfo& rhs) {
-        if (lhs.score != rhs.score) {
-            return lhs.score > rhs.score;
-        }
+        const float diff = lhs.score - rhs.score;
+        if (diff > kScoreEpsilon) return true;
+        if (diff < -kScoreEpsilon) return false;
         return lhs.frame_id < rhs.frame_id;
     });
     return citations;
+}
+
+bool IsPunctOrOperator(char ch) {
+    switch (ch) {
+        case '(': case ')': case '[': case ']': case '{': case '}':
+        case '<': case '>': case '.': case ',': case ';': case ':':
+        case '!': case '?': case '+': case '-': case '*': case '/':
+        case '=': case '&': case '|': case '^': case '~': case '%':
+        case '#': case '@':
+            return true;
+        default:
+            return false;
+    }
 }
 
 int CountApproxTokens(std::string_view text) {
@@ -291,6 +283,11 @@ int CountApproxTokens(std::string_view text) {
     for (const char ch : text) {
         const bool ws = (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' || ch == '\f' || ch == '\v');
         if (ws) {
+            in_token = false;
+            continue;
+        }
+        if (IsPunctOrOperator(ch)) {
+            ++tokens;
             in_token = false;
             continue;
         }
@@ -352,33 +349,7 @@ PromptBuildResult BuildAnswerPrompt(const std::string& query,
     return result;
 }
 
-std::string ReadFileText(const std::filesystem::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        throw std::runtime_error("failed to open file: " + path.string());
-    }
-    std::ostringstream out;
-    out << in.rdbuf();
-    if (!in.good() && !in.eof()) {
-        throw std::runtime_error("failed to read file: " + path.string());
-    }
-    return out.str();
-}
-
-void WriteFileText(const std::filesystem::path& path,
-                   std::string_view content,
-                   std::string_view open_error,
-                   std::string_view write_error) {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        throw std::runtime_error(std::string(open_error));
-    }
-    out << content;
-    if (!out) {
-        throw std::runtime_error(std::string(write_error));
-    }
-}
-}
+}  // namespace
 
 WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
                              waxcpp::RuntimeModelsConfig runtime_models,
@@ -693,6 +664,9 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
             if (pending_ingest.empty()) {
                 return;
             }
+            bool should_report_progress = false;
+            std::uint64_t progress_indexed = 0;
+            std::uint64_t progress_committed = 0;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 for (const auto& pending : pending_ingest) {
@@ -704,15 +678,20 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                     if (indexed_chunks % options.flush_every_chunks == 0) {
                         orchestrator_->Flush();
                         committed_chunks = indexed_chunks;
-                        (void)index_job_manager_.UpdateProgress(static_cast<std::uint64_t>(entries.size()),
-                                                                indexed_chunks,
-                                                                committed_chunks);
-                        std::ostringstream msg;
-                        msg << "index progress indexed_chunks=" << indexed_chunks
-                            << " committed_chunks=" << committed_chunks;
-                        ServerLog(msg.str());
+                        should_report_progress = true;
+                        progress_indexed = indexed_chunks;
+                        progress_committed = committed_chunks;
                     }
                 }
+            }
+            if (should_report_progress) {
+                (void)index_job_manager_.UpdateProgress(static_cast<std::uint64_t>(entries.size()),
+                                                        progress_indexed,
+                                                        progress_committed);
+                std::ostringstream msg;
+                msg << "index progress indexed_chunks=" << progress_indexed
+                    << " committed_chunks=" << progress_committed;
+                ServerLog(msg.str());
             }
             pending_ingest.clear();
         };
@@ -789,17 +768,11 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
 
         (void)index_job_manager_.SetPhase("persisting_manifests");
         WriteFileText(manifest_path,
-                      Ue5FilesystemScanner::SerializeManifest(entries),
-                      "failed to open scan manifest file for write",
-                      "failed to persist scan manifest file");
+                      Ue5FilesystemScanner::SerializeManifest(entries));
         WriteFileText(chunk_manifest_path,
-                      Ue5ChunkManifestBuilder::SerializeManifest(chunk_records),
-                      "failed to open chunk manifest file for write",
-                      "failed to persist chunk manifest file");
+                      Ue5ChunkManifestBuilder::SerializeManifest(chunk_records));
         WriteFileText(file_manifest_path,
-                      Ue5ChunkManifestBuilder::SerializeFileManifest(current_file_digests),
-                      "failed to open file manifest file for write",
-                      "failed to persist file manifest file");
+                      Ue5ChunkManifestBuilder::SerializeFileManifest(current_file_digests));
         if (is_cancelled()) {
             ServerLog("index job cancelled after manifest write");
             return;
@@ -823,7 +796,7 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
     }
 }
 
-void WaxRAGHandler::reap_index_worker_if_finished_locked() {
+void WaxRAGHandler::TryReapFinishedIndexWorker() {
     std::thread worker_to_join{};
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -918,7 +891,7 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
     };
 
     try {
-        reap_index_worker_if_finished_locked();
+        TryReapFinishedIndexWorker();
 
         std::shared_ptr<std::atomic<bool>> cancel_flag = std::make_shared<std::atomic<bool>>(false);
         {
@@ -947,7 +920,7 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
 std::string WaxRAGHandler::handle_index_status(const Poco::JSON::Object::Ptr& params) {
     (void)params;
     try {
-        reap_index_worker_if_finished_locked();
+        TryReapFinishedIndexWorker();
         return make_index_status_json(index_job_manager_.status());
     } catch (const std::exception& e) {
         return std::string("Error: ") + e.what();
@@ -1023,4 +996,4 @@ std::string WaxRAGHandler::make_index_status_json(const IndexJobStatus& status) 
     return out.str();
 }
 
-} // namespace waxcpp::server
+}  // namespace waxcpp::server

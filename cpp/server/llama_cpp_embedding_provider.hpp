@@ -3,8 +3,8 @@
 #include "waxcpp/embeddings.hpp"
 
 #include <cstddef>
-#include <deque>
 #include <functional>
+#include <list>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -50,8 +50,9 @@ class LlamaCppEmbeddingProvider final : public waxcpp::BatchEmbeddingProvider {
 
   LlamaCppEmbeddingProviderConfig config_{};
   mutable std::mutex memoization_mutex_{};
-  std::unordered_map<std::string, std::vector<float>> memoized_embeddings_{};
-  std::deque<std::string> memoization_order_{};
+  mutable std::unordered_map<std::string, std::vector<float>> memoized_embeddings_{};
+  mutable std::list<std::string> memoization_order_{};
+  mutable std::unordered_map<std::string, std::list<std::string>::iterator> memoization_iterators_{};
 };
 
 }  // namespace waxcpp::server

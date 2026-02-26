@@ -1,24 +1,12 @@
 #include "ue5_filesystem_scanner.hpp"
+#include "server_utils.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
-#include <unordered_set>
 
 namespace waxcpp::server {
-
-namespace {
-
-std::string ToAsciiLower(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  return value;
-}
-
-}  // namespace
 
 Ue5FilesystemScanner::Ue5FilesystemScanner(Ue5ScannerConfig config) : config_(std::move(config)) {
   for (auto& extension : config_.include_extensions) {
@@ -27,6 +15,8 @@ Ue5FilesystemScanner::Ue5FilesystemScanner(Ue5ScannerConfig config) : config_(st
   for (auto& dir_name : config_.exclude_directory_names) {
     dir_name = ToAsciiLower(dir_name);
   }
+  include_extensions_set_.insert(config_.include_extensions.begin(), config_.include_extensions.end());
+  exclude_directory_names_set_.insert(config_.exclude_directory_names.begin(), config_.exclude_directory_names.end());
 }
 
 std::vector<Ue5ScanEntry> Ue5FilesystemScanner::Scan(
@@ -95,14 +85,27 @@ std::vector<Ue5ScanEntry> Ue5FilesystemScanner::Scan(
     });
   }
 
-  std::sort(entries.begin(), entries.end(), [](const Ue5ScanEntry& lhs, const Ue5ScanEntry& rhs) {
-    const auto lhs_key = ToAsciiLower(lhs.relative_path);
-    const auto rhs_key = ToAsciiLower(rhs.relative_path);
-    if (lhs_key == rhs_key) {
-      return lhs.relative_path < rhs.relative_path;
+  // Precompute lowercase sort keys to avoid O(n log n) redundant lowercasing.
+  struct KeyedEntry {
+    std::string lower_path;
+    Ue5ScanEntry entry;
+  };
+  std::vector<KeyedEntry> keyed{};
+  keyed.reserve(entries.size());
+  for (auto& entry : entries) {
+    keyed.push_back({ToAsciiLower(entry.relative_path), std::move(entry)});
+  }
+  std::sort(keyed.begin(), keyed.end(), [](const KeyedEntry& a, const KeyedEntry& b) {
+    if (a.lower_path != b.lower_path) {
+      return a.lower_path < b.lower_path;
     }
-    return lhs_key < rhs_key;
+    return a.entry.relative_path < b.entry.relative_path;
   });
+  entries.clear();
+  entries.reserve(keyed.size());
+  for (auto& k : keyed) {
+    entries.push_back(std::move(k.entry));
+  }
   return entries;
 }
 
@@ -118,16 +121,11 @@ bool Ue5FilesystemScanner::ShouldIncludeExtension(const std::string& extension) 
   if (extension.empty()) {
     return false;
   }
-  const auto normalized = ToAsciiLower(extension);
-  return std::find(config_.include_extensions.begin(), config_.include_extensions.end(), normalized) !=
-         config_.include_extensions.end();
+  return include_extensions_set_.contains(ToAsciiLower(extension));
 }
 
 bool Ue5FilesystemScanner::ShouldExcludeDirectory(const std::filesystem::path& dir_path) const {
-  const auto dir_name = ToAsciiLower(dir_path.filename().string());
-  return std::find(config_.exclude_directory_names.begin(),
-                   config_.exclude_directory_names.end(),
-                   dir_name) != config_.exclude_directory_names.end();
+  return exclude_directory_names_set_.contains(ToAsciiLower(dir_path.filename().string()));
 }
 
 }  // namespace waxcpp::server

@@ -322,6 +322,7 @@ if (WAXCPP_BUILD_TESTS)
   add_executable(waxcpp_index_job_manager_test
     tests/unit/index_job_manager_test.cpp
     server/index_job_manager.cpp
+    server/server_utils.cpp
   )
   target_link_libraries(waxcpp_index_job_manager_test PRIVATE waxcpp)
   target_include_directories(waxcpp_index_job_manager_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server)
@@ -336,6 +337,7 @@ if (WAXCPP_BUILD_TESTS)
   add_executable(waxcpp_ue5_filesystem_scanner_test
     tests/unit/ue5_filesystem_scanner_test.cpp
     server/ue5_filesystem_scanner.cpp
+    server/server_utils.cpp
   )
   target_link_libraries(waxcpp_ue5_filesystem_scanner_test PRIVATE waxcpp)
   target_include_directories(waxcpp_ue5_filesystem_scanner_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server)
@@ -351,6 +353,7 @@ if (WAXCPP_BUILD_TESTS)
     tests/unit/ue5_chunk_manifest_test.cpp
     server/ue5_chunk_manifest.cpp
     server/ue5_filesystem_scanner.cpp
+    server/server_utils.cpp
   )
   target_link_libraries(waxcpp_ue5_chunk_manifest_test PRIVATE waxcpp)
   target_include_directories(waxcpp_ue5_chunk_manifest_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server)
@@ -369,6 +372,7 @@ if (WAXCPP_BUILD_TESTS)
     add_executable(waxcpp_llama_cpp_generation_client_test
       tests/unit/llama_cpp_generation_client_test.cpp
       server/llama_cpp_generation_client.cpp
+      server/server_utils.cpp
     )
     target_link_libraries(waxcpp_llama_cpp_generation_client_test PRIVATE
       waxcpp
@@ -387,6 +391,7 @@ if (WAXCPP_BUILD_TESTS)
     add_executable(waxcpp_llama_cpp_embedding_provider_test
       tests/unit/llama_cpp_embedding_provider_test.cpp
       server/llama_cpp_embedding_provider.cpp
+      server/server_utils.cpp
     )
     target_link_libraries(waxcpp_llama_cpp_embedding_provider_test PRIVATE
       waxcpp
@@ -411,6 +416,7 @@ if (WAXCPP_BUILD_TESTS)
       server/llama_cpp_generation_client.cpp
       server/llama_cpp_embedding_provider.cpp
       server/runtime_config.cpp
+      server/server_utils.cpp
     )
     target_link_libraries(waxcpp_wax_rag_handler_index_test PRIVATE
       waxcpp
@@ -435,6 +441,7 @@ if (WAXCPP_BUILD_TESTS)
       server/llama_cpp_generation_client.cpp
       server/llama_cpp_embedding_provider.cpp
       server/runtime_config.cpp
+      server/server_utils.cpp
     )
     target_link_libraries(waxcpp_wax_rag_handler_answer_test PRIVATE
       waxcpp

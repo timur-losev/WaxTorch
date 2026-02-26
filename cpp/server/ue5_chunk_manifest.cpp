@@ -1,4 +1,5 @@
 #include "ue5_chunk_manifest.hpp"
+#include "server_utils.hpp"
 
 #include "waxcpp/token_counter.hpp"
 
@@ -25,13 +26,6 @@ struct ChunkWindow {
   int token_estimate = 0;
 };
 
-std::string ToAsciiLower(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  return value;
-}
-
 std::string TrimAscii(std::string_view text) {
   std::size_t start = 0;
   while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start]))) {
@@ -42,19 +36,6 @@ std::string TrimAscii(std::string_view text) {
     --end;
   }
   return std::string(text.substr(start, end - start));
-}
-
-std::string ReadFileText(const std::filesystem::path& path) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) {
-    throw std::runtime_error("failed to open source file for chunking: " + path.string());
-  }
-  std::ostringstream out;
-  out << in.rdbuf();
-  if (!in.good() && !in.eof()) {
-    throw std::runtime_error("failed to read source file for chunking: " + path.string());
-  }
-  return out.str();
 }
 
 std::vector<std::string> SplitLines(std::string_view text) {
@@ -351,26 +332,48 @@ std::vector<Ue5ChunkRecord> Ue5ChunkManifestBuilder::Build(
     }
   }
 
-  std::sort(records.begin(), records.end(), [](const Ue5ChunkRecord& lhs, const Ue5ChunkRecord& rhs) {
-    const auto lhs_path = ToAsciiLower(lhs.relative_path);
-    const auto rhs_path = ToAsciiLower(rhs.relative_path);
-    if (lhs_path != rhs_path) {
-      return lhs_path < rhs_path;
-    }
-    if (lhs.line_start != rhs.line_start) {
-      return lhs.line_start < rhs.line_start;
-    }
-    if (lhs.line_end != rhs.line_end) {
-      return lhs.line_end < rhs.line_end;
-    }
-    return lhs.chunk_id < rhs.chunk_id;
-  });
+  // Precompute lowercase sort keys to avoid O(n log n) redundant lowercasing.
+  {
+    std::unordered_map<std::string, std::string> lower_cache{};
+    lower_cache.reserve(records.size());
+    auto get_lower = [&](const std::string& path) -> const std::string& {
+      auto [it, inserted] = lower_cache.emplace(path, std::string{});
+      if (inserted) {
+        it->second = ToAsciiLower(path);
+      }
+      return it->second;
+    };
+    std::sort(records.begin(), records.end(),
+              [&](const Ue5ChunkRecord& lhs, const Ue5ChunkRecord& rhs) {
+                const auto& lhs_path = get_lower(lhs.relative_path);
+                const auto& rhs_path = get_lower(rhs.relative_path);
+                if (lhs_path != rhs_path) {
+                  return lhs_path < rhs_path;
+                }
+                if (lhs.line_start != rhs.line_start) {
+                  return lhs.line_start < rhs.line_start;
+                }
+                if (lhs.line_end != rhs.line_end) {
+                  return lhs.line_end < rhs.line_end;
+                }
+                return lhs.chunk_id < rhs.chunk_id;
+              });
+  }
   if (file_digests_out != nullptr) {
+    std::unordered_map<std::string, std::string> lower_cache{};
+    lower_cache.reserve(file_digests_out->size());
+    auto get_lower = [&](const std::string& path) -> const std::string& {
+      auto [it, inserted] = lower_cache.emplace(path, std::string{});
+      if (inserted) {
+        it->second = ToAsciiLower(path);
+      }
+      return it->second;
+    };
     std::sort(file_digests_out->begin(),
               file_digests_out->end(),
-              [](const Ue5FileDigest& lhs, const Ue5FileDigest& rhs) {
-                const auto lhs_key = ToAsciiLower(lhs.relative_path);
-                const auto rhs_key = ToAsciiLower(rhs.relative_path);
+              [&](const Ue5FileDigest& lhs, const Ue5FileDigest& rhs) {
+                const auto& lhs_key = get_lower(lhs.relative_path);
+                const auto& rhs_key = get_lower(rhs.relative_path);
                 if (lhs_key == rhs_key) {
                   return lhs.relative_path < rhs.relative_path;
                 }
@@ -433,14 +436,26 @@ std::vector<Ue5FileDigest> Ue5ChunkManifestBuilder::ParseFileManifest(std::strin
         .content_hash = std::string(hash_text),
     });
   }
-  std::sort(digests.begin(), digests.end(), [](const Ue5FileDigest& lhs, const Ue5FileDigest& rhs) {
-    const auto lhs_key = ToAsciiLower(lhs.relative_path);
-    const auto rhs_key = ToAsciiLower(rhs.relative_path);
-    if (lhs_key == rhs_key) {
-      return lhs.relative_path < rhs.relative_path;
-    }
-    return lhs_key < rhs_key;
-  });
+  {
+    std::unordered_map<std::string, std::string> lower_cache{};
+    lower_cache.reserve(digests.size());
+    auto get_lower = [&](const std::string& path) -> const std::string& {
+      auto [it, inserted] = lower_cache.emplace(path, std::string{});
+      if (inserted) {
+        it->second = ToAsciiLower(path);
+      }
+      return it->second;
+    };
+    std::sort(digests.begin(), digests.end(),
+              [&](const Ue5FileDigest& lhs, const Ue5FileDigest& rhs) {
+                const auto& lhs_key = get_lower(lhs.relative_path);
+                const auto& rhs_key = get_lower(rhs.relative_path);
+                if (lhs_key == rhs_key) {
+                  return lhs.relative_path < rhs.relative_path;
+                }
+                return lhs_key < rhs_key;
+              });
+  }
   return digests;
 }
 
