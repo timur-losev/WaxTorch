@@ -24,3 +24,6 @@ cpp/build_vs/
 *.profraw
 *.profdata
 .claude/settings.local.json
+
+# MCP bridge dependencies
+/cpp/mcp/node_modules/
