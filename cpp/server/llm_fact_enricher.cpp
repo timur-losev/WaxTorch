@@ -132,14 +132,21 @@ FactBatch LlmFactEnricher::Enrich(
     if (!client_) return {};
     if (chunk_text.empty()) return {};
 
+    ++chunk_counter_;
     const bool verbose = EnrichLlmLogEnabled();
+    const auto progress_tag = [&]() -> std::string {
+        if (config_.total_chunks > 0) {
+            return "[" + std::to_string(chunk_counter_) + "/" + std::to_string(config_.total_chunks) + "] ";
+        }
+        return "[" + std::to_string(chunk_counter_) + "] ";
+    }();
 
     try {
         const auto user_prompt = BuildUserPrompt(record, chunk_text);
         const auto system_prompt = BuildSystemPrompt();
 
         if (verbose) {
-            std::cerr << "\n[ENRICH-LLM] ── REQUEST ──────────────────────\n"
+            std::cerr << "\n[ENRICH-LLM] " << progress_tag << "── REQUEST ──────────────────────\n"
                       << "[ENRICH-LLM] file: " << record.relative_path
                       << " lines " << record.line_start << "-" << record.line_end
                       << " symbol: " << record.symbol << "\n"
@@ -184,7 +191,7 @@ FactBatch LlmFactEnricher::Enrich(
                       << std::flush;
         } else {
             // Compact one-liner even without verbose
-            std::cerr << "[ENRICH-LLM] " << record.relative_path
+            std::cerr << "[ENRICH-LLM] " << progress_tag << record.relative_path
                       << ":" << record.line_start << "-" << record.line_end
                       << " -> " << facts.size() << " facts (" << elapsed_ms << "ms)\n";
         }

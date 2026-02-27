@@ -6,12 +6,15 @@
 #include "chunk_enricher.hpp"
 #include "llama_cpp_generation_client.hpp"
 
+#include <cstdint>
+
 namespace waxcpp::server {
 
 struct LlmFactEnricherConfig {
     int max_tokens = 1024;
     float temperature = 0.1f;
     bool skip_on_error = true;  // continue indexing if LLM fails
+    std::uint64_t total_chunks = 0;  // for progress logging (0 = unknown)
 };
 
 class LlmFactEnricher : public ChunkEnricher {
@@ -38,6 +41,7 @@ class LlmFactEnricher : public ChunkEnricher {
 
     LlamaCppGenerationClient* client_;
     LlmFactEnricherConfig config_;
+    std::uint64_t chunk_counter_{0};
 };
 
 }  // namespace waxcpp::server

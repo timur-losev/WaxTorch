@@ -785,6 +785,7 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
         if (options.enrich_llm && generation_client_) {
             LlmFactEnricherConfig llm_cfg{};
             llm_cfg.max_tokens = ParsePositiveIntEnv("WAXCPP_ENRICH_LLM_MAX_TOKENS", llm_cfg.max_tokens);
+            llm_cfg.total_chunks = static_cast<std::uint64_t>(chunk_records.size());
             enricher_pipeline.AddEnricher(std::make_unique<LlmFactEnricher>(generation_client_.get(), llm_cfg));
             ServerLog(std::string("enricher: llm enabled, max_tokens=") + std::to_string(llm_cfg.max_tokens));
         }
@@ -826,10 +827,11 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                     ++facts_extracted;
                 }
             }
+            // Always update progress so index.status reflects reality.
+            (void)index_job_manager_.UpdateProgress(static_cast<std::uint64_t>(entries.size()),
+                                                    indexed_chunks,
+                                                    committed_chunks);
             if (should_report_progress) {
-                (void)index_job_manager_.UpdateProgress(static_cast<std::uint64_t>(entries.size()),
-                                                        progress_indexed,
-                                                        progress_committed);
                 std::ostringstream msg;
                 msg << "index progress indexed_chunks=" << progress_indexed
                     << " committed_chunks=" << progress_committed;
