@@ -1,5 +1,8 @@
 // cpp/server/wax_rag_handler.cpp
 #include "wax_rag_handler.hpp"
+#include "chunk_enricher.hpp"
+#include "regex_ue5_enricher.hpp"
+#include "llm_fact_enricher.hpp"
 #include "runtime_config.hpp"
 #include "server_utils.hpp"
 
@@ -39,6 +42,8 @@ constexpr const char* kDefaultLlamaGenEndpoint = "http://127.0.0.1:8004/completi
 constexpr const char* kServerLogEnv = "WAXCPP_SERVER_LOG";
 constexpr const char* kOrchIngestConcurrencyEnv = "WAXCPP_ORCH_INGEST_CONCURRENCY";
 constexpr const char* kOrchIngestBatchSizeEnv = "WAXCPP_ORCH_INGEST_BATCH_SIZE";
+constexpr const char* kAutoFlushIntervalEnv = "WAXCPP_AUTO_FLUSH_INTERVAL_MS";
+constexpr std::uint64_t kDefaultAutoFlushIntervalMs = 30000;  // 30 seconds
 
 int ParsePositiveIntEnv(const char* name, int fallback) {
     const auto raw = EnvString(name);
@@ -417,9 +422,16 @@ WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
     std::cerr << "[INIT-TRACE] >> MemoryOrchestrator ctor (store=" << store_path << ")..." << std::endl;
     orchestrator_ = std::make_unique<waxcpp::MemoryOrchestrator>(store_path, config, std::move(embedder));
     std::cerr << "[INIT-TRACE] << MemoryOrchestrator ctor done" << std::endl;
+
+    // Parse auto-flush interval from env (0 disables auto-flush).
+    auto_flush_interval_ms_ = static_cast<std::uint64_t>(
+        ParseNonNegativeIntEnv(kAutoFlushIntervalEnv,
+                               static_cast<int>(kDefaultAutoFlushIntervalMs)));
+    StartAutoFlushThread();
 }
 
 WaxRAGHandler::~WaxRAGHandler() {
+    StopAutoFlushThread();
     std::thread worker_to_join{};
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -436,6 +448,75 @@ WaxRAGHandler::~WaxRAGHandler() {
     }
     if (worker_to_join.joinable()) {
         worker_to_join.join();
+    }
+}
+
+// ── Auto-flush background thread ────────────────────────────────
+
+void WaxRAGHandler::StartAutoFlushThread() {
+    if (auto_flush_interval_ms_ == 0) {
+        std::cerr << "[auto-flush] disabled (interval=0)" << std::endl;
+        return;
+    }
+    auto_flush_stop_.store(false, std::memory_order_relaxed);
+    auto_flush_thread_ = std::thread([this]() { AutoFlushLoop(); });
+    std::cerr << "[auto-flush] started (interval=" << auto_flush_interval_ms_ << "ms)" << std::endl;
+}
+
+void WaxRAGHandler::StopAutoFlushThread() {
+    auto_flush_stop_.store(true, std::memory_order_relaxed);
+    if (auto_flush_thread_.joinable()) {
+        auto_flush_thread_.join();
+    }
+}
+
+void WaxRAGHandler::AutoFlushLoop() {
+    // Sleep in small increments so we can exit quickly on shutdown.
+    constexpr std::uint64_t kSleepGranularityMs = 500;
+
+    while (!auto_flush_stop_.load(std::memory_order_relaxed)) {
+        // Sleep for the configured interval, checking for stop every 500ms.
+        std::uint64_t slept_ms = 0;
+        while (slept_ms < auto_flush_interval_ms_ &&
+               !auto_flush_stop_.load(std::memory_order_relaxed)) {
+            const auto chunk = std::min(kSleepGranularityMs,
+                                        auto_flush_interval_ms_ - slept_ms);
+            std::this_thread::sleep_for(std::chrono::milliseconds(chunk));
+            slept_ms += chunk;
+        }
+
+        if (auto_flush_stop_.load(std::memory_order_relaxed)) {
+            break;
+        }
+
+        // Skip auto-flush while index job is running — it controls flush itself
+        // via flush_every_chunks to avoid dead-TOC bloat.
+        if (index_active_.load(std::memory_order_relaxed)) {
+            continue;
+        }
+
+        // Check if there has been write activity since our last flush.
+        const auto last_write_ms = orchestrator_->last_write_activity_ms();
+        if (last_write_ms <= 0 || last_write_ms <= auto_flush_last_flushed_ms_) {
+            continue;  // nothing new to flush
+        }
+
+        // Acquire handler-level mutex and flush.
+        try {
+            std::lock_guard<std::mutex> lock(mutex_);
+            // Re-check after acquiring lock.
+            if (index_active_.load(std::memory_order_relaxed)) {
+                continue;  // index job started while we waited for lock
+            }
+            const auto recheck_ms = orchestrator_->last_write_activity_ms();
+            if (recheck_ms > 0 && recheck_ms > auto_flush_last_flushed_ms_) {
+                orchestrator_->Flush();
+                auto_flush_last_flushed_ms_ = recheck_ms;
+                ServerLog("auto-flush completed");
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[auto-flush] ERROR: " << e.what() << std::endl;
+        }
     }
 }
 
@@ -593,6 +674,14 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
         return cancel_flag && cancel_flag->load(std::memory_order_relaxed);
     };
 
+    // Suppress auto-flush while index job runs (it controls flush itself).
+    index_active_.store(true, std::memory_order_relaxed);
+    // RAII guard: always clear the flag when index job exits.
+    struct IndexActiveGuard {
+        std::atomic<bool>& flag;
+        ~IndexActiveGuard() { flag.store(false, std::memory_order_relaxed); }
+    } index_guard{index_active_};
+
     try {
         {
             std::ostringstream msg;
@@ -681,18 +770,35 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
             ServerLog(msg.str());
         }
         (void)index_job_manager_.SetPhase("ingesting");
+        index_job_manager_.SetTotalChunks(static_cast<std::uint64_t>(chunk_records.size()));
 
         std::uint64_t indexed_chunks = 0;
         std::uint64_t committed_chunks = 0;
         bool reached_chunk_limit = false;
+
+        // ── Enrichment pipeline (optional) ──
+        EnricherPipeline enricher_pipeline;
+        if (options.enrich_regex) {
+            enricher_pipeline.AddEnricher(std::make_unique<RegexUe5Enricher>());
+            ServerLog("enricher: regex_ue5 enabled");
+        }
+        if (options.enrich_llm && generation_client_) {
+            LlmFactEnricherConfig llm_cfg{};
+            llm_cfg.max_tokens = ParsePositiveIntEnv("WAXCPP_ENRICH_LLM_MAX_TOKENS", llm_cfg.max_tokens);
+            enricher_pipeline.AddEnricher(std::make_unique<LlmFactEnricher>(generation_client_.get(), llm_cfg));
+            ServerLog(std::string("enricher: llm enabled, max_tokens=") + std::to_string(llm_cfg.max_tokens));
+        }
+        std::uint64_t facts_extracted = 0;
+
         struct PendingIngestChunk {
             std::string text{};
             waxcpp::Metadata metadata{};
         };
         std::vector<PendingIngestChunk> pending_ingest{};
+        std::vector<ExtractedFact> pending_facts{};
         pending_ingest.reserve(static_cast<std::size_t>(std::min<std::uint64_t>(options.ingest_batch_size, 1024ULL)));
         auto flush_pending_ingest = [&]() {
-            if (pending_ingest.empty()) {
+            if (pending_ingest.empty() && pending_facts.empty()) {
                 return;
             }
             bool should_report_progress = false;
@@ -714,6 +820,11 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                         progress_committed = committed_chunks;
                     }
                 }
+                // Emit enriched facts
+                for (const auto& fact : pending_facts) {
+                    orchestrator_->RememberFact(fact.entity, fact.attribute, fact.value, fact.metadata);
+                    ++facts_extracted;
+                }
             }
             if (should_report_progress) {
                 (void)index_job_manager_.UpdateProgress(static_cast<std::uint64_t>(entries.size()),
@@ -722,9 +833,13 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                 std::ostringstream msg;
                 msg << "index progress indexed_chunks=" << progress_indexed
                     << " committed_chunks=" << progress_committed;
+                if (facts_extracted > 0) {
+                    msg << " facts_extracted=" << facts_extracted;
+                }
                 ServerLog(msg.str());
             }
             pending_ingest.clear();
+            pending_facts.clear();
         };
         (void)ue5_chunk_builder_.Build(
             repo_root_path,
@@ -765,6 +880,15 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                     .text = std::string(chunk_text),
                     .metadata = std::move(metadata),
                 });
+
+                // ── Enrichment ──
+                if (!enricher_pipeline.Empty()) {
+                    auto facts = enricher_pipeline.EnrichAll(chunk, chunk_text);
+                    for (auto& f : facts) {
+                        pending_facts.push_back(std::move(f));
+                    }
+                }
+
                 if (options.max_chunks > 0 &&
                     indexed_chunks + static_cast<std::uint64_t>(pending_ingest.size()) >= options.max_chunks) {
                     reached_chunk_limit = true;
@@ -913,12 +1037,26 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
     if (max_ram_mb_param < 0 || static_cast<std::uint64_t>(max_ram_mb_param) > kMaxIndexControlValue) {
         return "Error: max_ram_mb must be within [0, 1000000]";
     }
+    // Enrichment flags: JSON-RPC param takes precedence, env var as fallback.
+    auto env_bool = [](const char* name, bool fallback) -> bool {
+        const char* val = std::getenv(name);
+        if (val && (std::string(val) == "1" || std::string(val) == "true")) return true;
+        if (val && (std::string(val) == "0" || std::string(val) == "false")) return false;
+        return fallback;
+    };
+    const bool enrich_regex = params.isNull() ? env_bool("WAXCPP_ENRICH_REGEX", false)
+                                              : params->optValue<bool>("enrich_regex", env_bool("WAXCPP_ENRICH_REGEX", false));
+    const bool enrich_llm = params.isNull() ? env_bool("WAXCPP_ENRICH_LLM", false)
+                                            : params->optValue<bool>("enrich_llm", env_bool("WAXCPP_ENRICH_LLM", false));
+
     const IndexRunOptions options{
         .flush_every_chunks = static_cast<std::uint64_t>(flush_every_chunks_param),
         .ingest_batch_size = static_cast<std::uint64_t>(ingest_batch_size_param),
         .max_files = static_cast<std::uint64_t>(max_files_param),
         .max_chunks = static_cast<std::uint64_t>(max_chunks_param),
         .max_ram_mb = static_cast<std::uint64_t>(max_ram_mb_param),
+        .enrich_regex = enrich_regex,
+        .enrich_llm = enrich_llm,
     };
 
     try {
@@ -999,6 +1137,7 @@ std::string WaxRAGHandler::make_index_status_json(const IndexJobStatus& status) 
     response.set("started_at_ms", status.started_at_ms);
     response.set("updated_at_ms", status.updated_at_ms);
     response.set("scanned_files", status.scanned_files);
+    response.set("total_chunks", status.total_chunks);
     response.set("indexed_chunks", status.indexed_chunks);
     response.set("committed_chunks", status.committed_chunks);
     response.set("resume_requested", status.resume_requested);

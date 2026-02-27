@@ -116,6 +116,7 @@ bool IndexJobManager::Start(const std::filesystem::path& repo_root, bool resume_
     status_.committed_chunks = previous_committed;
   } else {
     status_.scanned_files = 0;
+    status_.total_chunks = 0;
     status_.indexed_chunks = 0;
     status_.committed_chunks = 0;
   }
@@ -168,6 +169,11 @@ bool IndexJobManager::SetPhase(std::string phase) {
   status_.updated_at_ms = NowMs();
   PersistLocked();
   return true;
+}
+
+void IndexJobManager::SetTotalChunks(std::uint64_t total) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  status_.total_chunks = total;
 }
 
 bool IndexJobManager::Stop() {
@@ -225,6 +231,7 @@ void IndexJobManager::PersistLocked() const {
   out << "started_at_ms=" << status_.started_at_ms << "\n";
   out << "updated_at_ms=" << status_.updated_at_ms << "\n";
   out << "scanned_files=" << status_.scanned_files << "\n";
+  out << "total_chunks=" << status_.total_chunks << "\n";
   out << "indexed_chunks=" << status_.indexed_chunks << "\n";
   out << "committed_chunks=" << status_.committed_chunks << "\n";
   out << "resume_requested=" << (status_.resume_requested ? "1" : "0") << "\n";
@@ -285,6 +292,11 @@ void IndexJobManager::LoadLocked() {
   if (const auto it = entries.find("scanned_files"); it != entries.end()) {
     if (const auto parsed = ParseU64(it->second); parsed.has_value()) {
       status_.scanned_files = *parsed;
+    }
+  }
+  if (const auto it = entries.find("total_chunks"); it != entries.end()) {
+    if (const auto parsed = ParseU64(it->second); parsed.has_value()) {
+      status_.total_chunks = *parsed;
     }
   }
   if (const auto it = entries.find("indexed_chunks"); it != entries.end()) {

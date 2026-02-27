@@ -21,6 +21,15 @@ REM To enable vector search, create a JSON config and set WAXCPP_SERVER_CONFIG.
 REM --- Server logging ---
 set WAXCPP_SERVER_LOG=1
 
+REM --- LLM enrichment logging (1=verbose prompts+responses, 0=compact one-liners) ---
+set WAXCPP_ENRICH_LLM_LOG=1
+
+REM --- LLM enrichment max tokens (default 1024) ---
+set WAXCPP_ENRICH_LLM_MAX_TOKENS=4096
+
+REM --- Auto-flush interval (ms, 0=disabled, default 30000) ---
+set WAXCPP_AUTO_FLUSH_INTERVAL_MS=30000
+
 REM --- Generation tuning ---
 set WAXCPP_LLAMA_GEN_TIMEOUT_MS=600000
 REM set WAXCPP_LLAMA_GEN_MAX_RETRIES=3

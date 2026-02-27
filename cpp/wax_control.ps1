@@ -100,10 +100,14 @@ function Show-IndexStatus {
     Write-Host ""
 
     # Progress bar
-    if ($s.state -eq "running" -and $s.scanned_files -gt 0 -and $s.indexed_chunks -gt 0) {
-        # Rough estimate: ~4 chunks per file average for UE5
-        $estimatedTotal = [Math]::Max($s.scanned_files * 4, $s.indexed_chunks)
-        $pct = [Math]::Min(100, [int](($s.indexed_chunks / $estimatedTotal) * 100))
+    if ($s.state -eq "running" -and $s.indexed_chunks -gt 0) {
+        # Use total_chunks from server if available, otherwise estimate
+        if ($s.total_chunks -gt 0) {
+            $estimatedTotal = $s.total_chunks
+        } else {
+            $estimatedTotal = [Math]::Max($s.scanned_files * 6, $s.indexed_chunks + 1)
+        }
+        $pct = [Math]::Min(99, [int](($s.indexed_chunks / $estimatedTotal) * 100))
         $barWidth = 40
         $filled = [int]($barWidth * $pct / 100)
         $empty = $barWidth - $filled
@@ -112,7 +116,7 @@ function Show-IndexStatus {
         Write-Host "  Progress:    [" -NoNewline
         Write-Host $bar.Substring(0, $filled) -ForegroundColor Green -NoNewline
         Write-Host $bar.Substring($filled) -ForegroundColor DarkGray -NoNewline
-        Write-Host "] ~${pct}%" -ForegroundColor Green
+        Write-Host "] ${pct}%  ($($s.indexed_chunks) / $estimatedTotal)" -ForegroundColor Green
         Write-Host ""
     }
 
@@ -127,8 +131,12 @@ function Show-IndexStatus {
     }
 
     # ETA estimate
-    if ($s.state -eq "running" -and $s.indexed_chunks_per_sec -gt 0 -and $s.scanned_files -gt 0) {
-        $estimatedTotal = $s.scanned_files * 4
+    if ($s.state -eq "running" -and $s.indexed_chunks_per_sec -gt 0) {
+        if ($s.total_chunks -gt 0) {
+            $estimatedTotal = $s.total_chunks
+        } else {
+            $estimatedTotal = [Math]::Max($s.scanned_files * 6, $s.indexed_chunks + 1)
+        }
         $remaining = [Math]::Max(0, $estimatedTotal - $s.indexed_chunks)
         if ($remaining -gt 0) {
             $etaMs = ($remaining / $s.indexed_chunks_per_sec) * 1000

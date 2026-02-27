@@ -103,6 +103,10 @@ class MemoryOrchestrator {
   /// Returns true if the FTS5 SQLite full-text search backend is active.
   [[nodiscard]] bool IsFts5Active() const { return store_text_index_.IsFts5Active(); }
 
+  /// Returns the epoch-ms timestamp of the last Remember/RememberFact call (0 if none).
+  /// Thread-safe (acquires internal mutex).
+  [[nodiscard]] std::int64_t last_write_activity_ms() const;
+
  private:
   OrchestratorConfig config_;
   WaxStore store_;

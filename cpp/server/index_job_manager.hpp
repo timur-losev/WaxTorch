@@ -26,6 +26,7 @@ struct IndexJobStatus {
   std::uint64_t started_at_ms = 0;
   std::uint64_t updated_at_ms = 0;
   std::uint64_t scanned_files = 0;
+  std::uint64_t total_chunks = 0;
   std::uint64_t indexed_chunks = 0;
   std::uint64_t committed_chunks = 0;
   bool resume_requested = false;
@@ -48,6 +49,7 @@ class IndexJobManager {
                                     std::uint64_t indexed_chunks,
                                     std::uint64_t committed_chunks);
   [[nodiscard]] bool SetPhase(std::string phase);
+  void SetTotalChunks(std::uint64_t total);
   [[nodiscard]] bool Stop();
   [[nodiscard]] bool Fail(std::string error);
 

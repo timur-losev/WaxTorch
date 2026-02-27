@@ -48,6 +48,8 @@ private:
         std::uint64_t max_files = 0;
         std::uint64_t max_chunks = 0;
         std::uint64_t max_ram_mb = 0;
+        bool enrich_regex = false;
+        bool enrich_llm = false;
     };
 
     void run_index_job(std::string repo_root,
@@ -56,6 +58,11 @@ private:
                        std::shared_ptr<std::atomic<bool>> cancel_flag);
     void TryReapFinishedIndexWorker();
     std::string make_index_status_json(const IndexJobStatus& status) const;
+
+    // ── Auto-flush background timer ────────────────────────────
+    void StartAutoFlushThread();
+    void StopAutoFlushThread();
+    void AutoFlushLoop();
 
     std::unique_ptr<waxcpp::MemoryOrchestrator> orchestrator_;
     std::unique_ptr<LlamaCppGenerationClient> generation_client_;
@@ -66,6 +73,13 @@ private:
     std::thread index_worker_{};
     std::shared_ptr<std::atomic<bool>> index_cancel_flag_{};
     std::mutex mutex_;
+
+    // ── Auto-flush state ───────────────────────────────────────
+    std::thread auto_flush_thread_{};
+    std::atomic<bool> auto_flush_stop_{false};
+    std::atomic<bool> index_active_{false};  // suppresses auto-flush during indexing
+    std::int64_t auto_flush_last_flushed_ms_{0};  // guarded by auto_flush_thread_ only
+    std::uint64_t auto_flush_interval_ms_{30000};  // default 30s
 };
 
 }  // namespace waxcpp::server

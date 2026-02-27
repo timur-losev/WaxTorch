@@ -31,8 +31,10 @@ add_executable(waxcpp_rag_server
   index_job_manager.cpp
   llama_cpp_generation_client.cpp
   llama_cpp_embedding_provider.cpp
+  llm_fact_enricher.cpp
   main.cpp
   json_rpc.cpp
+  regex_ue5_enricher.cpp
   runtime_config.cpp
   server_utils.cpp
   ue5_chunk_manifest.cpp

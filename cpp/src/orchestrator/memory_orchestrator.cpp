@@ -1749,6 +1749,11 @@ std::vector<StructuredMemoryEntry> MemoryOrchestrator::RecallFactsByEntityPrefix
   return structured_memory_.QueryByEntityPrefix(entity_prefix, limit);
 }
 
+std::int64_t MemoryOrchestrator::last_write_activity_ms() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return last_write_activity_ms_;
+}
+
 void MemoryOrchestrator::Flush() {
   std::lock_guard<std::mutex> lock(mutex_);
   ThrowIfClosed(closed_);
