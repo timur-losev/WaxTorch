@@ -392,6 +392,13 @@ WaxRAGHandler::WaxRAGHandler(const std::filesystem::path& store_path,
     config.require_on_device_providers = false;
     config.ingest_concurrency = ParsePositiveIntEnv(kOrchIngestConcurrencyEnv, config.ingest_concurrency);
     config.ingest_batch_size = ParsePositiveIntEnv(kOrchIngestBatchSizeEnv, config.ingest_batch_size);
+    // RAG recall tuning (defaults raised for code-heavy repos).
+    config.rag.preview_max_bytes = ParsePositiveIntEnv("WAXCPP_RAG_PREVIEW_MAX_BYTES", 4096);
+    config.rag.max_context_tokens = ParsePositiveIntEnv("WAXCPP_RAG_MAX_CONTEXT_TOKENS", 8000);
+    config.rag.snippet_max_tokens = ParsePositiveIntEnv("WAXCPP_RAG_SNIPPET_MAX_TOKENS", 600);
+    config.rag.expansion_max_tokens = ParsePositiveIntEnv("WAXCPP_RAG_EXPANSION_MAX_TOKENS", 1200);
+    config.rag.max_snippets = ParsePositiveIntEnv("WAXCPP_RAG_MAX_SNIPPETS", 24);
+    config.rag.search_top_k = ParsePositiveIntEnv("WAXCPP_RAG_SEARCH_TOP_K", 24);
     std::shared_ptr<waxcpp::EmbeddingProvider> embedder{};
     if (runtime_models_.enable_vector_search) {
         LlamaCppEmbeddingProviderConfig embedder_config{};
@@ -888,7 +895,7 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
         if (options.enrich_llm && generation_client_) {
             LlmFactEnricherConfig llm_cfg{};
             llm_cfg.max_tokens = ParsePositiveIntEnv("WAXCPP_ENRICH_LLM_MAX_TOKENS", llm_cfg.max_tokens);
-            llm_cfg.total_chunks = static_cast<std::uint64_t>(chunk_records.size());
+            llm_cfg.total_chunks = chunks_to_process;
             enricher_pipeline.AddEnricher(std::make_unique<LlmFactEnricher>(generation_client_.get(), llm_cfg));
             ServerLog(std::string("enricher: llm enabled, max_tokens=") + std::to_string(llm_cfg.max_tokens));
         }
@@ -977,21 +984,26 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                     }
                 }
 
-                waxcpp::Metadata metadata{};
-                metadata["source_kind"] = "ue5_chunk";
-                metadata["repo_root"] = repo_root;
-                metadata["relative_path"] = chunk.relative_path;
-                metadata["language"] = chunk.language;
-                metadata["symbol"] = chunk.symbol;
-                metadata["line_start"] = std::to_string(chunk.line_start);
-                metadata["line_end"] = std::to_string(chunk.line_end);
-                metadata["chunk_id"] = chunk.chunk_id;
-                metadata["chunk_hash"] = chunk.content_hash;
-                metadata["token_estimate"] = std::to_string(chunk.token_estimate);
-                pending_ingest.push_back(PendingIngestChunk{
-                    .text = std::string(chunk_text),
-                    .metadata = std::move(metadata),
-                });
+                // bpl_json: facts-only indexing — skip raw text, only enrich.
+                const bool skip_text_index = (chunk.language == "bpl_json");
+
+                if (!skip_text_index) {
+                    waxcpp::Metadata metadata{};
+                    metadata["source_kind"] = "ue5_chunk";
+                    metadata["repo_root"] = repo_root;
+                    metadata["relative_path"] = chunk.relative_path;
+                    metadata["language"] = chunk.language;
+                    metadata["symbol"] = chunk.symbol;
+                    metadata["line_start"] = std::to_string(chunk.line_start);
+                    metadata["line_end"] = std::to_string(chunk.line_end);
+                    metadata["chunk_id"] = chunk.chunk_id;
+                    metadata["chunk_hash"] = chunk.content_hash;
+                    metadata["token_estimate"] = std::to_string(chunk.token_estimate);
+                    pending_ingest.push_back(PendingIngestChunk{
+                        .text = std::string(chunk_text),
+                        .metadata = std::move(metadata),
+                    });
+                }
 
                 // ── Enrichment ──
                 if (!enricher_pipeline.Empty()) {
@@ -1326,7 +1338,7 @@ std::string WaxRAGHandler::make_index_status_json(const IndexJobStatus& status) 
 namespace {
 
 /// Convert a UE Blueprint asset path to the export filename.
-/// /Game/Blueprints/BP_MyActor.BP_MyActor → _Game_Blueprints_BP_MyActor_BP_MyActor.json
+/// /Game/Blueprints/BP_MyActor.BP_MyActor → _Game_Blueprints_BP_MyActor_BP_MyActor.bpl_json
 std::string BlueprintPathToFilename(const std::string& blueprint_path) {
     std::string name = blueprint_path;
     std::replace(name.begin(), name.end(), '/', '_');
@@ -1334,7 +1346,7 @@ std::string BlueprintPathToFilename(const std::string& blueprint_path) {
     if (!name.empty() && name[0] != '_') {
         name = "_" + name;
     }
-    return name + ".json";
+    return name + ".bpl_json";
 }
 
 }  // namespace
@@ -1410,8 +1422,9 @@ std::string WaxRAGHandler::handle_blueprint_write(const Poco::JSON::Object::Ptr&
 
         // Create backup if file already exists.
         if (std::filesystem::exists(file_path)) {
+            const auto stem = std::filesystem::path(filename).stem().string();
             const auto backup_path = std::filesystem::path(export_dir) /
-                (filename.substr(0, filename.size() - 5) + ".backup.json");
+                (stem + ".backup.bpl_json");
             std::filesystem::copy_file(file_path, backup_path,
                 std::filesystem::copy_options::overwrite_existing);
             std::cerr << "[BLUEPRINT] backup: " << backup_path.string() << "\n";
@@ -1538,6 +1551,44 @@ std::string WaxRAGHandler::handle_blueprint_import(const Poco::JSON::Object::Ptr
 
     } catch (const std::exception& e) {
         std::cerr << "[BLUEPRINT] import error: " << e.what() << "\n";
+        return "{\"error\":\"" + JsonEscape(e.what()) + "\"}";
+    }
+}
+
+// ── fact.search ─────────────────────────────────────────────
+
+std::string WaxRAGHandler::handle_fact_search(const Poco::JSON::Object::Ptr& params) {
+    const std::string entity_prefix =
+        (params.isNull() ? "" : params->optValue<std::string>("entity_prefix", ""));
+    if (entity_prefix.empty()) {
+        return "{\"error\":\"Missing required parameter 'entity_prefix'\"}";
+    }
+    const int limit = (params.isNull() ? 100 : params->optValue<int>("limit", 100));
+
+    try {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto facts = orchestrator_->RecallFactsByEntityPrefix(entity_prefix, limit);
+
+        Poco::JSON::Array facts_array;
+        for (const auto& fact : facts) {
+            Poco::JSON::Object::Ptr row = new Poco::JSON::Object();
+            row->set("entity", fact.entity);
+            row->set("attribute", fact.attribute);
+            row->set("value", fact.value);
+            row->set("id", static_cast<std::int64_t>(fact.id));
+            facts_array.add(row);
+        }
+
+        Poco::JSON::Object response;
+        response.set("facts", facts_array);
+        response.set("count", static_cast<int>(facts.size()));
+        response.set("entity_prefix", entity_prefix);
+
+        std::ostringstream out;
+        response.stringify(out);
+        return out.str();
+
+    } catch (const std::exception& e) {
         return "{\"error\":\"" + JsonEscape(e.what()) + "\"}";
     }
 }

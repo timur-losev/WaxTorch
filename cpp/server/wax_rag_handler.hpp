@@ -43,6 +43,9 @@ public:
     std::string handle_blueprint_write(const Poco::JSON::Object::Ptr& params);
     std::string handle_blueprint_import(const Poco::JSON::Object::Ptr& params);
 
+    // Fact inspection
+    std::string handle_fact_search(const Poco::JSON::Object::Ptr& params);
+
     /// Returns true if the FTS5 SQLite full-text search backend is active.
     [[nodiscard]] bool IsFts5Active() const { return orchestrator_ && orchestrator_->IsFts5Active(); }
 

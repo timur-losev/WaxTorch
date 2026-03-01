@@ -27,12 +27,19 @@ set WAXCPP_ENRICH_LLM_LOG=1
 REM --- LLM enrichment max tokens (default 1024) ---
 set WAXCPP_ENRICH_LLM_MAX_TOKENS=4096
 
+REM --- Recall request/response logging (file path, empty=disabled) ---
+set WAXCPP_RECALL_LOG=G:\Proj\Wax\cpp\build\bin\data\recall.log
+
 REM --- Auto-flush interval (ms, 0=disabled, default 30000) ---
 set WAXCPP_AUTO_FLUSH_INTERVAL_MS=30000
 
 REM --- Generation tuning ---
 set WAXCPP_LLAMA_GEN_TIMEOUT_MS=600000
 REM set WAXCPP_LLAMA_GEN_MAX_RETRIES=3
+
+REM --- RAG recall tuning ---
+set WAXCPP_RAG_MAX_SNIPPETS=12
+set WAXCPP_RAG_SEARCH_TOP_K=12
 
 REM --- Orchestrator tuning for large repos ---
 REM set WAXCPP_ORCH_INGEST_CONCURRENCY=1

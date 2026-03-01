@@ -185,7 +185,7 @@ waxcpp::Metadata RegexUe5Enricher::MakeFactMeta(const Ue5ChunkRecord& record) co
         {"enricher_kind", "regex_ue5"},
         {"source_path", record.relative_path},
         {"source_lines", std::to_string(record.line_start) + "-" + std::to_string(record.line_end)},
-        {"chunk_id", record.chunk_id},
+        {"source_chunk_id", record.chunk_id},
     };
 }
 

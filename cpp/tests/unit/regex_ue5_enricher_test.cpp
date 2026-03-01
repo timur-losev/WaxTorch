@@ -307,8 +307,8 @@ class AMyActor : public AActor {};
             "missing enricher_kind=regex_ue5");
     Require(meta.count("source_path") && meta.at("source_path") == record.relative_path,
             "missing source_path");
-    Require(meta.count("chunk_id") && meta.at("chunk_id") == record.chunk_id,
-            "missing chunk_id");
+    Require(meta.count("source_chunk_id") && meta.at("source_chunk_id") == record.chunk_id,
+            "missing source_chunk_id");
 
     std::cerr << "    PASS" << std::endl;
 }

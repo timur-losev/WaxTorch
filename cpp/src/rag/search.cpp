@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <set>
@@ -324,6 +325,9 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
   context.items.reserve(sorted_results.size());
   int emitted_snippets = 0;
   const bool expansion_enabled = clamped_expansion_max_tokens > 0;
+  // Content-based dedup: skip results with identical truncated text.
+  // Different frame_ids can hold the same content (e.g. re-indexed chunks).
+  std::unordered_set<std::size_t> seen_text_hashes{};
   for (const auto& result : sorted_results) {
     const bool is_first_item = context.items.empty();
     const bool use_expanded_tier = expansion_enabled && is_first_item;
@@ -341,6 +345,12 @@ RAGContext BuildFastRAGContext(const SearchRequest& request, const SearchRespons
     if (candidate_text.empty()) {
       item_kind = RAGItemKind::kSurrogate;
       candidate_text = BuildSurrogateText(result.frame_id);
+    }
+
+    // Content dedup: skip if we already emitted identical text.
+    const auto text_hash = std::hash<std::string>{}(candidate_text);
+    if (!seen_text_hashes.insert(text_hash).second) {
+      continue;  // duplicate content — skip
     }
 
     auto tokens = SplitWhitespaceTokens(candidate_text);

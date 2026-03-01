@@ -59,7 +59,7 @@ LlmFactEnricher::LlmFactEnricher(
 // ── Prompts ──────────────────────────────────────────────────
 
 std::string LlmFactEnricher::BuildSystemPrompt(const std::string& language) {
-    if (language == "json" || language == "blueprint_json") {
+    if (language == "json" || language == "blueprint_json" || language == "bpl_json") {
         return
             "You are a UE Blueprint analysis assistant. Extract structured facts from Blueprint graph JSON.\n"
             "Return a JSON array of objects: {\"entity\", \"attribute\", \"value\"}.\n"
@@ -98,7 +98,7 @@ std::string LlmFactEnricher::BuildSystemPrompt(const std::string& language) {
 }
 
 std::string LlmFactEnricher::EntityPrefix(const std::string& language) {
-    if (language == "json" || language == "blueprint_json") return "bp:";
+    if (language == "json" || language == "blueprint_json" || language == "bpl_json") return "bp:";
     return "cpp:";
 }
 
@@ -112,7 +112,7 @@ std::string LlmFactEnricher::BuildUserPrompt(
     if (!record.symbol.empty()) {
         out << "Symbol context: " << record.symbol << "\n";
     }
-    const auto lang_tag = (record.language == "json" || record.language == "blueprint_json") ? "json" : "cpp";
+    const auto lang_tag = (record.language == "json" || record.language == "blueprint_json" || record.language == "bpl_json") ? "json" : "cpp";
     out << "\n```" << lang_tag << "\n" << chunk_text << "\n```\n\n"
         << "Extract facts as JSON:\n/no_think";
     return out.str();
@@ -155,7 +155,7 @@ FactBatch LlmFactEnricher::ParseJsonResponse(
         {"enricher_kind", "llm"},
         {"source_path", record.relative_path},
         {"source_lines", std::to_string(record.line_start) + "-" + std::to_string(record.line_end)},
-        {"chunk_id", record.chunk_id},
+        {"source_chunk_id", record.chunk_id},
     };
 
     for (std::size_t i = 0; i < arr->size(); ++i) {
@@ -169,7 +169,7 @@ FactBatch LlmFactEnricher::ParseJsonResponse(
         if (entity.empty() || attribute.empty()) continue;
 
         // Post-filter for Blueprint JSON: reject GUID entities and pin-name-as-value garbage.
-        const bool is_bp = (record.language == "json" || record.language == "blueprint_json");
+        const bool is_bp = (record.language == "json" || record.language == "blueprint_json" || record.language == "bpl_json");
         if (is_bp) {
             if (LooksLikeGuid(entity)) continue;
             if (LooksLikeGuid(value)) continue;
@@ -207,7 +207,7 @@ FactBatch LlmFactEnricher::Enrich(
     if (chunk_text.empty()) return {};
 
     // Pre-filter: skip Blueprint JSON chunks that contain only pins/links/GUIDs.
-    const bool is_json = (record.language == "json" || record.language == "blueprint_json");
+    const bool is_json = (record.language == "json" || record.language == "blueprint_json" || record.language == "bpl_json");
     if (is_json && !IsBlueprintChunkUseful(chunk_text)) {
         ++chunk_counter_;
         if (EnrichLlmLogEnabled()) {

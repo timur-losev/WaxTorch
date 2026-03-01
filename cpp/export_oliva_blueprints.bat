@@ -35,7 +35,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo Export complete. Counting files...
-for /f %%A in ('dir /b /a-d "%EXPORT_DIR%\*.json" 2^>nul ^| find /c /v ""') do set JSON_COUNT=%%A
+for /f %%A in ('dir /b /a-d "%EXPORT_DIR%\*.bpl_json" 2^>nul ^| find /c /v ""') do set JSON_COUNT=%%A
 echo   Found %JSON_COUNT% JSON files.
 echo.
 pause

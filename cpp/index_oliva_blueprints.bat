@@ -40,7 +40,7 @@ REM UE may return non-zero due to Blueprint compilation errors — that's OK.
 REM We check for actual exported files instead of exit code.
 echo.
 echo Export finished (exit code %ERRORLEVEL%). Counting files...
-for /f %%A in ('dir /b /a-d "%EXPORT_DIR%\*.json" 2^>nul ^| find /c /v ""') do set JSON_COUNT=%%A
+for /f %%A in ('dir /b /a-d "%EXPORT_DIR%\*.bpl_json" 2^>nul ^| find /c /v ""') do set JSON_COUNT=%%A
 echo   Found %JSON_COUNT% JSON files.
 
 if "%JSON_COUNT%"=="0" (
@@ -60,7 +60,7 @@ echo.
 
 curl -s -X POST http://127.0.0.1:8080/ ^
   -H "Content-Type: application/json" ^
-  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"index.start\",\"params\":{\"repo_root\":\"%EXPORT_DIR:\=/%\",\"resume\":false,\"flush_every_chunks\":1000,\"ingest_batch_size\":1,\"target_tokens\":3000,\"max_chunks\":1000,\"include_extensions\":[\".json\"],\"exclude_dirs\":[],\"enrich_regex\":false,\"enrich_llm\":true}}"
+  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"index.start\",\"params\":{\"repo_root\":\"%EXPORT_DIR:\=/%\",\"resume\":false,\"flush_every_chunks\":1000,\"ingest_batch_size\":1,\"target_tokens\":3000,\"max_chunks\":1000,\"include_extensions\":[\".bpl_json\"],\"exclude_dirs\":[],\"enrich_regex\":false,\"enrich_llm\":true}}"
 
 echo.
 echo.

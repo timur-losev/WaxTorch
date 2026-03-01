@@ -562,10 +562,19 @@ struct StoreSearchChannels {
 /// Returns true if the frame metadata indicates a user-content frame
 /// (e.g. UE5 chunk, remembered text) which is guaranteed NOT to be
 /// a structured fact payload. This avoids a disk read for the payload.
+///
+/// IMPORTANT: Enricher-produced fact frames use "source_chunk_id" (not "chunk_id")
+/// and "enricher_kind" (not "source_kind") to avoid matching these heuristics.
+/// If you add metadata keys to fact frames, make sure they don't collide with
+/// the keys checked here, or facts will be silently dropped during replay.
 bool IsKnownUserContentFrame(const WaxFrameMeta& meta) {
   // User-content frames have application metadata keys that internal
   // structured-fact frames never have.
   const auto& md = meta.metadata;
+  // Enricher fact frames have "enricher_kind" — never skip those, even if
+  // they also carry legacy "chunk_id" (pre-fix enrichers used "chunk_id"
+  // instead of "source_chunk_id").
+  if (md.find("enricher_kind") != md.end()) return false;
   if (md.find("source_kind") != md.end()) return true;
   if (md.find("chunk_id") != md.end()) return true;
   if (md.find("language") != md.end()) return true;
@@ -574,42 +583,128 @@ bool IsKnownUserContentFrame(const WaxFrameMeta& meta) {
 }
 
 void ReplayStructuredFactsFromStore(WaxStore& store, StructuredMemoryStore& structured_memory) {
+  const auto t_start = std::chrono::steady_clock::now();
   const auto& metas = store.CommittedFrameMetasRef();
+
+  // ── Pass 1: collect candidate frame indices (fast metadata scan, no I/O) ──
+  struct CandidateRead {
+    std::uint64_t payload_offset;
+    std::uint64_t payload_length;
+    std::size_t   meta_index;
+  };
+  std::vector<CandidateRead> candidates;
+  candidates.reserve(metas.size() / 2);  // rough estimate: ~50% are facts
   std::uint64_t skipped_user = 0;
   std::uint64_t skipped_status = 0;
-  std::uint64_t payload_reads = 0;
+  for (std::size_t i = 0; i < metas.size(); ++i) {
+    const auto& meta = metas[i];
+    if (meta.status != 0) { ++skipped_status; continue; }
+    if (IsKnownUserContentFrame(meta)) { ++skipped_user; continue; }
+    if (meta.payload_length == 0) continue;
+    candidates.push_back({meta.payload_offset, meta.payload_length, i});
+  }
+
+  // Sort by payload_offset → sequential disk reads instead of random I/O.
+  std::sort(candidates.begin(), candidates.end(),
+            [](const CandidateRead& a, const CandidateRead& b) {
+              return a.payload_offset < b.payload_offset;
+            });
+
+  const auto t_pass1 = std::chrono::steady_clock::now();
+  const auto pass1_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t_pass1 - t_start).count();
+  std::cerr << "[REBUILD-TRACE] ReplayStructuredFacts pass1: candidates=" << candidates.size()
+            << " skipped_user=" << skipped_user << " skipped_status=" << skipped_status
+            << " (" << pass1_ms << " ms)" << std::endl;
+
+  // ── Pass 2: buffered sequential reads (4MB look-ahead buffer) ──
+  // Instead of 649K individual seekg+read calls (each ~2-4ms on Windows),
+  // read large contiguous blocks and extract payloads from the buffer.
   std::uint64_t facts_found = 0;
-  for (const auto& meta : metas) {
-    if (meta.status != 0) {
-      ++skipped_status;
-      continue;
+  std::uint64_t payload_reads = 0;
+  std::uint64_t not_fact = 0;
+  std::uint64_t block_reads = 0;
+
+  std::ifstream in(store.Path(), std::ios::binary);
+  if (!in) {
+    std::cerr << "[REBUILD-TRACE] ReplayStructuredFacts: FAILED to open store file" << std::endl;
+    return;
+  }
+
+  constexpr std::size_t kBlockSize = 4 * 1024 * 1024;  // 4 MB read-ahead
+  constexpr std::size_t kMaxFactPayload = 32 * 1024;
+  std::vector<char> block_buf(kBlockSize);
+  std::uint64_t buf_start = 0;  // file offset of block_buf[0]
+  std::uint64_t buf_end = 0;    // file offset of block_buf[bytes_in_buf]
+
+  auto t_last_log = t_pass1;
+  for (const auto& c : candidates) {
+    const auto read_len = static_cast<std::size_t>(
+        std::min(c.payload_length, static_cast<std::uint64_t>(kMaxFactPayload)));
+    const auto end_offset = c.payload_offset + read_len;
+
+    // Check if payload is within current buffer
+    if (c.payload_offset < buf_start || end_offset > buf_end) {
+      // Need new block read — position buffer so this payload starts near the beginning
+      buf_start = c.payload_offset;
+      in.seekg(static_cast<std::streamoff>(buf_start), std::ios::beg);
+      in.read(block_buf.data(), static_cast<std::streamsize>(kBlockSize));
+      const auto got = static_cast<std::uint64_t>(in.gcount());
+      buf_end = buf_start + got;
+      in.clear();  // clear eofbit if we hit end of file
+      ++block_reads;
+      if (end_offset > buf_end) {
+        continue;  // payload extends past EOF — skip
+      }
     }
-    // Skip frames that are clearly user content — no need to read payload
-    // from disk just to check structured-fact magic bytes.
-    if (IsKnownUserContentFrame(meta)) {
-      ++skipped_user;
-      continue;
-    }
+
+    // Extract payload from buffer (zero-copy parse)
+    const auto buf_offset = static_cast<std::size_t>(c.payload_offset - buf_start);
+    std::vector<std::byte> payload(read_len);
+    std::memcpy(payload.data(), block_buf.data() + buf_offset, read_len);
     ++payload_reads;
-    const auto payload = store.FrameContent(meta.id);
+
     const auto fact = ParseStructuredFactPayload(payload);
     if (!fact.has_value()) {
+      ++not_fact;
       continue;
     }
     ++facts_found;
+    // Use StageUpsert (not Upsert!) to avoid O(n²) copy-on-each-commit.
+    // Upsert() calls StageUpsert + CommitStaged, and each CommitStaged
+    // clears pending_mutations, so the NEXT StageUpsert copies the entire
+    // entries_ map into staged_entries_. With 649K facts this is catastrophic.
+    // Instead: stage all facts, commit once at the end.
     if (fact->opcode == StructuredFactOpcode::kUpsert) {
-      (void)structured_memory.Upsert(fact->entity, fact->attribute, fact->value, fact->metadata);
-      continue;
+      (void)structured_memory.StageUpsert(fact->entity, fact->attribute, fact->value, fact->metadata);
+    } else if (fact->opcode == StructuredFactOpcode::kRemove) {
+      (void)structured_memory.StageRemove(fact->entity, fact->attribute);
     }
-    if (fact->opcode == StructuredFactOpcode::kRemove) {
-      (void)structured_memory.Remove(fact->entity, fact->attribute);
+
+    // Progress logging every 5 seconds
+    const auto t_now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::seconds>(t_now - t_last_log).count() >= 5) {
+      t_last_log = t_now;
+      const auto elapsed_s = std::chrono::duration_cast<std::chrono::seconds>(t_now - t_start).count();
+      std::cerr << "[REBUILD-TRACE] ReplayStructuredFacts progress: reads="
+                << payload_reads << "/" << candidates.size()
+                << " facts=" << facts_found
+                << " blocks=" << block_reads
+                << " elapsed=" << elapsed_s << "s" << std::endl;
     }
   }
+  // Single commit after all facts are staged.
+  structured_memory.CommitStaged();
+
+  const auto t_end = std::chrono::steady_clock::now();
+  const auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
   std::cerr << "[REBUILD-TRACE] ReplayStructuredFacts: total=" << metas.size()
             << " skipped_user=" << skipped_user
             << " skipped_status=" << skipped_status
             << " payload_reads=" << payload_reads
-            << " facts_found=" << facts_found << std::endl;
+            << " not_fact=" << not_fact
+            << " facts_found=" << facts_found
+            << " block_reads=" << block_reads
+            << " (" << total_ms << " ms)" << std::endl;
 }
 
 StoreSearchChannels BuildStoreChannels(WaxStore& store,
@@ -738,39 +833,99 @@ void RebuildTextIndexFromStore(WaxStore& store, FTS5SearchEngine& store_text_ind
   std::cerr << "[STARTUP-TRACE] RebuildTextIndexFromStore: " << metas.size()
             << " frame metas loaded" << std::endl;
   const auto t0 = std::chrono::steady_clock::now();
-  std::uint64_t indexed_count = 0;
+
+  // ── Pass 1: collect frames that need payload reads ──
+  struct FrameRead {
+    std::uint64_t frame_id;
+    std::uint64_t payload_offset;
+    std::uint64_t payload_length;
+    bool known_user;  // skip IsInternalOrchestratorPayload check
+  };
+  std::vector<FrameRead> candidates;
+  candidates.reserve(metas.size());
   std::uint64_t skipped_status = 0;
-  std::uint64_t skipped_internal = 0;
   for (const auto& meta : metas) {
-    if (meta.status != 0) {
-      ++skipped_status;
-      continue;
-    }
-    // Skip known user-content frames from expensive IsInternalOrchestratorPayload
-    // check — they don't have structured-fact or embedding-record magic prefixes.
+    if (meta.status != 0) { ++skipped_status; continue; }
+    if (meta.payload_length == 0) continue;
     const bool known_user = IsKnownUserContentFrame(meta);
-    if (!known_user) {
-      // Could be internal (structured fact / embedding record) — check payload magic.
-      const auto payload = store.FrameContent(meta.id);
+    candidates.push_back({meta.id, meta.payload_offset, meta.payload_length, known_user});
+  }
+
+  // Sort by payload_offset for sequential I/O.
+  std::sort(candidates.begin(), candidates.end(),
+            [](const FrameRead& a, const FrameRead& b) {
+              return a.payload_offset < b.payload_offset;
+            });
+
+  const auto pass1_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - t0).count();
+  std::cerr << "[STARTUP-TRACE] RebuildTextIndex pass1: candidates=" << candidates.size()
+            << " skipped_status=" << skipped_status
+            << " (" << pass1_ms << " ms)" << std::endl;
+
+  // ── Pass 2: buffered sequential reads (4MB look-ahead) ──
+  std::ifstream in(store.Path(), std::ios::binary);
+  if (!in) {
+    std::cerr << "[STARTUP-TRACE] FAILED to open store file for text index rebuild" << std::endl;
+    return;
+  }
+
+  constexpr std::size_t kBlockSize = 4 * 1024 * 1024;  // 4 MB
+  constexpr std::size_t kMaxPayload = 64 * 1024;        // 64 KB safety cap
+  std::vector<char> block_buf(kBlockSize);
+  std::uint64_t buf_start = 0;
+  std::uint64_t buf_end = 0;
+  std::uint64_t block_reads = 0;
+
+  std::uint64_t indexed_count = 0;
+  std::uint64_t skipped_internal = 0;
+  auto t_last_log = std::chrono::steady_clock::now();
+
+  for (const auto& c : candidates) {
+    const auto read_len = static_cast<std::size_t>(
+        std::min(c.payload_length, static_cast<std::uint64_t>(kMaxPayload)));
+    const auto end_offset = c.payload_offset + read_len;
+
+    // Refill buffer if needed
+    if (c.payload_offset < buf_start || end_offset > buf_end) {
+      buf_start = c.payload_offset;
+      in.seekg(static_cast<std::streamoff>(buf_start), std::ios::beg);
+      in.read(block_buf.data(), static_cast<std::streamsize>(kBlockSize));
+      buf_end = buf_start + static_cast<std::uint64_t>(in.gcount());
+      in.clear();
+      ++block_reads;
+      if (end_offset > buf_end) continue;
+    }
+
+    const auto buf_offset = static_cast<std::size_t>(c.payload_offset - buf_start);
+    const char* data_ptr = block_buf.data() + buf_offset;
+
+    if (!c.known_user) {
+      // Could be internal — check magic bytes without full vector copy.
+      std::vector<std::byte> payload(read_len);
+      std::memcpy(payload.data(), data_ptr, read_len);
       if (IsInternalOrchestratorPayload(payload)) {
         ++skipped_internal;
         continue;
       }
-      // Not internal, index it.
-      store_text_index.StageIndex(meta.id, BytesToString(payload));
-      ++indexed_count;
+      store_text_index.StageIndex(c.frame_id, std::string(data_ptr, read_len));
     } else {
-      const auto payload = store.FrameContent(meta.id);
-      store_text_index.StageIndex(meta.id, BytesToString(payload));
-      ++indexed_count;
+      store_text_index.StageIndex(c.frame_id, std::string(data_ptr, read_len));
     }
-    if (indexed_count % 50000 == 0) {
-      const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - t0).count();
-      std::cerr << "[STARTUP-TRACE]   ... indexed " << indexed_count << "/" << metas.size()
-                << " frames (" << elapsed_ms << " ms)" << std::endl;
+    ++indexed_count;
+
+    // Progress logging every 5 seconds
+    const auto t_now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::seconds>(t_now - t_last_log).count() >= 5) {
+      t_last_log = t_now;
+      const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t_now - t0).count();
+      std::cerr << "[STARTUP-TRACE]   ... indexed " << indexed_count << "/" << candidates.size()
+                << " blocks=" << block_reads
+                << " (" << elapsed_ms << " ms)" << std::endl;
     }
   }
+  const auto read_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - t0).count();
   std::cerr << "[STARTUP-TRACE] >> CommitStaged (" << indexed_count << " docs)..." << std::endl;
   const auto commit_t0 = std::chrono::steady_clock::now();
   store_text_index.CommitStaged();
@@ -781,6 +936,8 @@ void RebuildTextIndexFromStore(WaxStore& store, FTS5SearchEngine& store_text_ind
   std::cerr << "[STARTUP-TRACE] RebuildTextIndexFromStore complete: indexed=" << indexed_count
             << " skipped_status=" << skipped_status
             << " skipped_internal=" << skipped_internal
+            << " block_reads=" << block_reads
+            << " read=" << read_ms << " ms"
             << " commit=" << commit_ms << " ms"
             << " total=" << total_ms << " ms"
             << " fts5_active=" << store_text_index.IsFts5Active()

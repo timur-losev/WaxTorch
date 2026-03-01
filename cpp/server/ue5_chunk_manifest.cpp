@@ -491,6 +491,9 @@ std::string Ue5ChunkManifestBuilder::DetectLanguage(const std::string& relative_
   if (extension == ".json") {
     return "json";
   }
+  if (extension == ".bpl_json") {
+    return "bpl_json";
+  }
   return "unknown";
 }
 
