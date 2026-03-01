@@ -30,13 +30,14 @@ class LlmFactEnricher : public ChunkEnricher {
         std::string_view chunk_text) override;
 
  private:
-    [[nodiscard]] static std::string BuildSystemPrompt();
+    [[nodiscard]] static std::string BuildSystemPrompt(const std::string& language);
     [[nodiscard]] static std::string BuildUserPrompt(
         const Ue5ChunkRecord& record,
         std::string_view chunk_text);
     [[nodiscard]] static FactBatch ParseJsonResponse(
         const std::string& response,
         const Ue5ChunkRecord& record);
+    [[nodiscard]] static std::string EntityPrefix(const std::string& language);
     [[nodiscard]] static std::string ExtractJsonArray(const std::string& text);
 
     LlamaCppGenerationClient* client_;

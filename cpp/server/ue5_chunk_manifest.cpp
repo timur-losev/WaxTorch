@@ -488,6 +488,9 @@ std::string Ue5ChunkManifestBuilder::DetectLanguage(const std::string& relative_
       extension == ".inc") {
     return "cpp";
   }
+  if (extension == ".json") {
+    return "json";
+  }
   return "unknown";
 }
 

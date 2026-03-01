@@ -38,6 +38,11 @@ public:
     std::string handle_index_status(const Poco::JSON::Object::Ptr& params);
     std::string handle_index_stop(const Poco::JSON::Object::Ptr& params);
 
+    // Blueprint round-trip methods
+    std::string handle_blueprint_read(const Poco::JSON::Object::Ptr& params);
+    std::string handle_blueprint_write(const Poco::JSON::Object::Ptr& params);
+    std::string handle_blueprint_import(const Poco::JSON::Object::Ptr& params);
+
     /// Returns true if the FTS5 SQLite full-text search backend is active.
     [[nodiscard]] bool IsFts5Active() const { return orchestrator_ && orchestrator_->IsFts5Active(); }
 
@@ -48,6 +53,10 @@ private:
         std::uint64_t max_files = 0;
         std::uint64_t max_chunks = 0;
         std::uint64_t max_ram_mb = 0;
+        int target_tokens = 0;       // 0 = use default (400)
+        int overlap_tokens = -1;     // -1 = use default (40)
+        std::vector<std::string> include_extensions{};  // empty = use scanner defaults
+        std::vector<std::string> exclude_dirs{};        // empty = use scanner defaults
         bool enrich_regex = false;
         bool enrich_llm = false;
     };

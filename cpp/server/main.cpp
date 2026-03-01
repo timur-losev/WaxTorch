@@ -64,6 +64,12 @@ public:
                 result = handler_.handle_index_status(json_request.params);
             } else if (json_request.method == "index.stop") {
                 result = handler_.handle_index_stop(json_request.params);
+            } else if (json_request.method == "blueprint.read") {
+                result = handler_.handle_blueprint_read(json_request.params);
+            } else if (json_request.method == "blueprint.write") {
+                result = handler_.handle_blueprint_write(json_request.params);
+            } else if (json_request.method == "blueprint.import") {
+                result = handler_.handle_blueprint_import(json_request.params);
             } else {
                 result = "Unknown method: " + json_request.method;
             }

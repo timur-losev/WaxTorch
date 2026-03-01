@@ -24,7 +24,7 @@ echo.
 REM --- index.start: begins background indexing ---
 curl -s -X POST http://127.0.0.1:8080/ ^
   -H "Content-Type: application/json" ^
-  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"index.start\",\"params\":{\"repo_root\":\"j:/UE4/Projects/perforce_DESKTOP-UGMULAU_trunk_1659/Oliva\",\"resume\":false,\"flush_every_chunks\":131072,\"ingest_batch_size\":1,\"enrich_regex\":true,\"enrich_llm\":true}}"
+  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"index.start\",\"params\":{\"repo_root\":\"j:/UE4/Projects/perforce_DESKTOP-UGMULAU_trunk_1659/Oliva\",\"resume\":false,\"flush_every_chunks\":131072,\"ingest_batch_size\":1,\"include_extensions\":[\".h\",\".hpp\",\".cpp\",\".inl\",\".inc\"],\"enrich_regex\":true,\"enrich_llm\":true}}"
 
 echo.
 echo.

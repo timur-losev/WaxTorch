@@ -9,6 +9,10 @@
 #include <Poco/Exception.h>
 #include <Poco/JSON/Array.h>
 #include <Poco/JSON/Object.h>
+#include <Poco/JSON/Parser.h>
+#include <Poco/Process.h>
+#include <Poco/Pipe.h>
+#include <Poco/PipeStream.h>
 
 #include <cstdint>
 #include <filesystem>
@@ -592,7 +596,40 @@ std::string WaxRAGHandler::handle_recall(const Poco::JSON::Object::Ptr& params) 
 
         std::ostringstream out;
         response.stringify(out);
-        return out.str();
+        const auto result_json = out.str();
+
+        // ── File logging for recall analysis ──
+        static const auto recall_log_path = EnvString("WAXCPP_RECALL_LOG");
+        if (recall_log_path.has_value() && !recall_log_path->empty()) {
+            try {
+                std::ofstream log_file(*recall_log_path, std::ios::app);
+                if (log_file) {
+                    const auto now = std::chrono::system_clock::now();
+                    const auto now_t = std::chrono::system_clock::to_time_t(now);
+                    char time_buf[64]{};
+                    std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", std::localtime(&now_t));
+
+                    log_file << "════════════════════════════════════════\n"
+                             << "TIME: " << time_buf << "  (" << elapsed_ms << "ms)\n"
+                             << "QUERY: " << query << "\n"
+                             << "ITEMS: " << context.items.size()
+                             << "  TOKENS: " << context.total_tokens << "\n"
+                             << "────────────────────────────────────────\n";
+                    for (std::size_t i = 0; i < context.items.size(); ++i) {
+                        const auto& item = context.items[i];
+                        log_file << "[" << i << "] score=" << item.score
+                                 << " kind=" << static_cast<int>(item.kind) << "\n"
+                                 << item.text << "\n"
+                                 << "────────────────────────────────────────\n";
+                    }
+                    log_file << "\n";
+                }
+            } catch (...) {
+                // never fail the request due to logging
+            }
+        }
+
+        return result_json;
     } catch (const std::exception& e) {
         std::cerr << "[RECALL] exception: " << e.what() << std::endl;
         return std::string("Error: ") + e.what();
@@ -691,7 +728,9 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                 << " ingest_batch_size=" << options.ingest_batch_size
                 << " max_files=" << options.max_files
                 << " max_chunks=" << options.max_chunks
-                << " max_ram_mb=" << options.max_ram_mb;
+                << " max_ram_mb=" << options.max_ram_mb
+                << " target_tokens=" << options.target_tokens
+                << " overlap_tokens=" << options.overlap_tokens;
             ServerLog(msg.str());
         }
         const std::uint64_t max_ram_bytes = options.max_ram_mb * 1024ULL * 1024ULL;
@@ -719,7 +758,17 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
         enforce_memory_cap();
         (void)index_job_manager_.SetPhase("scanning");
         const auto repo_root_path = std::filesystem::path(repo_root);
-        auto entries = ue5_scanner_.Scan(repo_root_path, is_cancelled);
+
+        // Build per-job scanner with optional extension/exclude overrides.
+        Ue5ScannerConfig scan_config{};
+        if (!options.include_extensions.empty()) {
+            scan_config.include_extensions = options.include_extensions;
+        }
+        if (!options.exclude_dirs.empty()) {
+            scan_config.exclude_directory_names = options.exclude_dirs;
+        }
+        Ue5FilesystemScanner scanner{scan_config};
+        auto entries = scanner.Scan(repo_root_path, is_cancelled);
         if (options.max_files > 0 && entries.size() > options.max_files) {
             entries.resize(static_cast<std::size_t>(options.max_files));
         }
@@ -751,15 +800,68 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
             }
         }
 
+        // Apply per-job chunking overrides (target_tokens / overlap_tokens).
+        Ue5ChunkingConfig chunking_config{};
+        if (options.target_tokens > 0) {
+            chunking_config.strategy.target_tokens = options.target_tokens;
+            // Default overlap = 10% of target unless explicitly overridden.
+            chunking_config.strategy.overlap_tokens = (options.overlap_tokens >= 0)
+                ? options.overlap_tokens
+                : options.target_tokens / 10;
+        } else if (options.overlap_tokens >= 0) {
+            chunking_config.strategy.overlap_tokens = options.overlap_tokens;
+        }
+        Ue5ChunkManifestBuilder chunk_builder{chunking_config};
+
         std::vector<Ue5FileDigest> current_file_digests{};
-        const auto chunk_records = ue5_chunk_builder_.Build(repo_root_path, entries, {}, &current_file_digests);
+        const auto chunk_records = chunk_builder.Build(repo_root_path, entries, {}, &current_file_digests);
         const auto unchanged_paths =
             Ue5ChunkManifestBuilder::ComputeUnchangedPaths(previous_file_digests, current_file_digests);
+        // Count chunks that belong to changed files only.
+        std::uint64_t chunks_to_process = 0;
+        if (resume_requested && loaded_previous_file_manifest && !unchanged_paths.empty()) {
+            for (const auto& rec : chunk_records) {
+                if (!unchanged_paths.contains(rec.relative_path)) {
+                    ++chunks_to_process;
+                }
+            }
+        } else {
+            chunks_to_process = static_cast<std::uint64_t>(chunk_records.size());
+        }
+        // Count changed files for logging.
+        std::uint64_t changed_file_count = current_file_digests.size() - unchanged_paths.size();
         {
             std::ostringstream msg;
-            msg << "chunk manifest prepared chunks=" << chunk_records.size()
-                << " unchanged_files=" << unchanged_paths.size();
+            msg << "chunk manifest prepared total_chunks=" << chunk_records.size()
+                << " chunks_to_process=" << chunks_to_process
+                << " unchanged_files=" << unchanged_paths.size()
+                << " changed_files=" << changed_file_count
+                << " previous_digests=" << previous_file_digests.size()
+                << " current_digests=" << current_file_digests.size()
+                << " loaded_manifest=" << (loaded_previous_file_manifest ? "true" : "false");
             ServerLog(msg.str());
+            // Log first 5 changed files for diagnostics.
+            int changed_logged = 0;
+            for (const auto& digest : current_file_digests) {
+                if (!unchanged_paths.contains(digest.relative_path) && changed_logged < 5) {
+                    // Find previous digest for comparison.
+                    std::string prev_info = "(new file)";
+                    for (const auto& prev : previous_file_digests) {
+                        if (prev.relative_path == digest.relative_path) {
+                            prev_info = "prev_size=" + std::to_string(prev.size_bytes) +
+                                        " prev_hash=" + prev.content_hash;
+                            break;
+                        }
+                    }
+                    std::ostringstream dmsg;
+                    dmsg << "CHANGED: " << digest.relative_path
+                         << " cur_size=" << digest.size_bytes
+                         << " cur_hash=" << digest.content_hash
+                         << " " << prev_info;
+                    ServerLog(dmsg.str());
+                    ++changed_logged;
+                }
+            }
         }
         const std::uint64_t resume_committed_watermark =
             (resume_requested && !loaded_previous_file_manifest) ? running_status.committed_chunks : 0;
@@ -770,7 +872,8 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
             ServerLog(msg.str());
         }
         (void)index_job_manager_.SetPhase("ingesting");
-        index_job_manager_.SetTotalChunks(static_cast<std::uint64_t>(chunk_records.size()));
+        // For resume with file manifest, report only chunks needing processing.
+        index_job_manager_.SetTotalChunks(chunks_to_process);
 
         std::uint64_t indexed_chunks = 0;
         std::uint64_t committed_chunks = 0;
@@ -843,7 +946,14 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
             pending_ingest.clear();
             pending_facts.clear();
         };
-        (void)ue5_chunk_builder_.Build(
+        {
+            const bool using_skip = resume_requested && !unchanged_paths.empty();
+            std::ostringstream msg;
+            msg << "ingest Build() starting skip_unchanged=" << (using_skip ? "true" : "false")
+                << " skip_file_count=" << unchanged_paths.size();
+            ServerLog(msg.str());
+        }
+        (void)chunk_builder.Build(
             repo_root_path,
             entries,
             [&](const Ue5ChunkRecord& chunk, std::string_view chunk_text) {
@@ -1039,6 +1149,45 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
     if (max_ram_mb_param < 0 || static_cast<std::uint64_t>(max_ram_mb_param) > kMaxIndexControlValue) {
         return "Error: max_ram_mb must be within [0, 1000000]";
     }
+
+    // Chunking strategy overrides (0 / -1 = use defaults).
+    int target_tokens_param = 0;
+    int overlap_tokens_param = -1;
+    const auto target_tokens_raw = ParseIntParamStrict(params, "target_tokens");
+    if (target_tokens_raw.present) {
+        if (!target_tokens_raw.valid) {
+            return "Error: target_tokens must be an integer";
+        }
+        target_tokens_param = target_tokens_raw.value;
+    }
+    const auto overlap_tokens_raw = ParseIntParamStrict(params, "overlap_tokens");
+    if (overlap_tokens_raw.present) {
+        if (!overlap_tokens_raw.valid) {
+            return "Error: overlap_tokens must be an integer";
+        }
+        overlap_tokens_param = overlap_tokens_raw.value;
+    }
+    if (target_tokens_param < 0 || target_tokens_param > 100000) {
+        return "Error: target_tokens must be within [0, 100000]";
+    }
+    if (overlap_tokens_param < -1 || overlap_tokens_param > 50000) {
+        return "Error: overlap_tokens must be within [-1, 50000]";
+    }
+
+    // Scanner overrides: include_extensions and exclude_dirs (JSON arrays of strings).
+    auto parse_string_array = [&](const std::string& key) -> std::vector<std::string> {
+        std::vector<std::string> result;
+        if (params.isNull() || !params->has(key)) return result;
+        const auto arr = params->getArray(key);
+        if (!arr) return result;
+        for (unsigned i = 0; i < arr->size(); ++i) {
+            result.push_back(arr->getElement<std::string>(i));
+        }
+        return result;
+    };
+    auto include_extensions_param = parse_string_array("include_extensions");
+    auto exclude_dirs_param = parse_string_array("exclude_dirs");
+
     // Enrichment flags: JSON-RPC param takes precedence, env var as fallback.
     auto env_bool = [](const char* name, bool fallback) -> bool {
         const char* val = std::getenv(name);
@@ -1057,6 +1206,10 @@ std::string WaxRAGHandler::handle_index_start(const Poco::JSON::Object::Ptr& par
         .max_files = static_cast<std::uint64_t>(max_files_param),
         .max_chunks = static_cast<std::uint64_t>(max_chunks_param),
         .max_ram_mb = static_cast<std::uint64_t>(max_ram_mb_param),
+        .target_tokens = target_tokens_param,
+        .overlap_tokens = overlap_tokens_param,
+        .include_extensions = std::move(include_extensions_param),
+        .exclude_dirs = std::move(exclude_dirs_param),
         .enrich_regex = enrich_regex,
         .enrich_llm = enrich_llm,
     };
@@ -1166,6 +1319,227 @@ std::string WaxRAGHandler::make_index_status_json(const IndexJobStatus& status) 
     std::ostringstream out;
     response.stringify(out);
     return out.str();
+}
+
+// ── Blueprint round-trip helpers ─────────────────────────────
+
+namespace {
+
+/// Convert a UE Blueprint asset path to the export filename.
+/// /Game/Blueprints/BP_MyActor.BP_MyActor → _Game_Blueprints_BP_MyActor_BP_MyActor.json
+std::string BlueprintPathToFilename(const std::string& blueprint_path) {
+    std::string name = blueprint_path;
+    std::replace(name.begin(), name.end(), '/', '_');
+    std::replace(name.begin(), name.end(), '.', '_');
+    if (!name.empty() && name[0] != '_') {
+        name = "_" + name;
+    }
+    return name + ".json";
+}
+
+}  // namespace
+
+// ── blueprint.read ──────────────────────────────────────────
+
+std::string WaxRAGHandler::handle_blueprint_read(const Poco::JSON::Object::Ptr& params) {
+    const std::string blueprint_path =
+        (params.isNull() ? "" : params->optValue<std::string>("blueprint_path", ""));
+    if (blueprint_path.empty()) {
+        return "{\"error\":\"Missing required parameter 'blueprint_path'\"}";
+    }
+    const std::string export_dir =
+        (params.isNull() ? "" : params->optValue<std::string>("export_dir", ""));
+    if (export_dir.empty()) {
+        return "{\"error\":\"Missing required parameter 'export_dir'\"}";
+    }
+
+    try {
+        const auto filename = BlueprintPathToFilename(blueprint_path);
+        const auto file_path = std::filesystem::path(export_dir) / filename;
+
+        if (!std::filesystem::exists(file_path)) {
+            return "{\"error\":\"File not found: " + JsonEscape(file_path.string()) + "\"}";
+        }
+
+        const auto content = ReadFileText(file_path);
+
+        Poco::JSON::Object response;
+        response.set("json", content);
+        response.set("file_path", file_path.string());
+        response.set("size_bytes", static_cast<std::int64_t>(content.size()));
+
+        std::ostringstream out;
+        response.stringify(out);
+        return out.str();
+
+    } catch (const std::exception& e) {
+        return "{\"error\":\"" + JsonEscape(e.what()) + "\"}";
+    }
+}
+
+// ── blueprint.write ─────────────────────────────────────────
+
+std::string WaxRAGHandler::handle_blueprint_write(const Poco::JSON::Object::Ptr& params) {
+    const std::string blueprint_path =
+        (params.isNull() ? "" : params->optValue<std::string>("blueprint_path", ""));
+    if (blueprint_path.empty()) {
+        return "{\"error\":\"Missing required parameter 'blueprint_path'\"}";
+    }
+    const std::string export_dir =
+        (params.isNull() ? "" : params->optValue<std::string>("export_dir", ""));
+    if (export_dir.empty()) {
+        return "{\"error\":\"Missing required parameter 'export_dir'\"}";
+    }
+    const std::string json_content =
+        (params.isNull() ? "" : params->optValue<std::string>("json", ""));
+    if (json_content.empty()) {
+        return "{\"error\":\"Missing required parameter 'json'\"}";
+    }
+
+    try {
+        // Basic validation: must be parseable JSON with a "blueprint" key.
+        Poco::JSON::Parser parser;
+        const auto parsed = parser.parse(json_content);
+        const auto obj = parsed.extract<Poco::JSON::Object::Ptr>();
+        if (obj.isNull() || !obj->has("blueprint")) {
+            return "{\"error\":\"Invalid Blueprint JSON: must be an object with a 'blueprint' key\"}";
+        }
+
+        const auto filename = BlueprintPathToFilename(blueprint_path);
+        const auto file_path = std::filesystem::path(export_dir) / filename;
+
+        // Create backup if file already exists.
+        if (std::filesystem::exists(file_path)) {
+            const auto backup_path = std::filesystem::path(export_dir) /
+                (filename.substr(0, filename.size() - 5) + ".backup.json");
+            std::filesystem::copy_file(file_path, backup_path,
+                std::filesystem::copy_options::overwrite_existing);
+            std::cerr << "[BLUEPRINT] backup: " << backup_path.string() << "\n";
+        }
+
+        WriteFileText(file_path, json_content);
+        std::cerr << "[BLUEPRINT] wrote " << json_content.size()
+                  << " bytes to " << file_path.string() << "\n";
+
+        Poco::JSON::Object response;
+        response.set("file_path", file_path.string());
+        response.set("bytes_written", static_cast<std::int64_t>(json_content.size()));
+
+        std::ostringstream out;
+        response.stringify(out);
+        return out.str();
+
+    } catch (const Poco::Exception& e) {
+        return "{\"error\":\"Invalid JSON: " + JsonEscape(e.displayText()) + "\"}";
+    } catch (const std::exception& e) {
+        return "{\"error\":\"" + JsonEscape(e.what()) + "\"}";
+    }
+}
+
+// ── blueprint.import ────────────────────────────────────────
+
+std::string WaxRAGHandler::handle_blueprint_import(const Poco::JSON::Object::Ptr& params) {
+    const std::string ue_editor =
+        (params.isNull() ? "" : params->optValue<std::string>("ue_editor", ""));
+    if (ue_editor.empty()) {
+        return "{\"error\":\"Missing required parameter 'ue_editor'\"}";
+    }
+    const std::string uproject =
+        (params.isNull() ? "" : params->optValue<std::string>("uproject", ""));
+    if (uproject.empty()) {
+        return "{\"error\":\"Missing required parameter 'uproject'\"}";
+    }
+    const std::string import_dir =
+        (params.isNull() ? "" : params->optValue<std::string>("import_dir", ""));
+    if (import_dir.empty()) {
+        return "{\"error\":\"Missing required parameter 'import_dir'\"}";
+    }
+
+    // Optional flags (all default to true).
+    const bool clear_graph = (params.isNull() ? true : params->optValue<bool>("clear_graph", true));
+    const bool compile = (params.isNull() ? true : params->optValue<bool>("compile", true));
+    const bool save = (params.isNull() ? true : params->optValue<bool>("save", true));
+
+    // Validate paths exist.
+    if (!std::filesystem::exists(ue_editor)) {
+        return "{\"error\":\"ue_editor not found: " + JsonEscape(ue_editor) + "\"}";
+    }
+    if (!std::filesystem::exists(uproject)) {
+        return "{\"error\":\"uproject not found: " + JsonEscape(uproject) + "\"}";
+    }
+    if (!std::filesystem::exists(import_dir)) {
+        return "{\"error\":\"import_dir not found: " + JsonEscape(import_dir) + "\"}";
+    }
+
+    try {
+        Poco::Process::Args args;
+        args.push_back(uproject);
+        args.push_back("-run=BlueprintGraphImport");
+        args.push_back("-ImportDir=" + import_dir);
+        args.push_back(std::string("-ClearGraph=") + (clear_graph ? "1" : "0"));
+        args.push_back(std::string("-Compile=") + (compile ? "1" : "0"));
+        args.push_back(std::string("-Save=") + (save ? "1" : "0"));
+        args.push_back("-unattended");
+        args.push_back("-nop4");
+
+        std::cerr << "[BLUEPRINT] launching: " << ue_editor;
+        for (const auto& arg : args) {
+            std::cerr << " " << arg;
+        }
+        std::cerr << "\n" << std::flush;
+
+        const auto t0 = std::chrono::steady_clock::now();
+
+        Poco::Pipe out_pipe, err_pipe;
+        auto handle = Poco::Process::launch(
+            ue_editor, args, nullptr, &out_pipe, &err_pipe);
+
+        // Read stdout and stderr.
+        Poco::PipeInputStream out_stream(out_pipe);
+        Poco::PipeInputStream err_stream(err_pipe);
+
+        std::string stdout_str(
+            (std::istreambuf_iterator<char>(out_stream)),
+            std::istreambuf_iterator<char>());
+        std::string stderr_str(
+            (std::istreambuf_iterator<char>(err_stream)),
+            std::istreambuf_iterator<char>());
+
+        const int exit_code = handle.wait();
+
+        const auto t1 = std::chrono::steady_clock::now();
+        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
+        std::cerr << "[BLUEPRINT] import finished: exit_code=" << exit_code
+                  << " elapsed=" << elapsed_ms << "ms"
+                  << " stdout=" << stdout_str.size() << " bytes"
+                  << " stderr=" << stderr_str.size() << " bytes\n";
+
+        // Truncate large output to avoid oversized JSON-RPC responses.
+        constexpr std::size_t kMaxOutputChars = 32000;
+        if (stdout_str.size() > kMaxOutputChars) {
+            stdout_str = stdout_str.substr(0, kMaxOutputChars) +
+                "\n... (truncated, " + std::to_string(stdout_str.size() - kMaxOutputChars) + " more chars)";
+        }
+        if (stderr_str.size() > kMaxOutputChars) {
+            stderr_str = stderr_str.substr(0, kMaxOutputChars) +
+                "\n... (truncated, " + std::to_string(stderr_str.size() - kMaxOutputChars) + " more chars)";
+        }
+
+        Poco::JSON::Object response;
+        response.set("exit_code", exit_code);
+        response.set("stdout", stdout_str);
+        response.set("stderr", stderr_str);
+        response.set("elapsed_ms", static_cast<std::int64_t>(elapsed_ms));
+
+        std::ostringstream out;
+        response.stringify(out);
+        return out.str();
+
+    } catch (const std::exception& e) {
+        std::cerr << "[BLUEPRINT] import error: " << e.what() << "\n";
+        return "{\"error\":\"" + JsonEscape(e.what()) + "\"}";
+    }
 }
 
 }  // namespace waxcpp::server
