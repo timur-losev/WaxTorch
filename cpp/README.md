@@ -1,110 +1,49 @@
-# Wax C++ Port Workspace
+# Wax C++ RAG Server
 
-This directory hosts the side-by-side C++20 implementation track for Wax Core RAG.
+> **Work in progress** — the project is under active development. APIs, storage format, and configuration may change.
 
-## Scope
-- Core RAG parity with Swift implementation.
-- `.mv2s` format compatibility and deterministic retrieval.
+Local RAG server for indexing and searching Unreal Engine 5 projects. Indexes both **C++ source code** and **Blueprint visual scripts**, extracts structured facts via LLM enrichment, and provides hybrid search (BM25 full-text + optional vector) through a JSON-RPC HTTP API. All models run locally via llama.cpp — no cloud API calls required.
+
+## What it can index
+
+| Source type | Extensions | Enrichment |
+|-------------|------------|------------|
+| UE5 C++ source | `.h`, `.hpp`, `.cpp`, `.inl`, `.inc` | Regex (class hierarchies, UCLASS/UPROPERTY macros) + optional LLM |
+| UE5 Blueprints | `.bpl_json` (exported via `BlueprintGraphExport` commandlet) | LLM only (entity-attribute-value facts: calls, variables, events, inheritance) |
+
+## Models
+
+| Role | Model | Details |
+|------|-------|---------|
+| Fact enrichment (indexing) | **Qwen2.5-Coder-32B-Instruct** (Q4_K_M GGUF) | Runs via llama.cpp on a separate port; extracts structured facts from code/BP chunks |
+| Answer generation (query-time) | **Qwen3-Coder** (Q4_K_M GGUF) | Used by `answer.generate` for RAG-augmented code answers |
+| Embeddings (optional) | Any GGUF embedding model via llama.cpp | Powers the vector search channel; disabled by default |
+
+## Architecture
+
+```
+  Claude / IDE ───> MCP bridge (Node.js, stdio)
+                        │
+                    JSON-RPC / HTTP :8080
+                        │
+                  waxcpp_rag_server
+                   ┌────┴────┐
+              BM25/FTS5   Structured facts
+            (SQLite)    (in-memory, persisted)
+                   └────┬────┘
+                    .mv2s store
+              (append-only binary)
+```
 
 ## Build
+
 ```bash
-cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Debug
-cmake --build cpp/build
-ctest --test-dir cpp/build --output-on-failure
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build cpp/build --config Release
+ctest --test-dir cpp/build --output-on-failure -C Release
 ```
 
-Parity fixtures strict mode:
-```bash
-cmake -S cpp -B cpp/build -DWAXCPP_REQUIRE_PARITY_FIXTURES=ON
-```
-
-Generate synthetic parity fixtures:
-```bash
-cmake --build cpp/build --target waxcpp_mv2s_fixture_generator
-./cpp/build/Debug/waxcpp_mv2s_fixture_generator
-```
-
-Test logging:
-```bash
-# bash
-WAXCPP_TEST_LOG=1 ctest --test-dir cpp/build --output-on-failure
-# powershell
-$env:WAXCPP_TEST_LOG='1'; ctest --test-dir cpp/build --output-on-failure
-```
-
-Core format unit test:
-```bash
-ctest --test-dir cpp/build -R waxcpp_mv2s_format_test --output-on-failure
-```
-
-MiniLM runtime manifest policy (optional):
-```bash
-# Optional: enable real libtorch runtime backend at build time.
-# Note: when runtime is ON, you must pass either WAXCPP_LIBTORCH_ROOT or Torch_DIR.
-# System auto-discovery is intentionally disabled for deterministic builds.
-#
-# Point CMake to an unpacked local libtorch folder (no auto-download in CMake)
-# Valid layouts:
-#   <root>/share/cmake/Torch/TorchConfig.cmake
-#   <root>/libtorch/share/cmake/Torch/TorchConfig.cmake
-cmake -S cpp -B cpp/build \
-  -DWAXCPP_ENABLE_LIBTORCH_RUNTIME=ON \
-  -DWAXCPP_LIBTORCH_ROOT=/abs/path/to/libtorch
-
-# Optional: explicit Torch package config directory override
-cmake -S cpp -B cpp/build \
-  -DWAXCPP_ENABLE_LIBTORCH_RUNTIME=ON \
-  -DTorch_DIR=/abs/path/to/libtorch/share/cmake/Torch
-
-# Override manifest lookup path
-export WAXCPP_LIBTORCH_MANIFEST=/abs/path/to/libtorch-manifest.json
-
-# Require manifest presence during MiniLM embedder construction
-export WAXCPP_REQUIRE_LIBTORCH_MANIFEST=1
-
-# Optional: force-enable/disable real libtorch runtime path at runtime
-export WAXCPP_ENABLE_REAL_TORCH_RUNTIME=1
-
-# Optional: require real runtime (throw if libtorch runtime is unavailable or runtime init fails)
-export WAXCPP_REQUIRE_REAL_TORCH_RUNTIME=1
-
-# Optional: TorchScript module path (if set, module forward is applied over runtime embedding tensor)
-export WAXCPP_TORCH_SCRIPT_MODULE=/abs/path/to/embedder.pt
-
-# Optional: override root directory used to resolve selected artifact relative paths
-export WAXCPP_LIBTORCH_DIST_ROOT=/abs/path/to/cpp/third_party/libtorch-dist
-
-# Optional: require selected artifact file checksum verification against manifest sha256
-export WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256=1
-```
-
-Note: when `WAXCPP_LIBTORCH_DIST_ROOT` is set, selected artifact resolution is strict:
-- selected artifact paths (relative and absolute) are constrained to that root (no `..` escape);
-- manifest-directory fallback resolution is disabled.
-- checksum gate also rejects empty selected artifact files.
-
-Libtorch manifest checksum gate test (requires initialized `cpp/third_party/libtorch-dist`):
-```bash
-export WAXCPP_REQUIRE_LIBTORCH_MANIFEST=1
-export WAXCPP_REQUIRE_LIBTORCH_ARTIFACT_SHA256=1
-export WAXCPP_LIBTORCH_MANIFEST=/abs/path/to/cpp/manifest/libtorch-manifest.json
-export WAXCPP_LIBTORCH_DIST_ROOT=/abs/path/to/cpp/third_party/libtorch-dist
-ctest --test-dir cpp/build --output-on-failure -R waxcpp_libtorch_manifest_gate_test
-```
-
-Windows CUDA artifact prep (PowerShell):
-```powershell
-# From repo root. Downloads/copies a CUDA libtorch zip into cpp/third_party/libtorch-dist
-# and updates cpp/manifest/libtorch-manifest.json with path+sha256.
-.\scripts\build-libtorch-windows-cuda.ps1 `
-  -Url "https://download.pytorch.org/libtorch/cu124/libtorch-win-shared-with-deps-2.5.1%2Bcu124.zip"
-
-# Or use a local zip you downloaded manually:
-.\scripts\build-libtorch-windows-cuda.ps1 `
-  -ZipPath "C:\Downloads\libtorch-win-shared-with-deps-2.5.1+cu124.zip"
-```
-
-Server runtime config (llama.cpp + GGUF):
+## Server runtime config (llama.cpp + GGUF)
 ```bash
 # Required when server uses llama_cpp runtime:
 # point to your local llama.cpp binaries/runtime root directory

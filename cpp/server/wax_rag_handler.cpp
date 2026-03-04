@@ -460,6 +460,14 @@ WaxRAGHandler::~WaxRAGHandler() {
     if (worker_to_join.joinable()) {
         worker_to_join.join();
     }
+    // Graceful shutdown: commit any uncommitted data (staged facts, WAL)
+    // so that Ctrl+C doesn't lose work.
+    try {
+        orchestrator_->Flush();
+        std::cerr << "[shutdown] final flush completed" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[shutdown] final flush failed: " << e.what() << std::endl;
+    }
 }
 
 // ── Auto-flush background thread ────────────────────────────────
@@ -936,6 +944,14 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
                     orchestrator_->RememberFact(fact.entity, fact.attribute, fact.value, fact.metadata);
                     ++facts_extracted;
                 }
+                // For facts-only indexing (e.g. bpl_json with skip_text_index),
+                // indexed_chunks stays 0 and the chunk-based flush never fires.
+                // Use facts_extracted as a secondary flush trigger.
+                if (indexed_chunks == 0 && facts_extracted > 0 &&
+                    facts_extracted % options.flush_every_chunks == 0) {
+                    orchestrator_->Flush();
+                    should_report_progress = true;
+                }
             }
             // Always update progress so index.status reflects reality.
             (void)index_job_manager_.UpdateProgress(static_cast<std::uint64_t>(entries.size()),
@@ -1032,10 +1048,14 @@ void WaxRAGHandler::run_index_job(std::string repo_root,
             return;
         }
 
-        if (indexed_chunks > committed_chunks) {
+        // Final flush: covers both uncommitted text chunks and facts-only
+        // indexing where indexed_chunks stays 0 but facts were emitted.
+        {
             std::lock_guard<std::mutex> lock(mutex_);
-            orchestrator_->Flush();
-            committed_chunks = indexed_chunks;
+            if (indexed_chunks > committed_chunks || facts_extracted > 0) {
+                orchestrator_->Flush();
+                committed_chunks = indexed_chunks;
+            }
         }
         (void)index_job_manager_.UpdateProgress(static_cast<std::uint64_t>(entries.size()),
                                                 indexed_chunks,
